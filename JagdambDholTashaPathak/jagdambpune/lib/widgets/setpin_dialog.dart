@@ -64,7 +64,7 @@ Future<String> showSetPinDialog(
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
                 ),
-                title: Text(isReset ? 'Reset PIN' : 'Enter PIN'),
+                title: Text(isReset ? 'Reset PIN' : 'Enter PIN',style: TextStyle(color: AppColors.accentYellow)),
                 content: Form(
                   key: _formKey,
                   child: Column(
@@ -75,6 +75,7 @@ Future<String> showSetPinDialog(
                         label: "PIN (6 digits)",
                         keyboardType: TextInputType.number,
                         maxLength: 6,
+                        isPassword: true,
                         inputFormatters: [
                           FilteringTextInputFormatter.digitsOnly,
                         ],

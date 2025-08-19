@@ -217,6 +217,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     label: 'Enter 6-digit PIN',
                     keyboardType: TextInputType.number,
                     maxLength: 6,
+                    isPassword: true,
                     onChanged: (_) {
                       if (_errorMessage.isNotEmpty) {
                         setState(() {
@@ -250,22 +251,38 @@ class _LoginScreenState extends State<LoginScreen> {
 
                   const SizedBox(height: 16),
 
-                  GestureDetector(
-                    onTap: () {
-                      if (_can_reset_pin) {
-                        Navigator.pushNamed(context, '/resetPin');
-                      } else {
-                        Navigator.pushNamed(context, '/register');
-                      }
-                    },
-                    child: Text(
-                      (_can_reset_pin) ? "Reset PIN" : "Registration",
-                      style: TextStyle(
-                        color: AppColors.accentYellow,
-                        decoration: TextDecoration.underline,
-                        fontSize: 14,
+                  // Show both Reset PIN and Registration links
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pushNamed(context, '/resetPin');
+                        },
+                        child: Text(
+                          "Reset PIN",
+                          style: TextStyle(
+                            color: AppColors.accentYellow,
+                            decoration: TextDecoration.underline,
+                            fontSize: 14,
+                          ),
+                        ),
                       ),
-                    ),
+                      const SizedBox(width: 16),
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pushNamed(context, '/register');
+                        },
+                        child: Text(
+                          "Registration",
+                          style: TextStyle(
+                            color: AppColors.accentYellow,
+                            decoration: TextDecoration.underline,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

@@ -30,6 +30,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   String? selectedInstrument;
   bool _isCheckingPhone = false;
   bool _isFormValid = false;
+  List<String> _instruments = [];
 
   @override
   void initState() {
@@ -37,10 +38,49 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     _firstNameController.addListener(_validateForm);
     _lastNameController.addListener(_validateForm);
     _phoneController.addListener(_validateForm);
+    _loadInstruments();
     _phoneFocusNode.addListener(() {
       if (!_phoneFocusNode.hasFocus) {
         _checkPhoneNumberExists(_phoneController.text.trim());
       }
+    });
+  }
+
+  Future<List<String>> _fetchInstruments(int pathakId) async {
+    final url = Uri.parse("${ApiEndpoints.getInstruments}/$pathakId");
+
+    try {
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data["status"] == true) {
+          List<dynamic> instruments = data["instruments"];
+          return instruments.map((e) => e.toString()).toList();
+        } else {
+          // ⚠️ False response from API
+          print("Server Response: ${data['message']}");
+          return [];
+        }
+      } else {
+        print("HTTP Error: ${response.statusCode}");
+        return [];
+      }
+    } catch (e) {
+      print("Exception: $e");
+      return [];
+    }
+  }
+
+  void _loadInstruments() async {
+    int pathakId = int.tryParse(ApiEndpoints.pathak_id.toString()) ?? 0;
+    if (pathakId == 0) return;
+
+    List<String> instruments = await _fetchInstruments(pathakId);
+    print(instruments);
+    setState(() {
+      _instruments = instruments;
     });
   }
 
@@ -317,7 +357,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               PremiumDropDown(
                 label: "Instrument",
                 value: selectedInstrument,
-                options: ["Dhol", "Tasha", "Dhwaj"],
+                options: _instruments,
                 onChanged: (val) {
                   setState(() {
                     selectedInstrument = val;

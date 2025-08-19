@@ -16,6 +16,9 @@ class ApiEndpoints {
   static const String checkDeviceRegistration = '$baseUrl/auth/device-check/';
   static const String verifyDevicePhone =
       '$baseUrl/auth/device/verify-phone-device/';
+  static const String getInstruments = '$baseUrl/instruments';
+  static const String getEmergencyContacts = '$baseUrl/emergency-contacts/';
+  static const String createEvent = '$baseUrl/events/create/';
   // -------------------
   // PROFILE ENDPOINTS
   // -------------------

@@ -1,18 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-// import 'dart:io';
 import 'package:local_auth/local_auth.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-// import 'package:device_info_plus/device_info_plus.dart';
-// import 'package:android_id/android_id.dart';
 import '../widgets/setpin_dialog.dart';
 import '../config/api_endpoints.dart';
 import '../theme/app_colors.dart';
 import '../widgets/app_drawer.dart';
-import '../widgets/input_box.dart';
-import '../widgets/button.dart';
+import '../components/get_emergency_details.dart';
 import '../components/upcoming_events.dart';
+import '../components/mirvnuk_dialog.dart';
+import '../components/notification_dialog.dart';
 
 final storage = const FlutterSecureStorage();
 
@@ -20,7 +18,7 @@ class HomeScreen extends StatefulWidget {
   final String authToken;
   final String phoneNumber;
   final bool isRegistration;
-  final storage = const FlutterSecureStorage();
+
   const HomeScreen({
     super.key,
     required this.authToken,
@@ -32,13 +30,13 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Map<String, dynamic>? _userDetails;
   bool _isLoading = false;
   String? _errorMessage;
   String accessToken = '';
   List<Map<String, dynamic>> _events = [];
+
   late AnimationController _animationController;
   late Animation<Offset> _slideAnimation;
   late Animation<double> _fadeAnimation;
@@ -46,10 +44,16 @@ class _HomeScreenState extends State<HomeScreen>
   final LocalAuthentication auth = LocalAuthentication();
   final FlutterSecureStorage storage = const FlutterSecureStorage();
 
+  // FAB variables
+  bool _isFabOpen = false;
+  late AnimationController _fabAnimationController;
+  late Animation<double> _fabAnimation;
+
   @override
   void initState() {
     super.initState();
 
+    // Main animations
     _animationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
@@ -64,6 +68,21 @@ class _HomeScreenState extends State<HomeScreen>
       parent: _animationController,
       curve: Curves.easeIn,
     );
+
+    // FAB animations
+    _fabAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 250),
+    );
+    _fabAnimation = CurvedAnimation(
+      parent: _fabAnimationController,
+      curve: Curves.easeInOut,
+    );
+
+    _initializeUser();
+  }
+
+  Future<void> _initializeUser() async {
     if (widget.isRegistration) {
       Future.delayed(const Duration(seconds: 2), () async {
         accessToken = await showSetPinDialog(
@@ -71,15 +90,21 @@ class _HomeScreenState extends State<HomeScreen>
           widget.phoneNumber,
           false,
         );
+        await EmergencyContactDialog.show(context, accessToken);
         _fetchUserDetails(accessToken);
       });
     } else {
-      // If not login, fetch user details directly
-      _fetchUserDetails(widget.authToken);
+      String? token = await storage.read(key: 'access_token');
+      if (token != null && token.isNotEmpty) {
+        accessToken = token;
+        _fetchUserDetails(accessToken);
+      } else {
+        _fetchUserDetails(widget.authToken);
+      }
     }
   }
 
-  Future<void> _fetchUserDetails(String accessToken) async {
+  Future<void> _fetchUserDetails(String token) async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
@@ -89,7 +114,7 @@ class _HomeScreenState extends State<HomeScreen>
       final response = await http.get(
         Uri.parse(ApiEndpoints.getUserDetails),
         headers: {
-          'Authorization': 'Bearer $accessToken',
+          'Authorization': 'Bearer $token',
           'Content-Type': 'application/json',
         },
       );
@@ -115,9 +140,7 @@ class _HomeScreenState extends State<HomeScreen>
             _errorMessage = data['message'] ?? 'Failed to load user details';
           });
         }
-      } else if (response.statusCode == 403) {
-        _errorMessage = 'User not found.';
-      } else if (response.statusCode == 404) {
+      } else if (response.statusCode == 403 || response.statusCode == 404) {
         setState(() {
           _errorMessage = 'User not found.';
         });
@@ -141,9 +164,21 @@ class _HomeScreenState extends State<HomeScreen>
     Navigator.of(context).pushReplacementNamed('/login');
   }
 
+  void _toggleFabMenu() {
+    setState(() {
+      _isFabOpen = !_isFabOpen;
+      if (_isFabOpen) {
+        _fabAnimationController.forward();
+      } else {
+        _fabAnimationController.reverse();
+      }
+    });
+  }
+
   @override
   void dispose() {
     _animationController.dispose();
+    _fabAnimationController.dispose();
     super.dispose();
   }
 
@@ -171,41 +206,108 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
               )
             : _userDetails != null
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SlideTransition(
-                    position: _slideAnimation,
-                    child: FadeTransition(
-                      opacity: _fadeAnimation,
-                      child: Text(
-                        'Welcome, ${_userDetails?['first_name'] ?? ''}!',
-                        style: const TextStyle(
-                          color: AppColors.primaryMaroon,
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SlideTransition(
+                        position: _slideAnimation,
+                        child: FadeTransition(
+                          opacity: _fadeAnimation,
+                          child: Text(
+                            'Welcome, ${_userDetails?['first_name'] ?? ''}!',
+                            style: const TextStyle(
+                              color: AppColors.primaryMaroon,
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 20),
+
+                      // Scrollable Upcoming Events
+                      Expanded(
+                        child: _events.isNotEmpty
+                            ? SingleChildScrollView(
+                                child: UpcomingEvents(events: _events),
+                              )
+                            : const Center(
+                                child: Text(
+                                  'No upcoming events',
+                                  style: TextStyle(color: AppColors.primaryMaroon),
+                                ),
+                              ),
+                      ),
+                    ],
+                  )
+                : const Center(
+                    child: CircularProgressIndicator(color: AppColors.accentYellow),
                   ),
-                  const SizedBox(height: 20),
-                  // const Text(
-                  //   'Live updates will be shown here',
-                  //   style: TextStyle(
-                  //     color: AppColors.primaryMaroon,
-                  //     fontSize: 18,
-                  //   ),
-                  // ),
-                  if (_events.isNotEmpty) ...[
-                    const SizedBox(height: 20),
-                    UpcomingEvents(events: _events),
-                  ],
-                ],
-              )
-            : const Center(
-                child: CircularProgressIndicator(color: AppColors.accentYellow),
-              ),
       ),
+      floatingActionButton:
+          (_userDetails != null && _userDetails!['role'] != 'Vadak')
+              ? SizedBox(
+                  width: 150,
+                  height: 150,
+                  child: Stack(
+                    alignment: Alignment.bottomRight,
+                    children: [
+                      // Add Mirvnuk
+                      Positioned(
+                        bottom: 80,
+                        right: 0,
+                        child: ScaleTransition(
+                          scale: _fabAnimation,
+                          child: FloatingActionButton(
+                            heroTag: 'add_mirvnuk',
+                            mini: true,
+                            backgroundColor: AppColors.accentYellow,
+                            onPressed: () async {
+                              _toggleFabMenu();
+                              await AddMirvnukDialog.show(context);
+                              String? token =
+                                  await storage.read(key: 'access_token');
+                              if (token != null && token.isNotEmpty) {
+                                _fetchUserDetails(token);
+                              }
+                            },
+                            child: const Icon(Icons.event),
+                          ),
+                        ),
+                      ),
+                      // Add Notification
+                      Positioned(
+                        bottom: 0,
+                        right: 80,
+                        child: ScaleTransition(
+                          scale: _fabAnimation,
+                          child: FloatingActionButton(
+                            heroTag: 'add_notification',
+                            mini: true,
+                            backgroundColor: AppColors.accentYellow,
+                            onPressed: () {
+                              _toggleFabMenu();
+                              NotificationDialog.show(context);
+                            },
+                            child: const Icon(Icons.notifications),
+                          ),
+                        ),
+                      ),
+                      // Main FAB
+                      FloatingActionButton(
+                        heroTag: 'main',
+                        backgroundColor: AppColors.accentYellow,
+                        onPressed: _toggleFabMenu,
+                        child: AnimatedRotation(
+                          turns: _isFabOpen ? 0.125 : 0,
+                          duration: const Duration(milliseconds: 250),
+                          child: const Icon(Icons.add),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              : null,
     );
   }
 }

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import 'package:flutter/services.dart';
 
-class PremiumInputBox extends StatelessWidget {
+class PremiumInputBox extends StatefulWidget {
   final TextEditingController controller;
   final String label;
   final TextInputType keyboardType;
@@ -12,6 +12,7 @@ class PremiumInputBox extends StatelessWidget {
   final FocusNode? focusNode;
   final List<TextInputFormatter>? inputFormatters;
   final FormFieldValidator<String>? validator;
+  final bool isPassword;
 
   const PremiumInputBox({
     super.key,
@@ -21,10 +22,18 @@ class PremiumInputBox extends StatelessWidget {
     this.maxLength,
     this.onChanged,
     this.errorText,
-    this.focusNode, 
+    this.focusNode,
     this.inputFormatters,
     this.validator,
+    this.isPassword = false,
   });
+
+  @override
+  State<PremiumInputBox> createState() => _PremiumInputBoxState();
+}
+
+class _PremiumInputBoxState extends State<PremiumInputBox> {
+  bool _obscurePassword = true;
 
   @override
   Widget build(BuildContext context) {
@@ -43,17 +52,18 @@ class PremiumInputBox extends StatelessWidget {
               ),
             ],
           ),
-          child: TextFormField( // ✅ Use TextFormField instead of TextField
-            controller: controller,
-            keyboardType: keyboardType,
-            maxLength: maxLength,
+          child: TextFormField(
+            controller: widget.controller,
+            keyboardType: widget.keyboardType,
+            maxLength: widget.maxLength,
             style: const TextStyle(color: AppColors.textLight),
-            focusNode: focusNode,
-            onChanged: onChanged,
-            inputFormatters: inputFormatters,
-            validator: validator, // ✅ Now works correctly
+            focusNode: widget.focusNode,
+            onChanged: widget.onChanged,
+            inputFormatters: widget.inputFormatters,
+            validator: widget.validator,
+            obscureText: widget.isPassword ? _obscurePassword : false,
             decoration: InputDecoration(
-              labelText: label,
+              labelText: widget.label,
               labelStyle: const TextStyle(color: AppColors.textLight),
               counterText: '',
               filled: true,
@@ -64,9 +74,25 @@ class PremiumInputBox extends StatelessWidget {
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(color: AppColors.accentYellow, width: 1.5),
+                borderSide:
+                    const BorderSide(color: AppColors.accentYellow, width: 1.5),
               ),
               errorStyle: const TextStyle(color: AppColors.accentYellow),
+              suffixIcon: widget.isPassword
+                  ? IconButton(
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility
+                            : Icons.visibility_off,
+                        color: AppColors.accentYellow,
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          _obscurePassword = !_obscurePassword;
+                        });
+                      },
+                    )
+                  : null,
             ),
           ),
         ),

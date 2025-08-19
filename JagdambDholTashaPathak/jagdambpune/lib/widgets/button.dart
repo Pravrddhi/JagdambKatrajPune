@@ -67,13 +67,13 @@ class _PremiumButtonState extends State<PremiumButton>
           onPressed: widget.isEnabled && !widget.isLoading ? widget.onPressed : null,
           style: ElevatedButton.styleFrom(
             backgroundColor: widget.backgroundColor ?? AppColors.accentYellow,
-            foregroundColor: widget.textColor ?? Colors.black,
+            foregroundColor: widget.textColor ?? AppColors.primaryMaroon,
             padding: const EdgeInsets.symmetric(vertical: 16),
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
             ),
             disabledBackgroundColor: AppColors.disabled,
-            disabledForegroundColor: Colors.white,
+            disabledForegroundColor: AppColors.textLight,
           ),
           child: widget.isLoading
               ? const SizedBox(

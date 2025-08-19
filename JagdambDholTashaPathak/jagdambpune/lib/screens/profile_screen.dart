@@ -8,13 +8,24 @@ class ProfileScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final details = [
-      {'label': 'First Name', 'value': '${userDetails['first_name'] ?? 'N/A'}'},
-      {'label': 'Last Name', 'value': '${userDetails['last_name'] ?? 'N/A'}'},
-      {'label': 'Phone Number', 'value': '${userDetails['phone_number'] ?? 'N/A'}'},
-      {'label': 'Instrument', 'value': '${userDetails['instrument'] ?? 'N/A'}'},
-      {'label': 'Sex', 'value': '${userDetails['sex'] ?? 'N/A'}'},
-    ];
+    // final details = [
+    //   {'label': 'First Name', 'value': '${userDetails['first_name'] ?? 'N/A'}'},
+    //   {'label': 'Last Name', 'value': '${userDetails['last_name'] ?? 'N/A'}'},
+    //   {'label': 'Phone Number', 'value': '${userDetails['phone_number'] ?? 'N/A'}'},
+    //   {'label': 'Instrument', 'value': '${userDetails['instrument'] ?? 'N/A'}'},
+    //   {'label': 'Sex', 'value': '${userDetails['sex'] ?? 'N/A'}'},
+    // ];
+    final filteredDetails = userDetails.entries
+        .where((entry) => entry.key != 'events' && entry.key != 'role') // exclude 'events' and 'role'
+        .map(
+          (entry) => {
+            'label': entry.key
+                .replaceAll('_', ' ')
+                .toUpperCase(), // optional formatting
+            'value': '${entry.value ?? 'N/A'}',
+          },
+        )
+        .toList();
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -32,31 +43,49 @@ class ProfileScreen extends StatelessWidget {
               child: CircleAvatar(
                 radius: 50,
                 backgroundColor: AppColors.accentYellow,
-                child: Icon(Icons.person, size: 50, color: AppColors.primaryMaroon),
+                child: Icon(
+                  Icons.person,
+                  size: 50,
+                  color: AppColors.primaryMaroon,
+                ),
               ),
             ),
             const SizedBox(height: 20),
             Card(
               color: AppColors.background,
               elevation: 6,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
               child: Padding(
                 padding: const EdgeInsets.all(16),
                 child: Table(
-                  columnWidths: const {0: FlexColumnWidth(3), 1: FlexColumnWidth(4)},
+                  columnWidths: const {
+                    0: FlexColumnWidth(3),
+                    1: FlexColumnWidth(4),
+                  },
                   defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-                  children: details.map((item) {
+                  children: filteredDetails.map((item) {
                     return TableRow(
                       children: [
                         Padding(
                           padding: const EdgeInsets.all(8),
-                          child: Text(item['label']!,
-                              style: const TextStyle(color: AppColors.primaryMaroon, fontWeight: FontWeight.bold)),
+                          child: Text(
+                            item['label']!,
+                            style: const TextStyle(
+                              color: AppColors.primaryMaroon,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                         ),
                         Padding(
                           padding: const EdgeInsets.all(8),
-                          child: Text(item['value']!,
-                              style: const TextStyle(color: AppColors.primaryMaroon)),
+                          child: Text(
+                            item['value']!,
+                            style: const TextStyle(
+                              color: AppColors.primaryMaroon,
+                            ),
+                          ),
                         ),
                       ],
                     );

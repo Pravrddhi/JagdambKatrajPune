@@ -120,7 +120,7 @@ class _ResetPinScreenState extends State<ResetPinScreen> {
               text: "Verify",
               isEnabled: _isPhoneNumberValid && !isLoading,
               isLoading: isLoading,
-              backgroundColor: AppColors.primaryMaroon, // ✅ updated
+              backgroundColor: AppColors.accentYellow, // ✅ updated
               onPressed: _isPhoneNumberValid ? verifyAndProceed : null,
             ),
           ],
