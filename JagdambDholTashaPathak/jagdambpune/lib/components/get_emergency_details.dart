@@ -10,7 +10,7 @@ import '../widgets/dropDown.dart';
 
 class EmergencyContactDialog {
   static Future<void> show(BuildContext context,String token) async {
-    final _formKey = GlobalKey<FormState>();
+    final formKey = GlobalKey<FormState>();
     TextEditingController nameController = TextEditingController();
     TextEditingController phoneController = TextEditingController();
     String? selectedBloodGroup;
@@ -28,7 +28,7 @@ class EmergencyContactDialog {
               backgroundColor: AppColors.primaryMaroon,
               title: Text("Emergency Details", style: TextStyle(color: AppColors.accentYellow)),
               content: Form(
-                key: _formKey,
+                key: formKey,
                 child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
@@ -82,7 +82,7 @@ class EmergencyContactDialog {
                   textColor: AppColors.primaryMaroon,
                   isLoading: isLoading,
                   onPressed: () async {
-                    if (_formKey.currentState!.validate()) {
+                    if (formKey.currentState!.validate()) {
                       setState(() {
                         isLoading = true;
                       });

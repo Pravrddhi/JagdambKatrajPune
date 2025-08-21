@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../utils/animated_navigation.dart'; // ✅ Reusable animation
-import '../screens/profile_screen.dart';
 
 class AppDrawer extends StatelessWidget {
   final String? firstName;

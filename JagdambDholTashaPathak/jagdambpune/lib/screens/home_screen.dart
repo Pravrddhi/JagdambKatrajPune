@@ -11,6 +11,7 @@ import '../components/get_emergency_details.dart';
 import '../components/upcoming_events.dart';
 import '../components/mirvnuk_dialog.dart';
 import '../components/notification_dialog.dart';
+import '../services/fcm_service.dart';
 
 final storage = const FlutterSecureStorage();
 
@@ -91,6 +92,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           false,
         );
         await EmergencyContactDialog.show(context, accessToken);
+        String? fcmToken = await FCMService().getFcmToken(isLogin: false);
+        if (fcmToken != null) {
+          await FCMService().sendTokenToServer(fcmToken);
+        }
         _fetchUserDetails(accessToken);
       });
     } else {
@@ -126,6 +131,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
         if (data['status'] == true && data['data'] != null) {
           setState(() {
+            print(_userDetails);
             _userDetails = data['data'];
             if (data['data']['events'] != null &&
                 data['data']['events'].isNotEmpty) {
@@ -206,108 +212,109 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
               )
             : _userDetails != null
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SlideTransition(
-                        position: _slideAnimation,
-                        child: FadeTransition(
-                          opacity: _fadeAnimation,
-                          child: Text(
-                            'Welcome, ${_userDetails?['first_name'] ?? ''}!',
-                            style: const TextStyle(
-                              color: AppColors.primaryMaroon,
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
+            ? Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SlideTransition(
+                    position: _slideAnimation,
+                    child: FadeTransition(
+                      opacity: _fadeAnimation,
+                      child: Text(
+                        'Welcome, ${_userDetails?['first_name'] ?? ''}!',
+                        style: const TextStyle(
+                          color: AppColors.primaryMaroon,
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+
+                  // Scrollable Upcoming Events
+                  Expanded(
+                    child: _events.isNotEmpty
+                        ? SingleChildScrollView(
+                            child: UpcomingEvents(events: _events),
+                          )
+                        : const Center(
+                            child: Text(
+                              'No upcoming events',
+                              style: TextStyle(color: AppColors.primaryMaroon),
                             ),
                           ),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-
-                      // Scrollable Upcoming Events
-                      Expanded(
-                        child: _events.isNotEmpty
-                            ? SingleChildScrollView(
-                                child: UpcomingEvents(events: _events),
-                              )
-                            : const Center(
-                                child: Text(
-                                  'No upcoming events',
-                                  style: TextStyle(color: AppColors.primaryMaroon),
-                                ),
-                              ),
-                      ),
-                    ],
-                  )
-                : const Center(
-                    child: CircularProgressIndicator(color: AppColors.accentYellow),
                   ),
+                ],
+              )
+            : const Center(
+                child: CircularProgressIndicator(color: AppColors.accentYellow),
+              ),
       ),
       floatingActionButton:
-          (_userDetails != null && _userDetails!['role'] != 'Vadak')
-              ? SizedBox(
-                  width: 150,
-                  height: 150,
-                  child: Stack(
-                    alignment: Alignment.bottomRight,
-                    children: [
-                      // Add Mirvnuk
-                      Positioned(
-                        bottom: 80,
-                        right: 0,
-                        child: ScaleTransition(
-                          scale: _fabAnimation,
-                          child: FloatingActionButton(
-                            heroTag: 'add_mirvnuk',
-                            mini: true,
-                            backgroundColor: AppColors.accentYellow,
-                            onPressed: () async {
-                              _toggleFabMenu();
-                              await AddMirvnukDialog.show(context);
-                              String? token =
-                                  await storage.read(key: 'access_token');
-                              if (token != null && token.isNotEmpty) {
-                                _fetchUserDetails(token);
-                              }
-                            },
-                            child: const Icon(Icons.event),
-                          ),
-                        ),
-                      ),
-                      // Add Notification
-                      Positioned(
-                        bottom: 0,
-                        right: 80,
-                        child: ScaleTransition(
-                          scale: _fabAnimation,
-                          child: FloatingActionButton(
-                            heroTag: 'add_notification',
-                            mini: true,
-                            backgroundColor: AppColors.accentYellow,
-                            onPressed: () {
-                              _toggleFabMenu();
-                              NotificationDialog.show(context);
-                            },
-                            child: const Icon(Icons.notifications),
-                          ),
-                        ),
-                      ),
-                      // Main FAB
-                      FloatingActionButton(
-                        heroTag: 'main',
+          (_userDetails != null && _userDetails!['role'] != 'vadak')
+          ? SizedBox(
+              width: 150,
+              height: 150,
+              child: Stack(
+                alignment: Alignment.bottomRight,
+                children: [
+                  // Add Mirvnuk
+                  Positioned(
+                    bottom: 80,
+                    right: 0,
+                    child: ScaleTransition(
+                      scale: _fabAnimation,
+                      child: FloatingActionButton(
+                        heroTag: 'add_mirvnuk',
+                        mini: true,
                         backgroundColor: AppColors.accentYellow,
-                        onPressed: _toggleFabMenu,
-                        child: AnimatedRotation(
-                          turns: _isFabOpen ? 0.125 : 0,
-                          duration: const Duration(milliseconds: 250),
-                          child: const Icon(Icons.add),
-                        ),
+                        onPressed: () async {
+                          _toggleFabMenu();
+                          await MirvunkForm.open(context);
+                          String? token = await storage.read(
+                            key: 'access_token',
+                          );
+                          if (token != null && token.isNotEmpty) {
+                            _fetchUserDetails(token);
+                          }
+                        },
+                        child: const Icon(Icons.event),
                       ),
-                    ],
+                    ),
                   ),
-                )
-              : null,
+                  // Add Notification
+                  Positioned(
+                    bottom: 0,
+                    right: 80,
+                    child: ScaleTransition(
+                      scale: _fabAnimation,
+                      child: FloatingActionButton(
+                        heroTag: 'add_notification',
+                        mini: true,
+                        backgroundColor: AppColors.accentYellow,
+                        onPressed: () async {
+                          _toggleFabMenu();
+                          await NotificationForm.open(context);
+                        },
+                        child: const Icon(Icons.notifications),
+                      ),
+                    ),
+                  ),
+                  // Main FAB
+                  FloatingActionButton(
+                    heroTag: 'main',
+                    backgroundColor: AppColors.accentYellow,
+                    onPressed: _toggleFabMenu,
+                    child: AnimatedRotation(
+                      turns: _isFabOpen ? 0.125 : 0,
+                      duration: const Duration(milliseconds: 250),
+                      child: const Icon(Icons.add),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : null,
     );
   }
 }

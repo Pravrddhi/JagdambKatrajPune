@@ -14,7 +14,7 @@ Future<String> showSetPinDialog(
   bool isReset,
 ) async {
   TextEditingController pinController = TextEditingController();
-  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  final GlobalKey<FormState> formKey = GlobalKey<FormState>();
   final storage = const FlutterSecureStorage();
   String? errorText;
   bool isLoading = false;
@@ -26,7 +26,7 @@ Future<String> showSetPinDialog(
           return StatefulBuilder(
             builder: (BuildContext context, StateSetter setState) {
               Future<void> submitPin() async {
-                if (!_formKey.currentState!.validate()) return;
+                if (!formKey.currentState!.validate()) return;
 
                 setState(() => isLoading = true);
 
@@ -49,6 +49,7 @@ Future<String> showSetPinDialog(
                     Navigator.of(dialogContext).pop();
                     Navigator.of(dialogContext).pushReplacementNamed('/login');
                   } else {
+                    await storage.write(key: 'access_token', value: data['access_token']);
                     Navigator.of(dialogContext).pop(data['access_token']);
                   }
                 } else {
@@ -66,7 +67,7 @@ Future<String> showSetPinDialog(
                 ),
                 title: Text(isReset ? 'Reset PIN' : 'Enter PIN',style: TextStyle(color: AppColors.accentYellow)),
                 content: Form(
-                  key: _formKey,
+                  key: formKey,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -80,8 +81,9 @@ Future<String> showSetPinDialog(
                           FilteringTextInputFormatter.digitsOnly,
                         ],
                         validator: (value) {
-                          if (value == null || value.length != 6)
+                          if (value == null || value.length != 6) {
                             return 'Enter a valid 6-digit PIN';
+                          }
                           return null;
                         },
                       ),

@@ -10,6 +10,7 @@ import '../widgets/button.dart';
 import '../widgets/logging_in_overlay.dart';
 import '../config/api_endpoints.dart';
 import 'home_screen.dart';
+import '../services/fcm_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -27,9 +28,9 @@ class _LoginScreenState extends State<LoginScreen> {
   final storage = const FlutterSecureStorage();
   bool _isLoggingIn = false;
   String _errorMessage = '';
-  bool _isDeviceRegistered = false;
-  bool _can_reset_pin = false;
 
+
+  
   @override
   void initState() {
     super.initState();
@@ -59,10 +60,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['status'] == true) {
-        setState(() {
-          _isDeviceRegistered = data['status'] == true;
-          _can_reset_pin = data['can_reset_pin'];
-        });
+        // Device is registered
       }
     } catch (e) {
       // Optionally handle network error
@@ -157,7 +155,10 @@ class _LoginScreenState extends State<LoginScreen> {
       if (response.statusCode == 200) {
         await storage.write(key: 'access_token', value: data['access_token']);
         await storage.write(key: 'refresh_token', value: data['refresh_token']);
-
+        String? fcmToken = await FCMService().getFcmToken(isLogin: false);
+        if (fcmToken != null) {
+          await FCMService().sendTokenToServer(fcmToken);
+        }
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(

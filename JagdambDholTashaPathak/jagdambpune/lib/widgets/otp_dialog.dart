@@ -70,7 +70,7 @@ class _OtpDialogState extends State<OtpDialog> {
                 const SnackBar(
                   content: Text(
                     'Please enter 6-digit OTP',
-                    style: const TextStyle(color: AppColors.errorRed),
+                    style: TextStyle(color: AppColors.errorRed),
                   ),
                   backgroundColor: Colors.black87, // optional for better contrast
                 ),

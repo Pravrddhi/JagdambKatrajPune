@@ -134,6 +134,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     _validateForm();
   }
 
+
+
   Future<String> _getDeviceId() async {
     final AndroidId androidIdPlugin = AndroidId();
     final deviceInfo = DeviceInfoPlugin();

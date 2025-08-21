@@ -79,11 +79,14 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
     for (var field in widget.fields) {
       if (field.requiredField &&
           (values[field.label] == null ||
-              values[field.label].toString().isEmpty)) return false;
+              values[field.label].toString().isEmpty)) {
+        return false;
+      }
       if (field.isDate &&
           values[field.label] is DateTime &&
-          (values[field.label] as DateTime).isBefore(DateTime.now()))
+          (values[field.label] as DateTime).isBefore(DateTime.now())) {
         return false;
+      }
     }
     return true;
   }

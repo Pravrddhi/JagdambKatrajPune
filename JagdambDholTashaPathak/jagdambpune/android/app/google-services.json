@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "254873738733",
+    "project_id": "dholtashapathak-3653b",
+    "storage_bucket": "dholtashapathak-3653b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:254873738733:android:0b85150f3a90cb4d1d9be4",
+        "android_client_info": {
+          "package_name": "com.jagdambpune.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAMwjX08HeAWsk4FzGPFXpOXifU9mPvK6k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

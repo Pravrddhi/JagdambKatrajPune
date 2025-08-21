@@ -11,7 +11,7 @@ import 'package:flutter/services.dart';
 
 
 class ResetPinScreen extends StatefulWidget {
-  const ResetPinScreen({Key? key}) : super(key: key);
+  const ResetPinScreen({super.key});
 
   @override
   State<ResetPinScreen> createState() => _ResetPinScreenState();
