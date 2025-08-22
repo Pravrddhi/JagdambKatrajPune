@@ -4,9 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:jagdhambtrustpune/config/api_endpoints.dart';
 import 'package:jagdhambtrustpune/theme/app_colors.dart';
-import '../widgets/button.dart';
+import '../widgets/common_button.dart';
 import '../widgets/input_box.dart'; // import your custom input box
-import '../widgets/dropDown.dart';
+import '../widgets/drop_down.dart';
 
 class EmergencyContactDialog {
   static Future<void> show(BuildContext context,String token) async {

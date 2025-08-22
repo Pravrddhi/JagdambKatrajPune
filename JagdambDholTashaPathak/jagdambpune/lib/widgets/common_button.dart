@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 
-
+/// A customizable button widget with a scaling animation when enabled,
+/// and built-in loading indicator support.
 class PremiumButton extends StatefulWidget {
-  final String text;
-  final bool isEnabled;
-  final bool isLoading;
-  final VoidCallback? onPressed;
-  final Color? backgroundColor;
-  final Color? textColor;
+  final String text;                 // Button label text
+  final bool isEnabled;             // Whether button is enabled (clickable)
+  final bool isLoading;             // Whether to show loading spinner
+  final VoidCallback? onPressed;    // Callback invoked on press
+  final Color? backgroundColor;     // Optional background color override
+  final Color? textColor;           // Optional text color override
 
   const PremiumButton({
     super.key,
@@ -26,24 +27,32 @@ class PremiumButton extends StatefulWidget {
 
 class _PremiumButtonState extends State<PremiumButton>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _scaleAnimation;
+  late final AnimationController _controller;    // Controls the scaling animation
+  late final Animation<double> _scaleAnimation;  // Tween for scaling the button
 
   @override
   void initState() {
     super.initState();
+
+    // Initialize the animation controller for 300 milliseconds duration
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
     );
 
-    _scaleAnimation = Tween<double>(begin: 0.95, end: 1.05)
-        .animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
+    // Scale animation from 95% size (shrunk) to 105% (slightly enlarged)
+    // Uses easeInOut for smooth transition
+    _scaleAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
   }
 
   @override
   void didUpdateWidget(covariant PremiumButton oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    // When the button becomes enabled from a disabled state,
+    // play the scale animation once to draw attention subtly.
     if (widget.isEnabled && !oldWidget.isEnabled && mounted) {
       _controller.forward().then((_) {
         if (mounted) _controller.reverse();
@@ -53,17 +62,18 @@ class _PremiumButtonState extends State<PremiumButton>
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller.dispose();  // Dispose animation controller to avoid memory leaks
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return ScaleTransition(
-      scale: _scaleAnimation,
+      scale: _scaleAnimation,  // Animate button scaling
       child: SizedBox(
-        width: double.infinity,
+        width: double.infinity, // Make button fill horizontal space
         child: ElevatedButton(
+          // Disable button if not enabled or currently loading
           onPressed: widget.isEnabled && !widget.isLoading ? widget.onPressed : null,
           style: ElevatedButton.styleFrom(
             backgroundColor: widget.backgroundColor ?? AppColors.accentYellow,
@@ -75,6 +85,7 @@ class _PremiumButtonState extends State<PremiumButton>
             disabledBackgroundColor: AppColors.disabled,
             disabledForegroundColor: AppColors.textLight,
           ),
+          // Show loading spinner if loading, else show button text
           child: widget.isLoading
               ? const SizedBox(
                   width: 24,

@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 
+/// Defines a form field specification for the custom dialog
 class CustomDialogFormField {
-  final String label;
-  final IconData? icon;
-  final bool requiredField;
-  final bool isDate;
-  final Function(dynamic)? onChanged;
-  final String? Function(String?)? validator;
+  final String label;                          // Label for the input
+  final IconData? icon;                        // Optional icon prefix
+  final bool requiredField;                    // Whether input is mandatory (default: true)
+  final bool isDate;                           // Whether this field is a date picker
+  final Function(dynamic)? onChanged;          // Callback on value change
+  final String? Function(String?)? validator; // Optional validator function
 
   CustomDialogFormField({
     required this.label,
@@ -19,7 +20,9 @@ class CustomDialogFormField {
   });
 }
 
+/// The custom dialog widget to display form fields and Submit button
 class CustomDialog {
+  /// Shows the dialog with given title, fields, and async onSubmit callback
   static Future<void> show({
     required BuildContext context,
     required String title,
@@ -32,14 +35,17 @@ class CustomDialog {
       barrierDismissible: true,
       barrierColor: Colors.black54,
       transitionDuration: const Duration(milliseconds: 350),
+
+      // Main dialog widget wrapped for animations
       pageBuilder: (_, __, ___) => _CustomDialogForm(
         title: title,
         fields: fields,
         onSubmit: onSubmit,
       ),
+
+      // Combined fade, slide, and scale transitions for dialog entrance
       transitionBuilder: (_, anim, __, child) {
-        final curvedAnim =
-            CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
+        final curvedAnim = CurvedAnimation(parent: anim, curve: Curves.easeOutBack);
         return FadeTransition(
           opacity: anim,
           child: SlideTransition(
@@ -55,6 +61,7 @@ class CustomDialog {
   }
 }
 
+/// Internal stateful widget implementing the dialog form UI
 class _CustomDialogForm extends StatefulWidget {
   final String title;
   final List<CustomDialogFormField> fields;
@@ -71,17 +78,19 @@ class _CustomDialogForm extends StatefulWidget {
 }
 
 class _CustomDialogFormState extends State<_CustomDialogForm> {
-  final _formKey = GlobalKey<FormState>();
-  final Map<String, dynamic> values = {};
-  bool _isSubmitting = false;
+  final _formKey = GlobalKey<FormState>();            // Form key to validate and save
+  final Map<String, dynamic> values = {};              // Map storing current input values
+  bool _isSubmitting = false;                           // Tracks submission/loading state
 
+  /// Checks whether all required fields are valid and non-empty
   bool get _isFormValid {
     for (var field in widget.fields) {
       if (field.requiredField &&
           (values[field.label] == null ||
-              values[field.label].toString().isEmpty)) {
+            values[field.label].toString().isEmpty)) {
         return false;
       }
+      // For date fields, check value is DateTime and not in past
       if (field.isDate &&
           values[field.label] is DateTime &&
           (values[field.label] as DateTime).isBefore(DateTime.now())) {
@@ -91,11 +100,11 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
     return true;
   }
 
+  /// Provides consistent input decoration per field with optional icon
   InputDecoration _inputDecoration(CustomDialogFormField field) {
     return InputDecoration(
       labelText: field.label,
-      prefixIcon:
-          field.icon != null ? Icon(field.icon, color: AppColors.primaryMaroon) : null,
+      prefixIcon: field.icon != null ? Icon(field.icon, color: AppColors.primaryMaroon) : null,
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
@@ -126,7 +135,7 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
                   color: Colors.black26,
                   blurRadius: 12,
                   offset: const Offset(0, 6),
-                )
+                ),
               ],
             ),
             child: Stack(
@@ -134,7 +143,7 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
                 Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Header
+                    // Dialog header with background color and title text
                     Container(
                       width: double.infinity,
                       height: 60,
@@ -152,6 +161,7 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
                     ),
                     const SizedBox(height: 20),
 
+                    // Form contents with scrollable area for multiple inputs
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 20),
                       child: SingleChildScrollView(
@@ -170,8 +180,8 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
                                             : null,
                                     onChanged: (val) {
                                       values[field.label] = val;
-                                      setState(() {});
-                                      if (field.onChanged != null) field.onChanged!(val);
+                                      setState(() {});  // Update form validity state
+                                      field.onChanged?.call(val);
                                     },
                                   ),
                                 if (field.isDate)
@@ -186,6 +196,8 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
                                 const SizedBox(height: 10),
                               ],
                               const SizedBox(height: 10),
+
+                              // Submit button disabled if form invalid or submitting
                               ElevatedButton(
                                 onPressed: _isFormValid && !_isSubmitting
                                     ? () async {
@@ -201,8 +213,7 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(12),
                                   ),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 20, vertical: 12),
+                                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                                 ),
                                 child: const Text(
                                   'Submit',
@@ -220,6 +231,8 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
                     ),
                   ],
                 ),
+
+                // Close button positioned at top right corner
                 Positioned(
                   top: 12,
                   right: 8,
@@ -238,30 +251,34 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
   }
 }
 
+/// A text field that opens a date picker dialog when tapped, showing the chosen date, and validates it.
 class _DatePickerField extends StatefulWidget {
   final String label;
   final IconData? icon;
   final Function(DateTime) onChanged;
 
-  const _DatePickerField({required this.label, this.icon, required this.onChanged});
+  const _DatePickerField({
+    required this.label,
+    this.icon,
+    required this.onChanged,
+  });
 
   @override
   State<_DatePickerField> createState() => _DatePickerFieldState();
 }
 
 class _DatePickerFieldState extends State<_DatePickerField> {
-  final TextEditingController _controller = TextEditingController();
-  DateTime? _selectedDate;
+  final TextEditingController _controller = TextEditingController();   // To display formatted date text
+  DateTime? _selectedDate;                                            // Holds selected date
 
   @override
   Widget build(BuildContext context) {
     return TextFormField(
       controller: _controller,
-      readOnly: true,
+      readOnly: true,    // Prevents keyboard input
       decoration: InputDecoration(
         labelText: widget.label,
-        prefixIcon:
-            widget.icon != null ? Icon(widget.icon, color: AppColors.primaryMaroon) : null,
+        prefixIcon: widget.icon != null ? Icon(widget.icon, color: AppColors.primaryMaroon) : null,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
@@ -282,7 +299,9 @@ class _DatePickerFieldState extends State<_DatePickerField> {
           firstDate: DateTime.now(),
           lastDate: DateTime(2100),
         );
+
         if (picked != null) {
+          // Update the text form field and notify the parent
           setState(() {
             _selectedDate = picked;
             _controller.text =

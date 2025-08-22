@@ -5,13 +5,15 @@ import 'package:local_auth/local_auth.dart';
 import 'package:flutter/services.dart';
 import '../components/get_device_id.dart';
 import '../../theme/app_colors.dart';
-import '../widgets/input_box.dart';
-import '../widgets/button.dart';
 import '../widgets/logging_in_overlay.dart';
 import '../config/api_endpoints.dart';
 import 'home_screen.dart';
 import '../services/fcm_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../widgets/common_button.dart';
+import '../widgets/input_box.dart';
+import 'package:provider/provider.dart';
+import '../providers/feature_flags_provider.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -29,8 +31,6 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoggingIn = false;
   String _errorMessage = '';
 
-
-  
   @override
   void initState() {
     super.initState();
@@ -42,6 +42,7 @@ class _LoginScreenState extends State<LoginScreen> {
         });
       }
     });
+
     _checkDeviceRegistration();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -187,6 +188,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final flags = Provider.of<FeatureFlagsProvider>(context).flags;
     return Scaffold(
       backgroundColor: AppColors.primaryMaroon,
       body: Stack(
@@ -216,9 +218,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   PremiumInputBox(
                     controller: _pinController,
                     label: 'Enter 6-digit PIN',
-                    keyboardType: TextInputType.number,
-                    maxLength: 6,
-                    isPassword: true,
+                    isPin: true,
                     onChanged: (_) {
                       if (_errorMessage.isNotEmpty) {
                         setState(() {
@@ -226,7 +226,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         });
                       }
                     },
-                    focusNode: _pinFocusNode,
                   ),
 
                   if (_errorMessage.isNotEmpty)
@@ -252,7 +251,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
                   const SizedBox(height: 16),
 
-                  // Show both Reset PIN and Registration links
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -270,19 +268,21 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                       const SizedBox(width: 16),
-                      GestureDetector(
-                        onTap: () {
-                          Navigator.pushNamed(context, '/register');
-                        },
-                        child: Text(
-                          "Registration",
-                          style: TextStyle(
-                            color: AppColors.accentYellow,
-                            decoration: TextDecoration.underline,
-                            fontSize: 14,
+                      if (flags?.showRegistration ?? false)...[
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.pushNamed(context, '/register');
+                          },
+                          child: Text(
+                            "Registration",
+                            style: TextStyle(
+                              color: AppColors.accentYellow,
+                              decoration: TextDecoration.underline,
+                              fontSize: 14,
+                            ),
                           ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
                 ],

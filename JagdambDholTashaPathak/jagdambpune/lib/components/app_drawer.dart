@@ -4,14 +4,14 @@ import '../utils/animated_navigation.dart'; // ✅ Reusable animation
 
 class AppDrawer extends StatelessWidget {
   final String? firstName;
-  final String? email;
+  final String? phoneNumber;
   final Map<String, dynamic>? userDetails;
   final VoidCallback onLogout;
 
   const AppDrawer({
     super.key,
     this.firstName,
-    this.email,
+    this.phoneNumber,
     this.userDetails,
     required this.onLogout,
   });
@@ -40,9 +40,11 @@ class AppDrawer extends StatelessWidget {
                 backgroundColor: AppColors.accentYellow,
                 child: Icon(Icons.person, color: AppColors.primaryMaroon, size: 40),
               ),
+
             ),
             accountName: Text(firstName ?? 'User', style: const TextStyle(color: AppColors.textLight)),
-            accountEmail: Text(email ?? '', style: const TextStyle(color: AppColors.textLight54)),
+            accountEmail: Text(phoneNumber ?? '', style: const TextStyle(color: AppColors.textLight54)),
+            
           ),
           ListTile(
             leading: const Icon(Icons.person, color: AppColors.primaryMaroon),
@@ -50,11 +52,6 @@ class AppDrawer extends StatelessWidget {
             onTap: () => _navigateToProfile(context),
           ),
           const Spacer(),
-          ListTile(
-            leading: const Icon(Icons.logout, color: AppColors.primaryMaroon),
-            title: const Text('Logout', style: TextStyle(color: AppColors.primaryMaroon)),
-            onTap: onLogout,
-          ),
         ],
       ),
     );
