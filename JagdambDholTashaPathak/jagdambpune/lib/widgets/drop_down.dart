@@ -3,10 +3,14 @@ import '../theme/app_colors.dart';
 
 /// A styled dropdown form field widget with consistent design
 class PremiumDropDown extends StatelessWidget {
-  final String? value;                  // Currently selected option value
-  final List<String> options;          // List of available options
-  final String label;                  // Label displayed for the dropdown
+  final String? value; // Currently selected option value
+  final List<String> options; // List of available options
+  final String label; // Label displayed for the dropdown
   final void Function(String?) onChanged; // Callback when selection changes
+  final Color? backgroundColor;
+  final Color? labelColor;
+  final Color? textColor;
+  final Color? dropdownMenuColor;
 
   const PremiumDropDown({
     super.key,
@@ -14,6 +18,10 @@ class PremiumDropDown extends StatelessWidget {
     required this.options,
     required this.label,
     required this.onChanged,
+    this.backgroundColor,
+    this.labelColor,
+    this.textColor,
+    this.dropdownMenuColor,
   });
 
   @override
@@ -25,11 +33,11 @@ class PremiumDropDown extends StatelessWidget {
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
-            color: AppColors.primaryMaroon,
+            color: backgroundColor ?? AppColors.primaryMaroon,
             borderRadius: BorderRadius.circular(12),
             boxShadow: [
               BoxShadow(
-                color: AppColors.accentYellow.withOpacity(0.3),
+                color: AppColors.accentYellow.withAlpha(77), // 0.3 * 255
                 blurRadius: 12,
                 offset: const Offset(0, 4), // Shadow offset downwards
               ),
@@ -43,16 +51,18 @@ class PremiumDropDown extends StatelessWidget {
                 .map(
                   (option) => DropdownMenuItem<String>(
                     value: option,
-                    child: Text(option,
-                        style: const TextStyle(color: AppColors.textLight)),
+                    child: Text(
+                      option,
+                      style: TextStyle(color: textColor ?? AppColors.textLight),
+                    ),
                   ),
                 )
                 .toList(),
             onChanged: onChanged,
-            dropdownColor: AppColors.primaryMaroon,
+            dropdownColor: dropdownMenuColor ?? AppColors.primaryMaroon,
             decoration: InputDecoration(
               labelText: label,
-              labelStyle: const TextStyle(color: AppColors.textLight),
+              labelStyle: TextStyle(color: labelColor ?? AppColors.textLight),
 
               // Transparent border when enabled to use container's rounded corners
               enabledBorder: OutlineInputBorder(
@@ -70,10 +80,10 @@ class PremiumDropDown extends StatelessWidget {
             ),
 
             // Style for selected option text
-            style: const TextStyle(color: AppColors.textLight),
+            style: TextStyle(color: textColor ?? AppColors.textLight),
 
             // Color of the dropdown arrow icon
-            iconEnabledColor: AppColors.textLight,
+            iconEnabledColor: textColor ?? AppColors.textLight,
           ),
         ),
       ],

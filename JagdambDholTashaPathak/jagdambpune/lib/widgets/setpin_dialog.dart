@@ -15,7 +15,7 @@ Future<String> showSetPinDialog(
 ) async {
   TextEditingController pinController = TextEditingController();
   final GlobalKey<FormState> formKey = GlobalKey<FormState>();
-  final storage = const FlutterSecureStorage();
+  const storage = FlutterSecureStorage();
   String? errorText;
   bool isLoading = false;
 
@@ -50,8 +50,14 @@ Future<String> showSetPinDialog(
                     Navigator.of(dialogContext).pop();
                     Navigator.of(dialogContext).pushReplacementNamed('/login');
                   } else {
-                    await storage.write(key: 'access_token', value: data['access_token']);
-                    await storage.write(key: 'refresh_token', value: data['refresh_token']);
+                    await storage.write(
+                      key: 'access_token',
+                      value: data['access_token'],
+                    );
+                    await storage.write(
+                      key: 'refresh_token',
+                      value: data['refresh_token'],
+                    );
                     Navigator.of(dialogContext).pop(data['access_token']);
                   }
                 } else {
@@ -64,11 +70,14 @@ Future<String> showSetPinDialog(
               }
 
               return AlertDialog(
-                backgroundColor: AppColors.primaryMaroon,
+                backgroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
                 ),
-                title: Text(isReset ? 'Reset PIN' : 'Set PIN',style: TextStyle(color: AppColors.accentYellow)),
+                title: Text(
+                  isReset ? 'Reset PIN' : 'Set PIN',
+                  style: const TextStyle(color: AppColors.primaryMaroon),
+                ),
                 content: Form(
                   key: formKey,
                   child: Column(
@@ -77,6 +86,7 @@ Future<String> showSetPinDialog(
                       PremiumInputBox(
                         controller: pinController,
                         label: "PIN (6 digits)",
+                        useLightStyle: true,
                         isPin: true,
                         keyboardType: TextInputType.number,
                         maxLength: 6,
@@ -96,7 +106,9 @@ Future<String> showSetPinDialog(
                           padding: const EdgeInsets.only(top: 8.0),
                           child: Text(
                             errorText!,
-                            style: const TextStyle(color: AppColors.accentYellow),
+                            style: const TextStyle(
+                              color: AppColors.primaryMaroon,
+                            ),
                           ),
                         ),
                     ],

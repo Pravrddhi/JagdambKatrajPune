@@ -108,7 +108,7 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide(color: AppColors.primaryMaroon, width: 2),
+        borderSide: const BorderSide(color: AppColors.primaryMaroon, width: 2),
       ),
       filled: true,
       fillColor: Colors.white,
@@ -130,11 +130,11 @@ class _CustomDialogFormState extends State<_CustomDialogForm> {
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
-              boxShadow: [
+              boxShadow: const [
                 BoxShadow(
                   color: Colors.black26,
                   blurRadius: 12,
-                  offset: const Offset(0, 6),
+                  offset: Offset(0, 6),
                 ),
               ],
             ),
@@ -282,7 +282,7 @@ class _DatePickerFieldState extends State<_DatePickerField> {
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(color: AppColors.primaryMaroon, width: 2),
+          borderSide: const BorderSide(color: AppColors.primaryMaroon, width: 2),
         ),
         filled: true,
         fillColor: Colors.white,

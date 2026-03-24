@@ -5,7 +5,7 @@ class LoggingInOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
+    return const Stack(
       children: [
         // Semi-transparent black background
         Opacity(
@@ -19,7 +19,7 @@ class LoggingInOverlay extends StatelessWidget {
         Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
-            children: const [
+            children: [
               CircularProgressIndicator(),
               SizedBox(height: 16),
               Text(

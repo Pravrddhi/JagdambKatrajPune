@@ -1,6 +1,7 @@
 class ApiEndpoints {
   // Base URL
   static const String baseUrl = 'http://192.168.1.9/api';
+  static const String pathak_id = "1";
 
   // -------------------
   // AUTH ENDPOINTS

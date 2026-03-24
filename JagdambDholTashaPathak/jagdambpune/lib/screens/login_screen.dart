@@ -30,6 +30,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final storage = const FlutterSecureStorage();
   bool _isLoggingIn = false;
   String _errorMessage = '';
+  bool _isDeviceRegistered = false;
 
   @override
   void initState() {
@@ -44,10 +45,6 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     _checkDeviceRegistration();
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _attemptBiometricLogin();
-    });
   }
 
   Future<void> _checkDeviceRegistration() async {
@@ -61,10 +58,14 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['status'] == true) {
-        // Device is registered
+        setState(() => _isDeviceRegistered = true);
+        // Only auto-attempt biometric if device is registered
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _attemptBiometricLogin();
+        });
       }
     } catch (e) {
-      // Optionally handle network error
+      // Network error — skip biometric silently
     }
   }
 
@@ -105,7 +106,7 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       if (didAuthenticate) {
-        String? storedPin = await storage.read(key: 'pin');
+        String? storedPin = await storage.read(key: ApiEndpoints.pinKey);
         if (storedPin != null && storedPin.length == 6) {
           _pinController.text = storedPin;
           await _login();
@@ -145,17 +146,27 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       String deviceId = await getDeviceId();
+      final uri = Uri.parse(ApiEndpoints.loginWithPin);
+      final headers = {'Content-Type': 'application/json'};
+      final requestBody = jsonEncode({'pin': pin, 'device_id': deviceId});
+
       final response = await http.post(
-        Uri.parse(ApiEndpoints.loginWithPin),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'pin': pin, 'device_id': deviceId}),
+        uri,
+        headers: headers,
+        body: requestBody,
       );
 
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
-        await storage.write(key: 'access_token', value: data['access_token']);
-        await storage.write(key: 'refresh_token', value: data['refresh_token']);
+        await storage.write(
+          key: ApiEndpoints.accessTokenKey,
+          value: data['access_token'],
+        );
+        await storage.write(
+          key: ApiEndpoints.refreshTokenKey,
+          value: data['refresh_token'],
+        );
         String? fcmToken = await FCMService().getFcmToken(isLogin: false);
         if (fcmToken != null) {
           await FCMService().sendTokenToServer(fcmToken);
@@ -249,6 +260,31 @@ class _LoginScreenState extends State<LoginScreen> {
                     isEnabled: !_isLoggingIn,
                   ),
 
+                  if (_isDeviceRegistered) ...[
+                    const SizedBox(height: 12),
+                    GestureDetector(
+                      onTap: _attemptBiometricLogin,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: const [
+                          Icon(
+                            Icons.fingerprint,
+                            color: AppColors.accentYellow,
+                            size: 32,
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'Login with Biometric',
+                            style: TextStyle(
+                              color: AppColors.accentYellow,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+
                   const SizedBox(height: 16),
 
                   Row(
@@ -259,7 +295,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           onTap: () {
                             Navigator.pushNamed(context, '/register');
                           },
-                          child: Text(
+                          child: const Text(
                             "Registration",
                             style: TextStyle(
                               color: AppColors.accentYellow,
@@ -273,7 +309,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           onTap: () {
                             Navigator.pushNamed(context, '/resetPin');
                           },
-                          child: Text(
+                          child: const Text(
                             "Reset PIN",
                             style: TextStyle(
                               color: AppColors.accentYellow,

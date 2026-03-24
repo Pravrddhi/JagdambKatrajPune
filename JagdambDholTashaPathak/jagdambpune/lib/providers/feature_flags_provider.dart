@@ -6,16 +6,26 @@ class FeatureFlagsProvider with ChangeNotifier {
   FeatureFlags? _flags;
   bool _isLoading = false;
   String? _error;
+  DateTime? _lastFetchedAt;
+
+  static const Duration _minRefreshInterval = Duration(seconds: 2);
 
   FeatureFlags? get flags => _flags;
   bool get isLoading => _isLoading;
   String? get error => _error;
 
   FeatureFlagsProvider() {
-    fetchFeatureFlags();
+    fetchFeatureFlags(force: true);
   }
 
-  Future<void> fetchFeatureFlags() async {
+  Future<void> fetchFeatureFlags({bool force = false}) async {
+    if (_isLoading) return;
+
+    if (!force && _lastFetchedAt != null) {
+      final age = DateTime.now().difference(_lastFetchedAt!);
+      if (age < _minRefreshInterval) return;
+    }
+
     _isLoading = true;
     _error = null;
     notifyListeners();
@@ -23,6 +33,7 @@ class FeatureFlagsProvider with ChangeNotifier {
     try {
       final fetchedFlags = await ApiService.fetchFeatureFlags();
       _flags = fetchedFlags;
+      _lastFetchedAt = DateTime.now();
     } catch (e) {
       _error = e.toString();
     } finally {

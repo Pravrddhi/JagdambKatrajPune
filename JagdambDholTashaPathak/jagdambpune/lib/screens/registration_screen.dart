@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:local_auth/local_auth.dart';
 import '../theme/app_colors.dart';
 import '../widgets/input_box.dart';
 import '../widgets/common_button.dart';
@@ -12,6 +13,7 @@ import 'package:android_id/android_id.dart';
 import 'home_screen.dart';
 import '../config/api_endpoints.dart';
 import 'package:flutter/services.dart';
+import '../services/fcm_service.dart';
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
@@ -21,6 +23,8 @@ class RegistrationScreen extends StatefulWidget {
 }
 
 class _RegistrationScreenState extends State<RegistrationScreen> {
+  final LocalAuthentication _auth = LocalAuthentication();
+
   // Controllers for input fields
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _firstNameController = TextEditingController();
@@ -94,23 +98,20 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           List<dynamic> instruments = data["instruments"];
           return instruments.map((e) => e.toString()).toList();
         } else {
-          // Log server rejection
-          print("Server Response: ${data['message']}");
+          // Server rejection
           return [];
         }
       } else {
-        print("HTTP Error: ${response.statusCode}");
         return [];
       }
     } catch (e) {
-      print("Exception fetching instruments: $e");
       return [];
     }
   }
 
   /// Loads instruments and updates UI state with results
   void _loadInstruments() async {
-    int pathakId = int.tryParse(ApiEndpoints.pathak_id.toString()) ?? 0;
+    int pathakId = int.tryParse(ApiEndpoints.pathakId.toString()) ?? 0;
     if (pathakId == 0) return;
 
     List<String> instruments = await _fetchInstruments(pathakId);
@@ -121,7 +122,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   /// Validate form fields and update form valid state
   void _validateForm() {
-    final isValid = validateFirstName(_firstNameController.text) &&
+    final isValid =
+        validateFirstName(_firstNameController.text) &&
         validateLastName(_lastNameController.text) &&
         validatePhone(_phoneController.text) &&
         validateSelection(selectedSex) &&
@@ -171,7 +173,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   /// Get unique device ID for Android or iOS platforms
   Future<String> _getDeviceId() async {
-    final AndroidId androidIdPlugin = AndroidId();
+    const AndroidId androidIdPlugin = AndroidId();
     final deviceInfo = DeviceInfoPlugin();
 
     if (Platform.isAndroid) {
@@ -230,10 +232,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         "phone_number": _phoneController.text,
         "first_name": _firstNameController.text,
         "last_name": _lastNameController.text,
-        "sex": selectedSex,
+        "gender": selectedSex,
         "instrument": selectedInstrument,
         "device_id": await _getDeviceId(),
-        "pathak_id": ApiEndpoints.pathak_id,
+        "pathak_id": ApiEndpoints.pathakId,
       }),
     );
 
@@ -242,6 +244,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     if (response.statusCode == 201) {
       final data = jsonDecode(response.body);
       final accessToken = data['access_token'];
+      // Ask for notification permission right after successful registration,
+      // before the set-PIN dialog appears on the next screen.
+      await FCMService().requestNotificationPermission();
+      await _promptBiometricAfterNotificationPermission();
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -272,6 +278,24 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           _errorMessage = "Registration failed";
         }
       });
+    }
+  }
+
+  Future<void> _promptBiometricAfterNotificationPermission() async {
+    try {
+      final isSupported = await _auth.isDeviceSupported();
+      if (!isSupported) return;
+      final canCheck = await _auth.canCheckBiometrics;
+      if (!canCheck) return;
+      await _auth.authenticate(
+        localizedReason: 'Enable biometric for quick login',
+        options: const AuthenticationOptions(
+          stickyAuth: false,
+          biometricOnly: true,
+        ),
+      );
+    } catch (_) {
+      // Skip silently if biometric is unavailable or user cancels.
     }
   }
 
@@ -368,7 +392,33 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 focusNode: _phoneFocusNode,
               ),
-              if (_fieldErrors['phone_number'] != null)
+              if (_isCheckingPhone)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8.0, left: 4.0),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            AppColors.accentYellow,
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        'Checking phone number...',
+                        style: TextStyle(
+                          color: AppColors.accentYellow,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else if (_fieldErrors['phone_number'] != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 4.0, left: 4.0),
                   child: Text(
@@ -381,11 +431,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                 ),
               const SizedBox(height: 16),
 
-              // Sex dropdown
+              // Gender dropdown
               PremiumDropDown(
                 label: "Gender",
                 value: selectedSex,
-                options: ["Male", "Female", "Other"],
+                options: const ["Male", "Female", "Other"],
                 onChanged: (val) {
                   setState(() {
                     selectedSex = val;

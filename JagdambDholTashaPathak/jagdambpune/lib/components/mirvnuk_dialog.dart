@@ -7,7 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class MirvunkForm {
   static Future<void> open(BuildContext context) async {
-    final _formKey = GlobalKey<FormState>();
+    final formKey = GlobalKey<FormState>();
 
     final TextEditingController nameController = TextEditingController();
     final TextEditingController dateController = TextEditingController();
@@ -17,7 +17,7 @@ class MirvunkForm {
     final TextEditingController mapLinkController = TextEditingController();
     final TextEditingController descriptionController = TextEditingController();
 
-    final storage = const FlutterSecureStorage();
+    const storage = FlutterSecureStorage();
 
     DateTime? selectedDate;
     TimeOfDay? timeFrom;
@@ -37,19 +37,22 @@ class MirvunkForm {
                   timeToController.text.isNotEmpty &&
                   locationController.text.isNotEmpty &&
                   mapLinkController.text.isNotEmpty &&
-                  Uri.tryParse(mapLinkController.text)?.hasAbsolutePath == true &&
+                  Uri.tryParse(mapLinkController.text)?.hasAbsolutePath ==
+                      true &&
                   descriptionController.text.isNotEmpty;
             }
 
             return Dialog(
               insetPadding: const EdgeInsets.all(10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
               child: Stack(
                 children: [
                   SingleChildScrollView(
                     padding: const EdgeInsets.all(16.0),
                     child: Form(
-                      key: _formKey,
+                      key: formKey,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -66,7 +69,10 @@ class MirvunkForm {
                                 ),
                               ),
                               IconButton(
-                                icon: const Icon(Icons.close, color: AppColors.primaryMaroon),
+                                icon: const Icon(
+                                  Icons.close,
+                                  color: AppColors.primaryMaroon,
+                                ),
                                 onPressed: () => Navigator.of(context).pop(),
                               ),
                             ],
@@ -78,10 +84,14 @@ class MirvunkForm {
                             controller: nameController,
                             decoration: const InputDecoration(
                               labelText: "Mirvnuk Name",
-                              prefixIcon: Icon(Icons.event, color: AppColors.primaryMaroon),
+                              prefixIcon: Icon(
+                                Icons.event,
+                                color: AppColors.primaryMaroon,
+                              ),
                               border: OutlineInputBorder(),
                             ),
-                            validator: (val) => val == null || val.isEmpty ? 'Required' : null,
+                            validator: (val) =>
+                                val == null || val.isEmpty ? 'Required' : null,
                             onChanged: (_) => setState(() {}),
                           ),
                           const SizedBox(height: 10),
@@ -92,10 +102,14 @@ class MirvunkForm {
                             readOnly: true,
                             decoration: const InputDecoration(
                               labelText: "Date",
-                              prefixIcon: Icon(Icons.calendar_today, color: AppColors.primaryMaroon),
+                              prefixIcon: Icon(
+                                Icons.calendar_today,
+                                color: AppColors.primaryMaroon,
+                              ),
                               border: OutlineInputBorder(),
                             ),
-                            validator: (val) => val == null || val.isEmpty ? 'Required' : null,
+                            validator: (val) =>
+                                val == null || val.isEmpty ? 'Required' : null,
                             onTap: () async {
                               DateTime now = DateTime.now();
                               selectedDate = await showDatePicker(
@@ -119,10 +133,14 @@ class MirvunkForm {
                             readOnly: true,
                             decoration: const InputDecoration(
                               labelText: "Start Time",
-                              prefixIcon: Icon(Icons.access_time, color: AppColors.primaryMaroon),
+                              prefixIcon: Icon(
+                                Icons.access_time,
+                                color: AppColors.primaryMaroon,
+                              ),
                               border: OutlineInputBorder(),
                             ),
-                            validator: (val) => val == null || val.isEmpty ? 'Required' : null,
+                            validator: (val) =>
+                                val == null || val.isEmpty ? 'Required' : null,
                             onTap: () async {
                               timeFrom = await showTimePicker(
                                 context: context,
@@ -143,18 +161,27 @@ class MirvunkForm {
                             readOnly: true,
                             decoration: const InputDecoration(
                               labelText: "End Time",
-                              prefixIcon: Icon(Icons.access_time, color: AppColors.primaryMaroon),
+                              prefixIcon: Icon(
+                                Icons.access_time,
+                                color: AppColors.primaryMaroon,
+                              ),
                               border: OutlineInputBorder(),
                             ),
                             validator: (val) {
                               if (val == null || val.isEmpty) return 'Required';
                               // Validate start < end
                               if (timeFromController.text.isNotEmpty) {
-                                final startParts = timeFromController.text.split(":");
+                                final startParts = timeFromController.text
+                                    .split(":");
                                 final endParts = val.split(":");
-                                final startMinutes = int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
-                                final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
-                                if (endMinutes <= startMinutes) return 'End must be after start';
+                                final startMinutes =
+                                    int.parse(startParts[0]) * 60 +
+                                    int.parse(startParts[1]);
+                                final endMinutes =
+                                    int.parse(endParts[0]) * 60 +
+                                    int.parse(endParts[1]);
+                                if (endMinutes <= startMinutes)
+                                  return 'End must be after start';
                               }
                               return null;
                             },
@@ -177,10 +204,14 @@ class MirvunkForm {
                             controller: locationController,
                             decoration: const InputDecoration(
                               labelText: "Location",
-                              prefixIcon: Icon(Icons.location_on, color: AppColors.primaryMaroon),
+                              prefixIcon: Icon(
+                                Icons.location_on,
+                                color: AppColors.primaryMaroon,
+                              ),
                               border: OutlineInputBorder(),
                             ),
-                            validator: (val) => val == null || val.isEmpty ? 'Required' : null,
+                            validator: (val) =>
+                                val == null || val.isEmpty ? 'Required' : null,
                             onChanged: (_) => setState(() {}),
                           ),
                           const SizedBox(height: 10),
@@ -190,12 +221,16 @@ class MirvunkForm {
                             controller: mapLinkController,
                             decoration: const InputDecoration(
                               labelText: "Map Link",
-                              prefixIcon: Icon(Icons.map, color: AppColors.primaryMaroon),
+                              prefixIcon: Icon(
+                                Icons.map,
+                                color: AppColors.primaryMaroon,
+                              ),
                               border: OutlineInputBorder(),
                             ),
                             validator: (val) {
                               if (val == null || val.isEmpty) return 'Required';
-                              if (Uri.tryParse(val)?.hasAbsolutePath != true) return 'Invalid URL';
+                              if (Uri.tryParse(val)?.hasAbsolutePath != true)
+                                return 'Invalid URL';
                               return null;
                             },
                             onChanged: (_) => setState(() {}),
@@ -207,11 +242,15 @@ class MirvunkForm {
                             controller: descriptionController,
                             decoration: const InputDecoration(
                               labelText: "Description",
-                              prefixIcon: Icon(Icons.description, color: AppColors.primaryMaroon),
+                              prefixIcon: Icon(
+                                Icons.description,
+                                color: AppColors.primaryMaroon,
+                              ),
                               border: OutlineInputBorder(),
                             ),
                             maxLines: 3,
-                            validator: (val) => val == null || val.isEmpty ? 'Required' : null,
+                            validator: (val) =>
+                                val == null || val.isEmpty ? 'Required' : null,
                             onChanged: (_) => setState(() {}),
                           ),
                           const SizedBox(height: 16),
@@ -221,28 +260,34 @@ class MirvunkForm {
                             width: double.infinity,
                             child: ElevatedButton(
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: isFormValid() ? AppColors.primaryMaroon : Colors.grey,
+                                backgroundColor: isFormValid()
+                                    ? AppColors.primaryMaroon
+                                    : Colors.grey,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                               ),
                               onPressed: isFormValid() && !isSubmitting
                                   ? () async {
-                                      if (!_formKey.currentState!.validate()) return;
+                                      if (!formKey.currentState!.validate())
+                                        return;
                                       setState(() => isSubmitting = true);
 
-                                      String? accessToken = await storage.read(key: 'access_token');
+                                      String? accessToken = await storage.read(
+                                        key: 'access_token',
+                                      );
                                       if (accessToken == null) return;
 
                                       final body = jsonEncode({
-                                        "pathak": ApiEndpoints.pathak_id,
+                                        "pathak": ApiEndpoints.pathakId,
                                         "name": nameController.text,
                                         "date": dateController.text,
                                         "time_from": timeFromController.text,
                                         "time_to": timeToController.text,
                                         "location": locationController.text,
                                         "map_link": mapLinkController.text,
-                                        "description": descriptionController.text,
+                                        "description":
+                                            descriptionController.text,
                                       });
 
                                       try {
@@ -250,24 +295,43 @@ class MirvunkForm {
                                           Uri.parse(ApiEndpoints.createEvent),
                                           headers: {
                                             'Content-Type': 'application/json',
-                                            'Authorization': 'Bearer $accessToken',
+                                            'Authorization':
+                                                'Bearer $accessToken',
                                           },
                                           body: body,
                                         );
 
-                                        if (response.statusCode == 200 || response.statusCode == 201) {
+                                        if (response.statusCode == 200 ||
+                                            response.statusCode == 201) {
                                           Navigator.of(context).pop();
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(content: Text('Mirvnuk added successfully')),
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            const SnackBar(
+                                              content: Text(
+                                                'Mirvnuk added successfully',
+                                              ),
+                                            ),
                                           );
                                         } else {
-                                          final data = jsonDecode(response.body);
-                                          ScaffoldMessenger.of(context).showSnackBar(
-                                            SnackBar(content: Text(data['message'] ?? 'Failed to add Mirvnuk')),
+                                          final data = jsonDecode(
+                                            response.body,
+                                          );
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                data['message'] ??
+                                                    'Failed to add Mirvnuk',
+                                              ),
+                                            ),
                                           );
                                         }
                                       } catch (e) {
-                                        ScaffoldMessenger.of(context).showSnackBar(
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
                                           SnackBar(content: Text('Error: $e')),
                                         );
                                       } finally {
