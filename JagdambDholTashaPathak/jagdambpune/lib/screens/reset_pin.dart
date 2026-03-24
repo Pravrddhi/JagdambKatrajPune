@@ -4,87 +4,95 @@ import 'package:http/http.dart' as http;
 import '../config/api_endpoints.dart';
 import '../components/get_device_id.dart';
 import '../widgets/setpin_dialog.dart';
-import '../widgets/button.dart';
+import '../widgets/common_button.dart';
 import '../widgets/input_box.dart';
 import '../theme/app_colors.dart';
 import 'package:flutter/services.dart';
 
-
 class ResetPinScreen extends StatefulWidget {
-  const ResetPinScreen({Key? key}) : super(key: key);
+  const ResetPinScreen({super.key});
 
   @override
   State<ResetPinScreen> createState() => _ResetPinScreenState();
 }
 
 class _ResetPinScreenState extends State<ResetPinScreen> {
-  final TextEditingController phoneController = TextEditingController();
-  bool isLoading = false;
-  String errorMessage = '';
-  bool _isPhoneNumberValid = false;
+  final TextEditingController phoneController = TextEditingController(); // Controller for phone input
+  bool isLoading = false; // Loading indicator
+  String errorMessage = ''; // Error message display string
+  bool _isPhoneNumberValid = false; // Tracks if phone input length is valid
 
   @override
   void initState() {
     super.initState();
-    phoneController.addListener(_validatePhoneNumber);
+    phoneController.addListener(_validatePhoneNumber); // Validate phone length on input changes
   }
 
   @override
   void dispose() {
+    // Remove listener and dispose controller to prevent memory leaks
     phoneController.removeListener(_validatePhoneNumber);
     phoneController.dispose();
     super.dispose();
   }
 
+  /// Validates whether phone number has 10 digits and updates UI state
   void _validatePhoneNumber() {
     final isValid = phoneController.text.length == 10;
     if (isValid != _isPhoneNumberValid) {
       setState(() {
         _isPhoneNumberValid = isValid;
-        if (isValid) errorMessage = '';
+        if (isValid) errorMessage = ''; // Clear error if input now valid
       });
     }
   }
 
+  /// Calls API to verify device and phone number combination, then proceeds
   Future<void> verifyAndProceed() async {
     final phoneNumber = phoneController.text.trim();
+
+    // Basic validation check before API call
     if (phoneNumber.isEmpty || phoneNumber.length < 10) {
       setState(() => errorMessage = "Enter valid phone number");
       return;
     }
 
     setState(() {
-      isLoading = true;
-      errorMessage = '';
+      isLoading = true;  // Show spinner during API call
+      errorMessage = ''; // Clear previous error
     });
 
-    final deviceId = await getDeviceId();
+    final deviceId = await getDeviceId(); // Obtain unique device id
+    print(deviceId);
 
     try {
       final response = await http.post(
         Uri.parse(ApiEndpoints.verifyDevicePhone),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          "device_id": deviceId,
-          "phone_number": phoneNumber,
-        }),
+        body: jsonEncode({"device_id": deviceId, "phone_number": phoneNumber}),
       );
 
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
+        // Verification successful, proceed to set PIN dialog
+        print(data);
         Navigator.pop(context); // Close current screen
         showSetPinDialog(context, phoneNumber, true);
       } else {
+        // API returned error, show message if present
+        print(data['message']);
         setState(() {
           errorMessage = data['message'] ?? "Device and phone do not match";
         });
       }
     } catch (e) {
+      // Network or parsing error
       setState(() {
         errorMessage = "Network error. Please try again.";
       });
     } finally {
+      // Stop loading spinner whether success or failure
       setState(() => isLoading = false);
     }
   }
@@ -101,31 +109,33 @@ class _ResetPinScreenState extends State<ResetPinScreen> {
             children: [
               const Text(
                 "Enter your registered phone number to reset your PIN.",
-              style: TextStyle(color: AppColors.accentYellow),
-            ),
-            const SizedBox(height: 20),
+                style: TextStyle(color: AppColors.accentYellow),
+              ),
+              const SizedBox(height: 20),
 
-            PremiumInputBox(
-              controller: phoneController,
-              label: "Phone Number",
-              keyboardType: TextInputType.phone,
-              maxLength: 10,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              errorText: errorMessage.isEmpty ? null : errorMessage,
-            ),
+              // Phone number input box
+              PremiumInputBox(
+                controller: phoneController,
+                label: "Phone Number",
+                keyboardType: TextInputType.phone,
+                maxLength: 10,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                errorText: errorMessage.isNotEmpty ? errorMessage : null,
+              ),
 
-            const SizedBox(height: 20),
+              const SizedBox(height: 20),
 
-            PremiumButton(
-              text: "Verify",
-              isEnabled: _isPhoneNumberValid && !isLoading,
-              isLoading: isLoading,
-              backgroundColor: AppColors.primaryMaroon, // ✅ updated
-              onPressed: _isPhoneNumberValid ? verifyAndProceed : null,
-            ),
-          ],
+              // Verify button with loading state and disable if phone invalid
+              PremiumButton(
+                text: "Verify",
+                isEnabled: _isPhoneNumberValid && !isLoading,
+                isLoading: isLoading,
+                backgroundColor: AppColors.accentYellow,
+                onPressed: _isPhoneNumberValid ? verifyAndProceed : null,
+              ),
+            ],
+          ),
         ),
-      ),
       ),
     );
   }

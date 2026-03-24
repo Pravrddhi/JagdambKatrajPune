@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../theme/app_colors.dart';
 import '../widgets/input_box.dart';
-import '../widgets/button.dart';
+import 'common_button.dart';
 import '../config/api_endpoints.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -14,8 +14,8 @@ Future<String> showSetPinDialog(
   bool isReset,
 ) async {
   TextEditingController pinController = TextEditingController();
-  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
-  final storage = const FlutterSecureStorage();
+  final GlobalKey<FormState> formKey = GlobalKey<FormState>();
+  const storage = FlutterSecureStorage();
   String? errorText;
   bool isLoading = false;
 
@@ -26,7 +26,7 @@ Future<String> showSetPinDialog(
           return StatefulBuilder(
             builder: (BuildContext context, StateSetter setState) {
               Future<void> submitPin() async {
-                if (!_formKey.currentState!.validate()) return;
+                if (!formKey.currentState!.validate()) return;
 
                 setState(() => isLoading = true);
 
@@ -43,16 +43,26 @@ Future<String> showSetPinDialog(
 
                 if (response.statusCode == 200) {
                   final data = jsonDecode(response.body);
+                  print(data);
                   await storage.write(key: 'pin', value: pinController.text);
                   if (isReset) {
                     // If it's a reset flow, navigate to the login screen
                     Navigator.of(dialogContext).pop();
                     Navigator.of(dialogContext).pushReplacementNamed('/login');
                   } else {
+                    await storage.write(
+                      key: 'access_token',
+                      value: data['access_token'],
+                    );
+                    await storage.write(
+                      key: 'refresh_token',
+                      value: data['refresh_token'],
+                    );
                     Navigator.of(dialogContext).pop(data['access_token']);
                   }
                 } else {
                   final errorData = jsonDecode(response.body);
+                  print(errorData);
                   setState(() {
                     errorText = errorData['message'] ?? 'Something went wrong';
                   });
@@ -60,27 +70,34 @@ Future<String> showSetPinDialog(
               }
 
               return AlertDialog(
-                backgroundColor: AppColors.primaryMaroon,
+                backgroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
                 ),
-                title: Text(isReset ? 'Reset PIN' : 'Enter PIN'),
+                title: Text(
+                  isReset ? 'Reset PIN' : 'Set PIN',
+                  style: const TextStyle(color: AppColors.primaryMaroon),
+                ),
                 content: Form(
-                  key: _formKey,
+                  key: formKey,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       PremiumInputBox(
                         controller: pinController,
                         label: "PIN (6 digits)",
+                        useLightStyle: true,
+                        isPin: true,
                         keyboardType: TextInputType.number,
                         maxLength: 6,
+                        isPassword: true,
                         inputFormatters: [
                           FilteringTextInputFormatter.digitsOnly,
                         ],
                         validator: (value) {
-                          if (value == null || value.length != 6)
+                          if (value == null || value.length != 6) {
                             return 'Enter a valid 6-digit PIN';
+                          }
                           return null;
                         },
                       ),
@@ -89,7 +106,9 @@ Future<String> showSetPinDialog(
                           padding: const EdgeInsets.only(top: 8.0),
                           child: Text(
                             errorText!,
-                            style: const TextStyle(color: Colors.red),
+                            style: const TextStyle(
+                              color: AppColors.primaryMaroon,
+                            ),
                           ),
                         ),
                     ],

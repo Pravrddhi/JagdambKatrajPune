@@ -10,61 +10,79 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMixin {
-  late final AnimationController _logoController;
-  late final AnimationController _scaleController;
-  late final Animation<double> _dropAnimation;
-  late final Animation<double> _scaleAnimation;
+class _SplashScreenState extends State<SplashScreen>
+    with TickerProviderStateMixin {
+  late final AnimationController
+  _logoController; // Controls the drop animation of logo
+  late final AnimationController
+  _scaleController; // Controls the scaling bounce animation
+  late final Animation<double>
+  _dropAnimation; // Animation for logo drop with bounce
+  late final Animation<double>
+  _scaleAnimation; // Animation for scaling (bounce)
 
   @override
   void initState() {
     super.initState();
 
-    // Smooth drop ~4s
+    // Initialize drop animation controller for smooth drop (~4 seconds)
     _logoController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 4000),
     );
 
-    // Bounce/scale ~2.5s
+    // Initialize scale animation controller for bounce effect (~2.5 seconds)
     _scaleController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2500),
     );
 
-    // Drop from top with bounce
+    // Drop animation: logo moves vertically from above screen to center with bounce effect
     _dropAnimation = Tween<double>(begin: -1.0, end: 0.0).animate(
       CurvedAnimation(parent: _logoController, curve: Curves.bounceOut),
     );
 
-    // Scale bounce
+    // Scale animation: bounce scaling from 0.8x to 1.2x to normal size
     _scaleAnimation = TweenSequence([
       TweenSequenceItem(
-          tween: Tween<double>(begin: 0.8, end: 1.2).chain(CurveTween(curve: Curves.easeOut)), weight: 50),
+        tween: Tween<double>(
+          begin: 0.8,
+          end: 1.2,
+        ).chain(CurveTween(curve: Curves.easeOut)),
+        weight: 50,
+      ),
       TweenSequenceItem(
-          tween: Tween<double>(begin: 1.2, end: 1.0).chain(CurveTween(curve: Curves.easeInOut)), weight: 50),
+        tween: Tween<double>(
+          begin: 1.2,
+          end: 1.0,
+        ).chain(CurveTween(curve: Curves.easeInOut)),
+        weight: 50,
+      ),
     ]).animate(_scaleController);
 
-    // Start sequential animations
+    // Play drop animation first, then scale animation sequentially
     _logoController.forward().then((_) {
       _scaleController.forward();
     });
 
-    // Navigate to login after 6.5s
+    // After animations complete (6.5s), navigate to LoginScreen with fade transition
     Timer(const Duration(milliseconds: 6500), () {
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(PageRouteBuilder(
-        pageBuilder: (_, __, ___) => const LoginScreen(),
-        transitionDuration: const Duration(milliseconds: 1200),
-        transitionsBuilder: (_, animation, __, child) {
-          return FadeTransition(opacity: animation, child: child);
-        },
-      ));
+      Navigator.of(context).pushReplacement(
+        PageRouteBuilder(
+          pageBuilder: (_, __, ___) => const LoginScreen(),
+          transitionDuration: const Duration(milliseconds: 1200),
+          transitionsBuilder: (_, animation, __, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
+        ),
+      );
     });
   }
 
   @override
   void dispose() {
+    // Dispose animation controllers to release resources
     _logoController.dispose();
     _scaleController.dispose();
     super.dispose();
@@ -75,11 +93,12 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     final screenHeight = MediaQuery.of(context).size.height;
 
     return Scaffold(
-      backgroundColor: AppColors.primaryMaroon, // 🔹 Maroon background
+      backgroundColor: AppColors.primaryMaroon, // Maroon background color
       body: AnimatedBuilder(
         animation: Listenable.merge([_dropAnimation, _scaleAnimation]),
         builder: (context, child) {
           final scale = _scaleAnimation.value;
+          // Transform widget for vertical drop and scaling bounce animations
           return Transform.translate(
             offset: Offset(0, _dropAnimation.value * screenHeight * 0.55),
             child: Transform.scale(
@@ -88,29 +107,29 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                 child: Stack(
                   alignment: Alignment.center,
                   children: [
-                    // 🔹 Warm soft glow behind logo
+                    // Soft warm glow behind logo for subtle effect
                     Container(
                       width: MediaQuery.of(context).size.width * 0.55,
                       height: MediaQuery.of(context).size.width * 0.55,
                       decoration: BoxDecoration(
+                        shape: BoxShape.circle,
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.orange.withOpacity(0.5),
+                            color: Colors.orange.withAlpha(128), // 0.5 * 255
                             blurRadius: 60 * scale,
                             spreadRadius: 8 * scale,
                           ),
                         ],
-                        shape: BoxShape.circle,
                       ),
                     ),
-                    // Logo image
-                    child!,
+                    child!, // The logo image passed into AnimatedBuilder
                   ],
                 ),
               ),
             ),
           );
         },
+        // Logo image passed once, reused in animation builder to improve performance
         child: Image.asset(
           'assets/logos/splash_logo.png',
           width: MediaQuery.of(context).size.width * 0.55,

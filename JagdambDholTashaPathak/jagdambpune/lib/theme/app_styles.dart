@@ -8,11 +8,11 @@ class AppStyles {
         labelStyle: const TextStyle(color: AppColors.textLight),
         hintStyle: const TextStyle(color: AppColors.textLight54),
         enabledBorder: OutlineInputBorder(
-          borderSide: BorderSide(color: AppColors.accentYellow),
+          borderSide: const BorderSide(color: AppColors.accentYellow),
           borderRadius: BorderRadius.circular(10),
         ),
         focusedBorder: OutlineInputBorder(
-          borderSide: BorderSide(color: AppColors.accentYellow, width: 2),
+          borderSide: const BorderSide(color: AppColors.accentYellow, width: 2),
           borderRadius: BorderRadius.circular(10),
         ),
       );

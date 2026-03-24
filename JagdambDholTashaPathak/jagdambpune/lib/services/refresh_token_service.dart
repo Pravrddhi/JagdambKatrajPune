@@ -1,0 +1,52 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../config/api_endpoints.dart';
+
+class AuthService {
+  static const _storage = FlutterSecureStorage();
+
+  /// Call Django refresh token API with the stored refresh token.
+  /// On success, saves new access token to secure storage.
+  static Future<bool> refreshAccessToken() async {
+    final refreshToken = await _storage.read(key: ApiEndpoints.refreshTokenKey);
+
+    if (refreshToken == null || refreshToken.isEmpty) {
+      return false;
+    }
+
+    try {
+      final uri = Uri.parse(ApiEndpoints.getRefreshToken);
+      final requestBody = jsonEncode({'refresh': refreshToken});
+
+      final response = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: requestBody,
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final newAccessToken = data['access'];
+        if (newAccessToken != null && newAccessToken is String) {
+          await _storage.write(
+            key: ApiEndpoints.accessTokenKey,
+            value: newAccessToken,
+          );
+          return true;
+        }
+        return false;
+      } else {
+        // Log specific error codes for debugging
+        if (response.statusCode == 401) {
+          // Refresh token is invalid/expired
+          await _storage.delete(key: ApiEndpoints.refreshTokenKey);
+          await _storage.delete(key: ApiEndpoints.accessTokenKey);
+        }
+        return false;
+      }
+    } catch (e) {
+      return false;
+    }
+  }
+}
