@@ -7,7 +7,7 @@ class ApiEndpoints {
   // Base URL for API requests. Change this according to environment.
   // Uncomment the production URL when deploying.
   // static const String baseUrl = 'https://dev-api.jagdamb.co.in/api';
-  static const String baseUrl = 'http://192.168.1.32/api';
+  static const String baseUrl = 'http://10.0.2.2/api';
   static const String pathak_id = "1";
 
   // -------------------

@@ -254,27 +254,27 @@ class _LoginScreenState extends State<LoginScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      GestureDetector(
-                        onTap: () {
-                          Navigator.pushNamed(context, '/resetPin');
-                        },
-                        child: Text(
-                          "Reset PIN",
-                          style: TextStyle(
-                            color: AppColors.accentYellow,
-                            decoration: TextDecoration.underline,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      if (flags?.showRegistration ?? false)...[
+                      if (flags?.showRegistration ?? false) ...[
                         GestureDetector(
                           onTap: () {
                             Navigator.pushNamed(context, '/register');
                           },
                           child: Text(
                             "Registration",
+                            style: TextStyle(
+                              color: AppColors.accentYellow,
+                              decoration: TextDecoration.underline,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ] else ...[
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.pushNamed(context, '/resetPin');
+                          },
+                          child: Text(
+                            "Reset PIN",
                             style: TextStyle(
                               color: AppColors.accentYellow,
                               decoration: TextDecoration.underline,
