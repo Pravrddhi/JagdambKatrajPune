@@ -38,7 +38,7 @@ class PremiumDropDown extends StatelessWidget {
 
           // DropdownButtonFormField enables form integration and validation
           child: DropdownButtonFormField<String>(
-            value: value,
+            initialValue: value,
             items: options
                 .map(
                   (option) => DropdownMenuItem<String>(

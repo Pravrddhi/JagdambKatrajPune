@@ -10,7 +10,6 @@ class ApiEndpoints {
   static const String baseUrl = 'http://192.168.1.32/api';
   static const String pathak_id = "1";
 
-
   // -------------------
   // Authentication Endpoints
   // -------------------
@@ -31,7 +30,11 @@ class ApiEndpoints {
   static const String checkDeviceRegistration = '$baseUrl/auth/device-check/';
 
   /// Verify device and phone number association
-  static const String verifyDevicePhone = '$baseUrl/auth/device/verify-phone-device/';
+  static const String verifyDevicePhone =
+      '$baseUrl/auth/device/verify-phone-device/';
+
+  /// Refresh access token
+  static const String getRefreshToken = '$baseUrl/auth/token/refresh/';
 
   // -------------------
   // Data Fetching Endpoints
@@ -44,7 +47,8 @@ class ApiEndpoints {
   static const String getEmergencyContacts = '$baseUrl/emergency-contacts/';
 
   /// Update FCM token for push notifications
-  static const String updateFCMToken = '$baseUrl/notifications/update-fcm-token/';
+  static const String updateFCMToken =
+      '$baseUrl/notifications/update-fcm-token/';
 
   /// Create a new event
   static const String createEvent = '$baseUrl/events/create/';
@@ -78,20 +82,22 @@ class ApiEndpoints {
     if (queryParams == null || queryParams.isEmpty) {
       return uri;
     }
-    return uri.replace(queryParameters: queryParams.map(
-      (key, value) => MapEntry(key, value.toString()),
-    ));
+    return uri.replace(
+      queryParameters: queryParams.map(
+        (key, value) => MapEntry(key, value.toString()),
+      ),
+    );
   }
 
   /// Common headers for JSON requests without authorization
   static Map<String, String> jsonHeaders() => {
-        HttpHeaders.contentTypeHeader: 'application/json',
-        HttpHeaders.acceptHeader: 'application/json',
-      };
+    HttpHeaders.contentTypeHeader: 'application/json',
+    HttpHeaders.acceptHeader: 'application/json',
+  };
 
   /// Headers with bearer token for authorized requests
   static Map<String, String> authorizedHeaders(String token) => {
-        ...jsonHeaders(),
-        HttpHeaders.authorizationHeader: 'Bearer $token',
-      };
+    ...jsonHeaders(),
+    HttpHeaders.authorizationHeader: 'Bearer $token',
+  };
 }
