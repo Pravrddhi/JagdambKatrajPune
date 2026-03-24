@@ -10,11 +10,16 @@ class SplashScreen extends StatefulWidget {
   State<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMixin {
-  late final AnimationController _logoController;   // Controls the drop animation of logo
-  late final AnimationController _scaleController;  // Controls the scaling bounce animation
-  late final Animation<double> _dropAnimation;      // Animation for logo drop with bounce
-  late final Animation<double> _scaleAnimation;     // Animation for scaling (bounce)
+class _SplashScreenState extends State<SplashScreen>
+    with TickerProviderStateMixin {
+  late final AnimationController
+  _logoController; // Controls the drop animation of logo
+  late final AnimationController
+  _scaleController; // Controls the scaling bounce animation
+  late final Animation<double>
+  _dropAnimation; // Animation for logo drop with bounce
+  late final Animation<double>
+  _scaleAnimation; // Animation for scaling (bounce)
 
   @override
   void initState() {
@@ -40,11 +45,17 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     // Scale animation: bounce scaling from 0.8x to 1.2x to normal size
     _scaleAnimation = TweenSequence([
       TweenSequenceItem(
-        tween: Tween<double>(begin: 0.8, end: 1.2).chain(CurveTween(curve: Curves.easeOut)),
+        tween: Tween<double>(
+          begin: 0.8,
+          end: 1.2,
+        ).chain(CurveTween(curve: Curves.easeOut)),
         weight: 50,
       ),
       TweenSequenceItem(
-        tween: Tween<double>(begin: 1.2, end: 1.0).chain(CurveTween(curve: Curves.easeInOut)),
+        tween: Tween<double>(
+          begin: 1.2,
+          end: 1.0,
+        ).chain(CurveTween(curve: Curves.easeInOut)),
         weight: 50,
       ),
     ]).animate(_scaleController);
@@ -57,13 +68,15 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     // After animations complete (6.5s), navigate to LoginScreen with fade transition
     Timer(const Duration(milliseconds: 6500), () {
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(PageRouteBuilder(
-        pageBuilder: (_, __, ___) => const LoginScreen(),
-        transitionDuration: const Duration(milliseconds: 1200),
-        transitionsBuilder: (_, animation, __, child) {
-          return FadeTransition(opacity: animation, child: child);
-        },
-      ));
+      Navigator.of(context).pushReplacement(
+        PageRouteBuilder(
+          pageBuilder: (_, __, ___) => const LoginScreen(),
+          transitionDuration: const Duration(milliseconds: 1200),
+          transitionsBuilder: (_, animation, __, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
+        ),
+      );
     });
   }
 
@@ -102,14 +115,14 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
                         shape: BoxShape.circle,
                         boxShadow: [
                           BoxShadow(
-                            color: Colors.orange.withOpacity(0.5),
+                            color: Colors.orange.withAlpha(128), // 0.5 * 255
                             blurRadius: 60 * scale,
                             spreadRadius: 8 * scale,
                           ),
                         ],
                       ),
                     ),
-                    child!,  // The logo image passed into AnimatedBuilder
+                    child!, // The logo image passed into AnimatedBuilder
                   ],
                 ),
               ),

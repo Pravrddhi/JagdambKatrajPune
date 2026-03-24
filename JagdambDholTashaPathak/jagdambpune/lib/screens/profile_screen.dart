@@ -71,7 +71,7 @@ class _Avatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Hero(
+    return const Hero(
       tag: 'profile-avatar',
       child: CircleAvatar(
         radius: 50,

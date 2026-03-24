@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "254873738733",
-    "project_id": "dholtashapathak-3653b",
-    "storage_bucket": "dholtashapathak-3653b.firebasestorage.app"
+    "project_number": "486265337828",
+    "project_id": "dhol-tasha-pathak",
+    "storage_bucket": "dhol-tasha-pathak.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:254873738733:android:0b85150f3a90cb4d1d9be4",
+        "mobilesdk_app_id": "1:486265337828:android:21e9a451967964bfb2f9f1",
         "android_client_info": {
           "package_name": "com.jagdambpune.app"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyAMwjX08HeAWsk4FzGPFXpOXifU9mPvK6k"
+          "current_key": "AIzaSyB9qa64T6MtrcuCth1yatHqrNeh9LXImNk"
         }
       ],
       "services": {

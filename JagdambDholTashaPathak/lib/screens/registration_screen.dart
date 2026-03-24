@@ -162,6 +162,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         "sex": selectedSex,
         "instrument": selectedInstrument,
         "device_id": await _getDeviceId(),
+        "pathak_id": ApiEndpoints.pathak_id
       }),
     );
 

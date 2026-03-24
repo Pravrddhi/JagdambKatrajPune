@@ -4,8 +4,17 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../config/api_endpoints.dart';
 import 'refresh_token_service.dart';
 
+class UserInactiveException implements Exception {
+  final String message;
+
+  UserInactiveException([this.message = 'User is inactive']);
+
+  @override
+  String toString() => message;
+}
+
 class UserService {
-  static final _storage = const FlutterSecureStorage();
+  static const _storage = FlutterSecureStorage();
 
   /// Fetch user details from API using the provided [token].
   /// If token expired, automatically refreshes then retries.
@@ -24,13 +33,19 @@ class UserService {
     } else if (response.statusCode == 401) {
       final errorData = jsonDecode(response.body);
 
+      if (errorData['code'] == 'user_inactive') {
+        throw UserInactiveException(
+          errorData['detail']?.toString() ?? 'User is inactive',
+        );
+      }
+
       if (errorData['code'] == 'token_not_valid' &&
           errorData['messages'] != null &&
           errorData['messages'][0]?['message']
-              .toString()
-              .toLowerCase()
-              .contains('expired') ==
-          true) {
+                  .toString()
+                  .toLowerCase()
+                  .contains('expired') ==
+              true) {
         // Token expired, try to refresh
         final refreshed = await AuthService.refreshAccessToken();
         if (refreshed) {
@@ -48,7 +63,8 @@ class UserService {
       throw Exception('User not found.');
     } else {
       throw Exception(
-          'Failed to load user details (Code: ${response.statusCode})');
+        'Failed to load user details (Code: ${response.statusCode})',
+      );
     }
   }
 

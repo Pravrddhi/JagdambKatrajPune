@@ -6,9 +6,17 @@ import 'dart:io';
 class ApiEndpoints {
   // Base URL for API requests. Change this according to environment.
   // Uncomment the production URL when deploying.
-  // static const String baseUrl = 'https://dev-api.jagdamb.co.in/api';
-  static const String baseUrl = 'http://192.168.1.32/api';
-  static const String pathak_id = "1";
+  static const String baseUrl = 'https://myriam-confirmatory-darlena.ngrok-free.dev/api';
+  // static const String baseUrl = 'http://10.0.2.2/api';
+  static const String pathakId = "1";
+
+
+  // -------------------
+  // Storage Keys
+  // -------------------
+  static const String accessTokenKey = 'access_token';
+  static const String refreshTokenKey = 'refresh_token';
+  static const String pinKey = 'pin';
 
   // -------------------
   // Authentication Endpoints
@@ -59,6 +67,16 @@ class ApiEndpoints {
   /// Fetch feature flags for the client app
   static const String featureFlags = '$baseUrl/feature-flags/';
 
+  /// Get users (admin only)
+  static const String fetchAllUsers = '$baseUrl/users/';
+
+  /// Base endpoint for a specific user by id (api/user/<int:id>/)
+  static const String userByIdBase = '$baseUrl/user';
+
+  /// Base endpoint to activate a user (api/notifications/activate-user/<int:user_id>/)
+  static const String activateUserBase =
+      '$baseUrl/notifications/activate-user';
+
   /// Endpoint to refresh access token using refresh token
   static const String refreshToken = '$baseUrl/auth/token/refresh/';
 
@@ -72,9 +90,6 @@ class ApiEndpoints {
   // -------------------
   // Miscellaneous Constants
   // -------------------
-
-  /// Current pathak id for fetching related data
-  static const String pathakId = "1";
 
   /// Helper method to build Uri with optional query parameters
   static Uri buildUri(String endpoint, [Map<String, dynamic>? queryParams]) {
@@ -100,4 +115,10 @@ class ApiEndpoints {
     ...jsonHeaders(),
     HttpHeaders.authorizationHeader: 'Bearer $token',
   };
+
+  /// Build endpoint for specific user details using id
+  static String getUserById(int id) => '$userByIdBase/$id/';
+
+  /// Build endpoint to activate user by id
+  static String getActivateUser(int id) => '$activateUserBase/$id/';
 }

@@ -9,14 +9,23 @@ import '../widgets/input_box.dart'; // import your custom input box
 import '../widgets/drop_down.dart';
 
 class EmergencyContactDialog {
-  static Future<void> show(BuildContext context,String token) async {
+  static Future<void> show(BuildContext context, String token) async {
     final formKey = GlobalKey<FormState>();
     TextEditingController nameController = TextEditingController();
     TextEditingController phoneController = TextEditingController();
     String? selectedBloodGroup;
     bool isLoading = false;
 
-    List<String> bloodGroups = ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"];
+    List<String> bloodGroups = [
+      "A+",
+      "A-",
+      "B+",
+      "B-",
+      "O+",
+      "O-",
+      "AB+",
+      "AB-",
+    ];
 
     await showDialog(
       context: context,
@@ -25,8 +34,11 @@ class EmergencyContactDialog {
         return StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
-              backgroundColor: AppColors.primaryMaroon,
-              title: Text("Emergency Details", style: TextStyle(color: AppColors.accentYellow)),
+              backgroundColor: Colors.white,
+              title: const Text(
+                "Emergency Details",
+                style: TextStyle(color: AppColors.primaryMaroon),
+              ),
               content: Form(
                 key: formKey,
                 child: SingleChildScrollView(
@@ -37,33 +49,45 @@ class EmergencyContactDialog {
                       PremiumInputBox(
                         controller: nameController,
                         label: "Emergency Name",
+                        useLightStyle: true,
                         inputFormatters: [
-                            FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z\s]')),
-                          ],
+                          FilteringTextInputFormatter.allow(
+                            RegExp(r'[a-zA-Z\s]'),
+                          ),
+                        ],
                         validator: (value) {
-                          if (value == null || value.isEmpty) return "Emergency Name is required.";
+                          if (value == null || value.isEmpty)
+                            return "Emergency Name is required.";
                           return null;
                         },
                       ),
-                      SizedBox(height: 10),
+                      const SizedBox(height: 10),
                       // Custom input box for phone
                       PremiumInputBox(
                         controller: phoneController,
                         label: "Emergency Phone",
+                        useLightStyle: true,
                         keyboardType: TextInputType.phone,
                         maxLength: 10,
-                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                        inputFormatters: [
+                          FilteringTextInputFormatter.digitsOnly,
+                        ],
                         validator: (value) {
-                          if (value == null || value.isEmpty) return "Emergency Phone is required.";
+                          if (value == null || value.isEmpty)
+                            return "Emergency Phone is required.";
                           return null;
                         },
                       ),
-                      SizedBox(height: 10),
+                      const SizedBox(height: 10),
                       // Dropdown for blood group
                       PremiumDropDown(
                         value: selectedBloodGroup,
                         label: "Select Blood Group",
                         options: bloodGroups,
+                        backgroundColor: Colors.white,
+                        labelColor: AppColors.primaryMaroon,
+                        textColor: AppColors.primaryMaroon,
+                        dropdownMenuColor: Colors.white,
                         onChanged: (value) {
                           setState(() {
                             selectedBloodGroup = value;
@@ -101,11 +125,21 @@ class EmergencyContactDialog {
                       if (success) {
                         Navigator.pop(context);
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text("Emergency contact updated successfully",selectionColor: AppColors.accentYellow,)),
+                          const SnackBar(
+                            content: Text(
+                              "Emergency contact updated successfully",
+                              selectionColor: AppColors.accentYellow,
+                            ),
+                          ),
                         );
                       } else {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text("Failed to update emergency contact",selectionColor: AppColors.accentYellow,)),
+                          const SnackBar(
+                            content: Text(
+                              "Failed to update emergency contact",
+                              selectionColor: AppColors.accentYellow,
+                            ),
+                          ),
                         );
                       }
                     }
@@ -121,7 +155,11 @@ class EmergencyContactDialog {
 
   // API call with token
   static Future<bool> _submitEmergencyContact(
-      String name, String phone, String bloodGroup, String token) async {
+    String name,
+    String phone,
+    String bloodGroup,
+    String token,
+  ) async {
     final url = Uri.parse(ApiEndpoints.getEmergencyContacts);
 
     try {
