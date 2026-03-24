@@ -12,14 +12,19 @@ class OtpDialog extends StatefulWidget {
 }
 
 class _OtpDialogState extends State<OtpDialog> {
-  final List<TextEditingController> _otpControllers =
-      List.generate(6, (_) => TextEditingController());
+  final List<TextEditingController> _otpControllers = List.generate(
+    6,
+    (_) => TextEditingController(),
+  );
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      backgroundColor: AppColors.primaryMaroon,
-      title: const Text("Enter OTP", style: TextStyle(color: AppColors.textLight)),
+      backgroundColor: Colors.white,
+      title: const Text(
+        "Enter OTP",
+        style: TextStyle(color: AppColors.primaryMaroon),
+      ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -33,16 +38,22 @@ class _OtpDialogState extends State<OtpDialog> {
                   keyboardType: TextInputType.number,
                   textAlign: TextAlign.center,
                   maxLength: 1,
-                  style: const TextStyle(color: AppColors.textLight, fontSize: 18),
+                  style: const TextStyle(
+                    color: AppColors.primaryMaroon,
+                    fontSize: 18,
+                  ),
                   decoration: const InputDecoration(
                     hintText: '*',
-                    hintStyle: TextStyle(color: Colors.white38, fontSize: 18),
+                    hintStyle: TextStyle(
+                      color: AppColors.disabled,
+                      fontSize: 18,
+                    ),
                     counterText: "",
                     enabledBorder: UnderlineInputBorder(
-                      borderSide: BorderSide(color: Colors.white70),
+                      borderSide: BorderSide(color: AppColors.primaryMaroon),
                     ),
                     focusedBorder: UnderlineInputBorder(
-                      borderSide: BorderSide(color: AppColors.accentYellow),
+                      borderSide: BorderSide(color: AppColors.primaryMaroon),
                     ),
                   ),
                   onChanged: (value) {
@@ -67,14 +78,15 @@ class _OtpDialogState extends State<OtpDialog> {
                 widget.onSubmit(otp);
               } else {
                 ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Please enter 6-digit OTP',
-                    style: const TextStyle(color: AppColors.errorRed),
+                  const SnackBar(
+                    content: Text(
+                      'Please enter 6-digit OTP',
+                      style: TextStyle(color: AppColors.errorRed),
+                    ),
+                    backgroundColor:
+                        Colors.black87, // optional for better contrast
                   ),
-                  backgroundColor: Colors.black87, // optional for better contrast
-                ),
-              );
+                );
               }
             },
           ),

@@ -1,16 +1,19 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:local_auth/local_auth.dart';
 import '../theme/app_colors.dart';
 import '../widgets/input_box.dart';
-import '../widgets/button.dart';
-import '../widgets/dropDown.dart';
+import '../widgets/common_button.dart';
+import '../widgets/drop_down.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:android_id/android_id.dart';
 import 'home_screen.dart';
 import '../config/api_endpoints.dart';
 import 'package:flutter/services.dart';
+import '../services/fcm_service.dart';
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
@@ -20,23 +23,52 @@ class RegistrationScreen extends StatefulWidget {
 }
 
 class _RegistrationScreenState extends State<RegistrationScreen> {
+  final LocalAuthentication _auth = LocalAuthentication();
+
+  // Controllers for input fields
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _firstNameController = TextEditingController();
   final TextEditingController _lastNameController = TextEditingController();
+
+  // Focus node to detect phone input losing focus
   final FocusNode _phoneFocusNode = FocusNode();
-  final errors = <String, String?>{};
+
+  // Error tracking
+  Map<String, String?> errors = {};
+  Map<String, String?> _fieldErrors = {};
   String? _errorMessage;
+
+  // Dropdown selections
   String? selectedSex;
   String? selectedInstrument;
+
+  // Loading states
   bool _isCheckingPhone = false;
   bool _isFormValid = false;
+  bool isLoading = false;
+
+  // Cache for instruments list
+  List<String> _instruments = [];
+
+  // Debounce timer for phone input validation to reduce API calls
+  Timer? _debounceTimer;
 
   @override
   void initState() {
     super.initState();
+
+    // Add listeners for real-time validation
     _firstNameController.addListener(_validateForm);
     _lastNameController.addListener(_validateForm);
     _phoneController.addListener(_validateForm);
+
+    // Load instrument options from API
+    _loadInstruments();
+
+    // Debounce phone input changes and on focus lost, check phone existence
+    _phoneController.addListener(() {
+      _onPhoneChanged(_phoneController.text.trim());
+    });
     _phoneFocusNode.addListener(() {
       if (!_phoneFocusNode.hasFocus) {
         _checkPhoneNumberExists(_phoneController.text.trim());
@@ -44,13 +76,58 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     });
   }
 
+  /// Called on phone input change with debounce to minimize API calls
+  void _onPhoneChanged(String value) {
+    if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 500), () {
+      if (value.length == 10) {
+        _checkPhoneNumberExists(value);
+      }
+    });
+  }
+
+  /// Fetch instruments from server for dropdown based on pathak_id
+  Future<List<String>> _fetchInstruments(int pathakId) async {
+    final url = Uri.parse("${ApiEndpoints.getInstruments}/$pathakId");
+    try {
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+
+        if (data["status"] == true) {
+          List<dynamic> instruments = data["instruments"];
+          return instruments.map((e) => e.toString()).toList();
+        } else {
+          // Server rejection
+          return [];
+        }
+      } else {
+        return [];
+      }
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /// Loads instruments and updates UI state with results
+  void _loadInstruments() async {
+    int pathakId = int.tryParse(ApiEndpoints.pathakId.toString()) ?? 0;
+    if (pathakId == 0) return;
+
+    List<String> instruments = await _fetchInstruments(pathakId);
+    setState(() {
+      _instruments = instruments;
+    });
+  }
+
+  /// Validate form fields and update form valid state
   void _validateForm() {
     final isValid =
-        _firstNameController.text.trim().isNotEmpty &&
-        _lastNameController.text.trim().isNotEmpty &&
-        _phoneController.text.length == 10 &&
-        selectedSex != null &&
-        selectedInstrument != null &&
+        validateFirstName(_firstNameController.text) &&
+        validateLastName(_lastNameController.text) &&
+        validatePhone(_phoneController.text) &&
+        validateSelection(selectedSex) &&
+        validateSelection(selectedInstrument) &&
         _fieldErrors.values.every((error) => error == null);
 
     setState(() {
@@ -58,19 +135,19 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     });
   }
 
-  Map<String, String?> _fieldErrors = {};
+  /// Validation helpers
+  bool validateFirstName(String firstName) => firstName.trim().isNotEmpty;
+  bool validateLastName(String lastName) => lastName.trim().isNotEmpty;
+  bool validatePhone(String phone) => RegExp(r'^\d{10}$').hasMatch(phone);
+  bool validateSelection(String? value) => value != null;
 
-  bool isLoading = false;
-  bool _isNumeric(String s) {
-    return RegExp(r'^\d+$').hasMatch(s);
-  }
-
+  /// Check via API if phone number already registered
   Future<void> _checkPhoneNumberExists(String phoneNumber) async {
-    if (phoneNumber.length != 10) return; // Basic validation
+    if (phoneNumber.length != 10) return;
 
     setState(() {
       _isCheckingPhone = true;
-      _fieldErrors['phone_number'] = null; // clear previous error
+      _fieldErrors['phone_number'] = null;
     });
 
     final response = await http.post(
@@ -94,8 +171,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     _validateForm();
   }
 
+  /// Get unique device ID for Android or iOS platforms
   Future<String> _getDeviceId() async {
-    final AndroidId androidIdPlugin = AndroidId();
+    const AndroidId androidIdPlugin = AndroidId();
     final deviceInfo = DeviceInfoPlugin();
 
     if (Platform.isAndroid) {
@@ -109,21 +187,24 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     }
   }
 
+  /// Submits registration data to backend API
   Future<void> _register() async {
-    if (_firstNameController.text.trim().isEmpty) {
+    // Manual field validations, setting error messages
+    errors.clear();
+
+    if (!validateFirstName(_firstNameController.text)) {
       errors['first_name'] = "First name is required.";
     }
-    if (_lastNameController.text.trim().isEmpty) {
+    if (!validateLastName(_lastNameController.text)) {
       errors['last_name'] = "Last name is required.";
     }
-    if (_phoneController.text.length != 10 ||
-        !_isNumeric(_phoneController.text)) {
+    if (!validatePhone(_phoneController.text)) {
       errors['phone_number'] = "Phone number must be 10 digits only.";
     }
-    if (selectedSex == null) {
+    if (!validateSelection(selectedSex)) {
       errors['sex'] = "Please select a gender.";
     }
-    if (selectedInstrument == null) {
+    if (!validateSelection(selectedInstrument)) {
       errors['instrument'] = "Please select an instrument.";
     }
 
@@ -135,23 +216,15 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       return;
     } else {
       setState(() {
-        _fieldErrors.clear(); // Clear previous field errors
-      });
-    }
-    @override
-    void initState() {
-      super.initState();
-      _phoneFocusNode.addListener(() {
-        if (!_phoneFocusNode.hasFocus) {
-          _checkPhoneNumberExists(_phoneController.text.trim());
-        }
+        _fieldErrors.clear();
       });
     }
 
     setState(() {
       isLoading = true;
-      _errorMessage = null; // Clear any previous error
+      _errorMessage = null;
     });
+
     final response = await http.post(
       Uri.parse(ApiEndpoints.register),
       headers: {"Content-Type": "application/json"},
@@ -159,10 +232,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         "phone_number": _phoneController.text,
         "first_name": _firstNameController.text,
         "last_name": _lastNameController.text,
-        "sex": selectedSex,
+        "gender": selectedSex,
         "instrument": selectedInstrument,
         "device_id": await _getDeviceId(),
-        "pathak_id": ApiEndpoints.pathak_id,
+        "pathak_id": ApiEndpoints.pathakId,
       }),
     );
 
@@ -171,6 +244,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     if (response.statusCode == 201) {
       final data = jsonDecode(response.body);
       final accessToken = data['access_token'];
+      // Ask for notification permission right after successful registration,
+      // before the set-PIN dialog appears on the next screen.
+      await FCMService().requestNotificationPermission();
+      await _promptBiometricAfterNotificationPermission();
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -189,11 +266,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
             data['message'] is Map) {
           final messageMap = data['message'] as Map<String, dynamic>;
 
-          // Get the first key's value
           final firstKey = messageMap.keys.first;
           final firstValue = messageMap[firstKey];
 
-          // If it's a list, take the first item
           if (firstValue is List && firstValue.isNotEmpty) {
             _errorMessage = firstValue.first;
           } else {
@@ -206,6 +281,37 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     }
   }
 
+  Future<void> _promptBiometricAfterNotificationPermission() async {
+    try {
+      final isSupported = await _auth.isDeviceSupported();
+      if (!isSupported) return;
+      final canCheck = await _auth.canCheckBiometrics;
+      if (!canCheck) return;
+      await _auth.authenticate(
+        localizedReason: 'Enable biometric for quick login',
+        options: const AuthenticationOptions(
+          stickyAuth: false,
+          biometricOnly: true,
+        ),
+      );
+    } catch (_) {
+      // Skip silently if biometric is unavailable or user cancels.
+    }
+  }
+
+  @override
+  void dispose() {
+    // Clean up controllers and focus node to prevent memory leaks
+    _phoneController.dispose();
+    _firstNameController.dispose();
+    _lastNameController.dispose();
+    _phoneFocusNode.dispose();
+
+    _debounceTimer?.cancel();
+
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -216,6 +322,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              // Back button top-left aligned
               Align(
                 alignment: Alignment.topLeft,
                 child: IconButton(
@@ -226,6 +333,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               ),
               const SizedBox(height: 8),
 
+              // Splash logo image
               Image.asset(
                 'assets/logos/splash_logo.png',
                 height: 120,
@@ -233,6 +341,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               ),
               const SizedBox(height: 32),
 
+              // First Name input
               PremiumInputBox(
                 controller: _firstNameController,
                 label: "First Name",
@@ -252,6 +361,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   ),
                 ),
               const SizedBox(height: 16),
+
+              // Last Name input
               PremiumInputBox(
                 controller: _lastNameController,
                 label: "Last Name",
@@ -271,6 +382,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   ),
                 ),
               const SizedBox(height: 16),
+
+              // Phone Number input
               PremiumInputBox(
                 controller: _phoneController,
                 label: "Phone Number",
@@ -279,7 +392,33 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 focusNode: _phoneFocusNode,
               ),
-              if (_fieldErrors['phone_number'] != null)
+              if (_isCheckingPhone)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8.0, left: 4.0),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            AppColors.accentYellow,
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        'Checking phone number...',
+                        style: TextStyle(
+                          color: AppColors.accentYellow,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else if (_fieldErrors['phone_number'] != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 4.0, left: 4.0),
                   child: Text(
@@ -291,10 +430,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   ),
                 ),
               const SizedBox(height: 16),
+
+              // Gender dropdown
               PremiumDropDown(
-                label: "Sex",
+                label: "Gender",
                 value: selectedSex,
-                options: ["Male", "Female", "Transgender"],
+                options: const ["Male", "Female", "Other"],
                 onChanged: (val) {
                   setState(() {
                     selectedSex = val;
@@ -314,10 +455,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   ),
                 ),
               const SizedBox(height: 16),
+
+              // Instrument dropdown
               PremiumDropDown(
                 label: "Instrument",
                 value: selectedInstrument,
-                options: ["Dhol", "Tasha", "Dhwaj"],
+                options: _instruments,
                 onChanged: (val) {
                   setState(() {
                     selectedInstrument = val;
@@ -334,16 +477,16 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   ),
                 ),
               const SizedBox(height: 24),
+
+              // Register button with loading spinner and enabling logic
               PremiumButton(
                 text: "Register",
                 isEnabled: _isFormValid && !isLoading,
                 isLoading: isLoading,
-                onPressed: _isFormValid && !isLoading
-                    ? () {
-                        _register();
-                      }
-                    : null,
+                onPressed: _isFormValid && !isLoading ? _register : null,
               ),
+
+              // Display general error messages if any
               if (_errorMessage != null) ...[
                 const SizedBox(height: 12),
                 Text(

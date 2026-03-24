@@ -5,7 +5,7 @@ import '../components/link_launcher.dart';
 class UpcomingEvents extends StatelessWidget {
   final List<Map<String, dynamic>> events;
 
-  const UpcomingEvents({Key? key, required this.events}) : super(key: key);
+  const UpcomingEvents({super.key, required this.events});
 
   void _showEventPopup(BuildContext context, Map<String, dynamic> event) {
     showDialog(
@@ -21,7 +21,7 @@ class UpcomingEvents extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    SizedBox(height: 40), // space for close button
+                    const SizedBox(height: 40), // space for close button
                     Text(
                       event['name'] ?? '',
                       style: const TextStyle(
@@ -31,32 +31,64 @@ class UpcomingEvents extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 10),
-                    Text('Date: ${event['date'] ?? ''}'),
-                    Text('Location: ${event['location'] ?? ''}'),
-                    const SizedBox(height: 10),
-                    Text(event['description'] ?? ''),
-                    if (event['map_link'] != null)
-                      Align(
-                        alignment: Alignment.centerRight,
-                        child: TextButton(
-                          onPressed: () {
-                            LinkLauncher.openLink(
-                              event['map_link'],
-                            );
-                          },
-                          child: const Text(
-                            'View on Map',
-                            style: TextStyle(color: AppColors.primaryMaroon),
-                          ),
+                    if (event['date'] != null)
+                      Text(
+                        'Date: ${event['date']}',
+                        style: const TextStyle(
+                          color: AppColors.primaryMaroon,
+                          fontWeight: FontWeight.bold,
                         ),
+                      ),
+                    if (event['time_from'] != null && event['time_to'] != null)
+                      Text(
+                        'Time: ${event['time_from']} → ${event['time_to']}',
+                        style: const TextStyle(
+                          color: AppColors.primaryMaroon,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    if (event['location'] != null)
+                      Text(
+                        'Location: ${event['location']}',
+                        style: const TextStyle(
+                          color: AppColors.primaryMaroon,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    if (event['duration'] != null)
+                      Text(
+                        'Duration: ${event['duration']}',
+                        style: const TextStyle(
+                          color: AppColors.primaryMaroon,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    const SizedBox(height: 10),
+                    if (event['description'] != null && event['description']!.isNotEmpty)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Description:',
+                            style: TextStyle(
+                              color: AppColors.primaryMaroon,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            event['description']!,
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                        ],
                       ),
                   ],
                 ),
               ),
-              // Close button in top-left corner
+              // Close button in top-right corner
               Positioned(
                 top: 8,
-                left: 8,
+                right: 8,
                 child: IconButton(
                   icon: const Icon(Icons.close, color: AppColors.primaryMaroon),
                   onPressed: () {
@@ -77,6 +109,8 @@ class UpcomingEvents extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
+    final screenWidth = MediaQuery.of(context).size.width;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -89,14 +123,11 @@ class UpcomingEvents extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 10),
-
         Column(
           children: events.map((event) {
             return Center(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: MediaQuery.of(context).size.width * 0.9,
-                ),
+              child: SizedBox(
+                width: screenWidth * 0.95, // card almost full screen
                 child: InkWell(
                   onTap: () => _showEventPopup(context, event),
                   child: Card(
@@ -110,6 +141,7 @@ class UpcomingEvents extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          // Title and duration
                           Text(
                             event['name'] ?? '',
                             style: const TextStyle(
@@ -119,25 +151,33 @@ class UpcomingEvents extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(height: 5),
-                          Text(
-                            'Date: ${event['date'] ?? ''}',
-                            style: const TextStyle(fontSize: 14),
-                          ),
-                          Text(
-                            'Location: ${event['location'] ?? ''}',
-                            style: const TextStyle(fontSize: 14),
-                          ),
+                          if (event['duration'] != null)
+                            Text(
+                              'Duration: ${event['duration']}',
+                              style: const TextStyle(
+                                color: AppColors.primaryMaroon,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
                           const SizedBox(height: 8),
-                          Text(
-                            event['description'] ?? '',
-                            style: const TextStyle(fontSize: 14),
-                          ),
+                          if (event['date'] != null)
+                            Text(
+                              'Date: ${event['date']}',
+                              style: const TextStyle(
+                                color: AppColors.primaryMaroon,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                          const SizedBox(height: 8),
+                          // View on Map button on card
                           if (event['map_link'] != null)
                             Align(
                               alignment: Alignment.centerRight,
                               child: TextButton(
                                 onPressed: () {
-                                  // TODO: open map link
+                                  LinkLauncher.openLink(event['map_link']);
                                 },
                                 child: const Text(
                                   'View on Map',

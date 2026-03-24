@@ -5,12 +5,15 @@ import 'package:local_auth/local_auth.dart';
 import 'package:flutter/services.dart';
 import '../components/get_device_id.dart';
 import '../../theme/app_colors.dart';
-import '../widgets/input_box.dart';
-import '../widgets/button.dart';
 import '../widgets/logging_in_overlay.dart';
 import '../config/api_endpoints.dart';
 import 'home_screen.dart';
+import '../services/fcm_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../widgets/common_button.dart';
+import '../widgets/input_box.dart';
+import 'package:provider/provider.dart';
+import '../providers/feature_flags_provider.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -28,7 +31,6 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoggingIn = false;
   String _errorMessage = '';
   bool _isDeviceRegistered = false;
-  bool _can_reset_pin = false;
 
   @override
   void initState() {
@@ -41,11 +43,8 @@ class _LoginScreenState extends State<LoginScreen> {
         });
       }
     });
-    _checkDeviceRegistration();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _attemptBiometricLogin();
-    });
+    _checkDeviceRegistration();
   }
 
   Future<void> _checkDeviceRegistration() async {
@@ -59,13 +58,14 @@ class _LoginScreenState extends State<LoginScreen> {
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['status'] == true) {
-        setState(() {
-          _isDeviceRegistered = data['status'] == true;
-          _can_reset_pin = data['can_reset_pin'];
+        setState(() => _isDeviceRegistered = true);
+        // Only auto-attempt biometric if device is registered
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _attemptBiometricLogin();
         });
       }
     } catch (e) {
-      // Optionally handle network error
+      // Network error — skip biometric silently
     }
   }
 
@@ -106,7 +106,7 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       if (didAuthenticate) {
-        String? storedPin = await storage.read(key: 'pin');
+        String? storedPin = await storage.read(key: ApiEndpoints.pinKey);
         if (storedPin != null && storedPin.length == 6) {
           _pinController.text = storedPin;
           await _login();
@@ -146,18 +146,31 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       String deviceId = await getDeviceId();
+      final uri = Uri.parse(ApiEndpoints.loginWithPin);
+      final headers = {'Content-Type': 'application/json'};
+      final requestBody = jsonEncode({'pin': pin, 'device_id': deviceId});
+
       final response = await http.post(
-        Uri.parse(ApiEndpoints.loginWithPin),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'pin': pin, 'device_id': deviceId}),
+        uri,
+        headers: headers,
+        body: requestBody,
       );
 
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
-        await storage.write(key: 'access_token', value: data['access_token']);
-        await storage.write(key: 'refresh_token', value: data['refresh_token']);
-
+        await storage.write(
+          key: ApiEndpoints.accessTokenKey,
+          value: data['access_token'],
+        );
+        await storage.write(
+          key: ApiEndpoints.refreshTokenKey,
+          value: data['refresh_token'],
+        );
+        String? fcmToken = await FCMService().getFcmToken(isLogin: false);
+        if (fcmToken != null) {
+          await FCMService().sendTokenToServer(fcmToken);
+        }
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -186,6 +199,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final flags = Provider.of<FeatureFlagsProvider>(context).flags;
     return Scaffold(
       backgroundColor: AppColors.primaryMaroon,
       body: Stack(
@@ -215,8 +229,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   PremiumInputBox(
                     controller: _pinController,
                     label: 'Enter 6-digit PIN',
-                    keyboardType: TextInputType.number,
-                    maxLength: 6,
+                    isPin: true,
                     onChanged: (_) {
                       if (_errorMessage.isNotEmpty) {
                         setState(() {
@@ -224,7 +237,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         });
                       }
                     },
-                    focusNode: _pinFocusNode,
                   ),
 
                   if (_errorMessage.isNotEmpty)
@@ -248,24 +260,66 @@ class _LoginScreenState extends State<LoginScreen> {
                     isEnabled: !_isLoggingIn,
                   ),
 
-                  const SizedBox(height: 16),
-
-                  GestureDetector(
-                    onTap: () {
-                      if (_can_reset_pin) {
-                        Navigator.pushNamed(context, '/resetPin');
-                      } else {
-                        Navigator.pushNamed(context, '/register');
-                      }
-                    },
-                    child: Text(
-                      (_can_reset_pin) ? "Reset PIN" : "Registration",
-                      style: TextStyle(
-                        color: AppColors.accentYellow,
-                        decoration: TextDecoration.underline,
-                        fontSize: 14,
+                  if (_isDeviceRegistered) ...[
+                    const SizedBox(height: 12),
+                    GestureDetector(
+                      onTap: _attemptBiometricLogin,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: const [
+                          Icon(
+                            Icons.fingerprint,
+                            color: AppColors.accentYellow,
+                            size: 32,
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'Login with Biometric',
+                            style: TextStyle(
+                              color: AppColors.accentYellow,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+                  ],
+
+                  const SizedBox(height: 16),
+
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (flags?.showRegistration ?? false) ...[
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.pushNamed(context, '/register');
+                          },
+                          child: const Text(
+                            "Registration",
+                            style: TextStyle(
+                              color: AppColors.accentYellow,
+                              decoration: TextDecoration.underline,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ] else ...[
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.pushNamed(context, '/resetPin');
+                          },
+                          child: const Text(
+                            "Reset PIN",
+                            style: TextStyle(
+                              color: AppColors.accentYellow,
+                              decoration: TextDecoration.underline,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ],
               ),
