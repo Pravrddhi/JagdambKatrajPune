@@ -312,8 +312,23 @@ class ApiService {
 
   static FeatureFlags _parseFeatureFlagsResponse(http.Response response) {
     try {
-      final data = jsonDecode(response.body);
-      return FeatureFlags.fromJson(data['featureFlags']);
+      final decoded = jsonDecode(response.body);
+
+      if (decoded is! Map<String, dynamic>) {
+        throw Exception('Invalid feature flags response format');
+      }
+
+      final dynamic payload =
+          decoded['featureFlags'] ??
+          decoded['feature_flags'] ??
+          decoded['data'] ??
+          decoded;
+
+      if (payload is! Map<String, dynamic>) {
+        throw Exception('Feature flags payload is not an object');
+      }
+
+      return FeatureFlags.fromJson(payload);
     } catch (e) {
       throw Exception("Failed to parse feature flags response: $e");
     }

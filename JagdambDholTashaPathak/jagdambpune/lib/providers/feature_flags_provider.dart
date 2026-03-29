@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import '../models/feature_flags.dart';
 import '../services/api_service.dart';
+import '../services/web_api_service.dart';
 
 class FeatureFlagsProvider with ChangeNotifier {
   FeatureFlags? _flags;
@@ -31,7 +32,9 @@ class FeatureFlagsProvider with ChangeNotifier {
     notifyListeners();
 
     try {
-      final fetchedFlags = await ApiService.fetchFeatureFlags();
+      final fetchedFlags = kIsWeb
+          ? await WebApiService.fetchFeatureFlags()
+          : await ApiService.fetchFeatureFlags();
       _flags = fetchedFlags;
       _lastFetchedAt = DateTime.now();
     } catch (e) {

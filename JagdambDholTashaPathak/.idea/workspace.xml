@@ -4,27 +4,7 @@
     <option name="autoReloadType" value="NONE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ab8ea0d8-bd6c-445d-9c8d-eb924bc6aad2" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/caches/deviceStreaming.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/components/app_drawer.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/components/app_drawer.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/components/get_emergency_details.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/components/get_emergency_details.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/components/mirvnuk_dialog.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/components/mirvnuk_dialog.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/components/notification_dialog.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/components/notification_dialog.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/config/api_endpoints.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/config/api_endpoints.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/models/user.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/models/user.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/screens/all_users_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/screens/all_users_screen.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/screens/home_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/screens/home_screen.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/screens/login_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/screens/login_screen.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/screens/registration_screen.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/screens/registration_screen.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/screens/reset_pin.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/screens/reset_pin.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/services/api_service.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/services/api_service.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/services/fcm_service.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/services/fcm_service.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/services/refresh_token_service.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/services/refresh_token_service.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/services/user_service.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/services/user_service.dart" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/jagdambpune/lib/widgets/setpin_dialog.dart" beforeDir="false" afterPath="$PROJECT_DIR$/jagdambpune/lib/widgets/setpin_dialog.dart" afterDir="false" />
-    </list>
+    <list default="true" id="ab8ea0d8-bd6c-445d-9c8d-eb924bc6aad2" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -53,7 +33,7 @@
     "RunOnceActivity.readMode.enableVisualFormatting": "true",
     "cf.first.check.clang-format": "false",
     "cidr.known.project.marker": "true",
-    "git-widget-placeholder": "feature/gat-details",
+    "git-widget-placeholder": "feature/web-fromatting",
     "kotlin-language-version-configured": "true",
     "last_opened_file_path": "/Users/pratikshinde/Documents/front-end/frontend-flutter/JagdambDholTashaPathak"
   }

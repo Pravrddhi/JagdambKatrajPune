@@ -1,13 +1,21 @@
 // lib/config/api_endpoints.dart
 
-import 'dart:io';
+import 'package:flutter/foundation.dart';
 
 /// Centralized class for managing API endpoints and related utilities.
 class ApiEndpoints {
-  // Base URL for API requests. Change this according to environment.
-  // Uncomment the production URL when deploying.
-  // static const String baseUrl = 'https://myriam-confirmatory-darlena.ngrok-free.dev/api';
-  static const String baseUrl = 'http://10.0.2.2/api';
+  // Base URLs by platform:
+  // - Android emulator uses 10.0.2.2 to reach host machine.
+  // - Web should use a browser-reachable URL.
+  static const String _androidBaseUrl = 'http://10.0.2.2/api';
+  static const String _webBaseUrl = 'http://localhost/api';
+
+  // Override for any platform with:
+  // flutter run --dart-define=API_BASE_URL=https://your-url/api
+  static final String baseUrl =
+      const String.fromEnvironment('API_BASE_URL', defaultValue: '').isNotEmpty
+      ? const String.fromEnvironment('API_BASE_URL')
+      : (kIsWeb ? _webBaseUrl : _androidBaseUrl);
   static const String pathakId = "1";
 
   // -------------------
@@ -24,75 +32,78 @@ class ApiEndpoints {
   // -------------------
 
   /// Register user without PIN
-  static const String register = '$baseUrl/auth/register/';
+  static final String register = '$baseUrl/auth/register/';
 
   /// Set user PIN after registration
-  static const String setPin = '$baseUrl/auth/set-pin/';
+  static final String setPin = '$baseUrl/auth/set-pin/';
 
   /// Login using PIN
-  static const String loginWithPin = '$baseUrl/auth/login/';
+  static final String loginWithPin = '$baseUrl/auth/login/';
+
+  /// Login using phone number and password (web)
+  static final String passwordLogin = '$baseUrl/auth/password-login/';
 
   /// Check if phone number already exists
-  static const String checkPhoneNumber = '$baseUrl/auth/check-phone-number/';
+  static final String checkPhoneNumber = '$baseUrl/auth/check-phone-number/';
 
   /// Check device registration
-  static const String checkDeviceRegistration = '$baseUrl/auth/device-check/';
+  static final String checkDeviceRegistration = '$baseUrl/auth/device-check/';
 
   /// Verify device and phone number association
-  static const String verifyDevicePhone =
+  static final String verifyDevicePhone =
       '$baseUrl/auth/device/verify-phone-device/';
 
   /// Refresh access token
-  static const String getRefreshToken = '$baseUrl/auth/token/refresh/';
+  static final String getRefreshToken = '$baseUrl/auth/token/refresh/';
 
   // -------------------
   // Data Fetching Endpoints
   // -------------------
 
   /// Get list of instruments (need to append pathak id)
-  static const String getInstruments = '$baseUrl/instruments';
+  static final String getInstruments = '$baseUrl/instruments';
 
   /// Get emergency contacts (append appropriate params if any)
-  static const String getEmergencyContacts = '$baseUrl/emergency-contacts/';
+  static final String getEmergencyContacts = '$baseUrl/emergency-contacts/';
 
   /// Update FCM token for push notifications
-  static const String updateFCMToken =
+  static final String updateFCMToken =
       '$baseUrl/notifications/update-fcm-token/';
 
   /// Create a new event
-  static const String createEvent = '$baseUrl/events/create/';
+  static final String createEvent = '$baseUrl/events/create/';
 
   /// Create a new notification
-  static const String createNotification = '$baseUrl/notifications/create/';
+  static final String createNotification = '$baseUrl/notifications/create/';
 
   /// Submit a new bug report
-  static const String createBugReport =
+  static final String createBugReport =
       '$baseUrl/notifications/bug-report/create/';
 
   /// Fetch feature flags for the client app
-  static const String featureFlags = '$baseUrl/feature-flags/';
+  static final String featureFlags = '$baseUrl/feature-flags/';
 
   /// Get all gats
-  static const String getGats = '$baseUrl/gats';
+  static final String getGats = '$baseUrl/gats';
 
   /// Get users (admin only)
-  static const String fetchAllUsers = '$baseUrl/users/';
+  static final String fetchAllUsers = '$baseUrl/users/';
 
   /// Base endpoint for a specific user by id (api/user/<int:id>/)
-  static const String userByIdBase = '$baseUrl/user';
+  static final String userByIdBase = '$baseUrl/user';
 
   /// Base endpoint to activate a user (api/notifications/activate-user/<int:user_id>/)
-  static const String activateUserBase = '$baseUrl/notifications/activate-user';
+  static final String activateUserBase = '$baseUrl/notifications/activate-user';
 
   /// Endpoint to refresh access token using refresh token
-  static const String refreshToken = '$baseUrl/auth/token/refresh/';
+  static final String refreshToken = '$baseUrl/auth/token/refresh/';
 
   // -------------------
   // Profile Endpoints
   // -------------------
 
   /// Get user details
-  static const String getUserDetails = '$baseUrl/profile/get-user-details/';
+  static final String getUserDetails = '$baseUrl/profile/get-user-details/';
 
   // -------------------
   // Miscellaneous Constants
@@ -117,14 +128,14 @@ class ApiEndpoints {
 
   /// Common headers for JSON requests without authorization
   static Map<String, String> jsonHeaders() => {
-    HttpHeaders.contentTypeHeader: 'application/json',
-    HttpHeaders.acceptHeader: 'application/json',
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
   };
 
   /// Headers with bearer token for authorized requests
   static Map<String, String> authorizedHeaders(String token) => {
     ...jsonHeaders(),
-    HttpHeaders.authorizationHeader: 'Bearer $token',
+    'Authorization': 'Bearer $token',
   };
 
   /// Build endpoint for specific user details using id
