@@ -16,6 +16,7 @@ import 'screens/registration_screen.dart';
 import 'screens/reset_pin.dart';
 import 'screens/splash_screen.dart';
 import 'theme/app_colors.dart';
+import 'web/screens/registration_web_screen.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
@@ -29,10 +30,17 @@ const AndroidNotificationChannel channel = AndroidNotificationChannel(
 
 const FlutterSecureStorage _bgStorage = FlutterSecureStorage();
 const String _notificationStorageKey = 'app_notifications';
+bool _firebaseReady = false;
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (_) {
+    return;
+  }
 
   if (kDebugMode) {
     print('[FCM BG] notification block: ${message.notification?.title}');
@@ -99,19 +107,33 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    _firebaseReady = true;
+  } catch (e) {
+    _firebaseReady = false;
+    if (kDebugMode) {
+      print('[Firebase] Init skipped: $e');
+    }
+  }
 
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  if (_firebaseReady) {
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  }
 
-  await flutterLocalNotificationsPlugin
-      .resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin
-      >()
-      ?.createNotificationChannel(channel);
+  if (!kIsWeb) {
+    await flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.createNotificationChannel(channel);
 
-  const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-  const initSettings = InitializationSettings(android: androidInit);
-  await flutterLocalNotificationsPlugin.initialize(initSettings);
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const initSettings = InitializationSettings(android: androidInit);
+    await flutterLocalNotificationsPlugin.initialize(initSettings);
+  }
 
   runApp(
     MultiProvider(
@@ -190,13 +212,15 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    FirebaseMessaging.onMessage.listen(_handleIncomingMessage);
-    FirebaseMessaging.onMessageOpenedApp.listen(_handleIncomingMessage);
-    FirebaseMessaging.instance.getInitialMessage().then((message) {
-      if (message != null && mounted) {
-        _handleIncomingMessage(message);
-      }
-    });
+    if (_firebaseReady) {
+      FirebaseMessaging.onMessage.listen(_handleIncomingMessage);
+      FirebaseMessaging.onMessageOpenedApp.listen(_handleIncomingMessage);
+      FirebaseMessaging.instance.getInitialMessage().then((message) {
+        if (message != null && mounted) {
+          _handleIncomingMessage(message);
+        }
+      });
+    }
   }
 
   @override
@@ -349,7 +373,9 @@ class _FlagGatedAuthRoute extends StatelessWidget {
 
         final showRegistration = flagsProvider.flags?.showRegistration ?? false;
         return showRegistration
-            ? const RegistrationScreen()
+            ? (kIsWeb
+                  ? const RegistrationWebScreen()
+                  : const RegistrationScreen())
             : const ResetPinScreen();
       },
     );
