@@ -4,6 +4,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_endpoints.dart';
+import 'bug_report_service.dart';
 import 'refresh_token_service.dart';
 
 class FCMService {
@@ -83,8 +84,9 @@ class FCMService {
   Future<void> sendTokenToServer(String token) async {
     try {
       if (token.isEmpty) {
-        if (kDebugMode)
+        if (kDebugMode) {
           print("FCM token is empty, skipping update-fcm-token call.");
+        }
         return;
       }
 
@@ -131,6 +133,13 @@ class FCMService {
           }
         }
       } else {
+        await BugReportService.reportApiFailure(
+          title: 'FCM token update API failed',
+          errorMessage: response.body,
+          pageUrl: '/notifications/update-fcm-token',
+          statusCode: response.statusCode,
+          endpoint: ApiEndpoints.updateFCMToken,
+        );
         if (kDebugMode) {
           print(
             "Failed to sync FCM token. Status: ${response.statusCode}, Body: ${response.body}",
@@ -138,6 +147,12 @@ class FCMService {
         }
       }
     } catch (e) {
+      await BugReportService.reportApiFailure(
+        title: 'FCM token update API exception',
+        errorMessage: e.toString(),
+        pageUrl: '/notifications/update-fcm-token',
+        endpoint: ApiEndpoints.updateFCMToken,
+      );
       if (kDebugMode) {
         print("Error sending FCM token to server: $e");
       }

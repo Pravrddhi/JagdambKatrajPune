@@ -9,6 +9,7 @@ import '../widgets/logging_in_overlay.dart';
 import '../config/api_endpoints.dart';
 import 'home_screen.dart';
 import '../services/fcm_service.dart';
+import '../services/bug_report_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../widgets/common_button.dart';
 import '../widgets/input_box.dart';
@@ -63,8 +64,22 @@ class _LoginScreenState extends State<LoginScreen> {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           _attemptBiometricLogin();
         });
+      } else {
+        await BugReportService.reportApiFailure(
+          title: 'Check device registration failed',
+          errorMessage: response.body,
+          pageUrl: '/login',
+          statusCode: response.statusCode,
+          endpoint: ApiEndpoints.checkDeviceRegistration,
+        );
       }
     } catch (e) {
+      await BugReportService.reportApiFailure(
+        title: 'Check device registration exception',
+        errorMessage: e.toString(),
+        pageUrl: '/login',
+        endpoint: ApiEndpoints.checkDeviceRegistration,
+      );
       // Network error — skip biometric silently
     }
   }
@@ -159,6 +174,11 @@ class _LoginScreenState extends State<LoginScreen> {
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
+        final isGatPramukh =
+            data['is_gat_pramukh'] == true ||
+            data['is_gat_pramukh']?.toString().toLowerCase() == 'true' ||
+            data['is_gat_pramukh']?.toString() == '1';
+
         await storage.write(
           key: ApiEndpoints.accessTokenKey,
           value: data['access_token'],
@@ -166,6 +186,14 @@ class _LoginScreenState extends State<LoginScreen> {
         await storage.write(
           key: ApiEndpoints.refreshTokenKey,
           value: data['refresh_token'],
+        );
+        await storage.write(
+          key: ApiEndpoints.isGatPramukhKey,
+          value: isGatPramukh.toString(),
+        );
+        await storage.write(
+          key: ApiEndpoints.gatPramukhNameKey,
+          value: data['gat_pramukh_name']?.toString() ?? '',
         );
         String? fcmToken = await FCMService().getFcmToken(isLogin: false);
         if (fcmToken != null) {
@@ -182,13 +210,26 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         );
       } else {
+        await BugReportService.reportApiFailure(
+          title: 'Login API failed',
+          errorMessage: response.body,
+          pageUrl: '/login',
+          statusCode: response.statusCode,
+          endpoint: ApiEndpoints.loginWithPin,
+        );
         setState(() {
-          _errorMessage = data['message'] ?? 'Login failed. Try again.';
+          _errorMessage = ApiEndpoints.genericApiFailureMessage;
         });
       }
     } catch (e) {
+      await BugReportService.reportApiFailure(
+        title: 'Login API exception',
+        errorMessage: e.toString(),
+        pageUrl: '/login',
+        endpoint: ApiEndpoints.loginWithPin,
+      );
       setState(() {
-        _errorMessage = 'Something went wrong. Please try again.';
+        _errorMessage = ApiEndpoints.genericApiFailureMessage;
       });
     } finally {
       setState(() {
@@ -264,9 +305,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 12),
                     GestureDetector(
                       onTap: _attemptBiometricLogin,
-                      child: Row(
+                      child: const Row(
                         mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
+                        children: [
                           Icon(
                             Icons.fingerprint,
                             color: AppColors.accentYellow,

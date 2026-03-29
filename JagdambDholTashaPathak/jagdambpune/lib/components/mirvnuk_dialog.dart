@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../config/api_endpoints.dart';
+import '../services/bug_report_service.dart';
 import '../theme/app_colors.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -180,8 +181,9 @@ class MirvunkForm {
                                 final endMinutes =
                                     int.parse(endParts[0]) * 60 +
                                     int.parse(endParts[1]);
-                                if (endMinutes <= startMinutes)
+                                if (endMinutes <= startMinutes) {
                                   return 'End must be after start';
+                                }
                               }
                               return null;
                             },
@@ -229,8 +231,9 @@ class MirvunkForm {
                             ),
                             validator: (val) {
                               if (val == null || val.isEmpty) return 'Required';
-                              if (Uri.tryParse(val)?.hasAbsolutePath != true)
+                              if (Uri.tryParse(val)?.hasAbsolutePath != true) {
                                 return 'Invalid URL';
+                              }
                               return null;
                             },
                             onChanged: (_) => setState(() {}),
@@ -269,8 +272,9 @@ class MirvunkForm {
                               ),
                               onPressed: isFormValid() && !isSubmitting
                                   ? () async {
-                                      if (!formKey.currentState!.validate())
+                                      if (!formKey.currentState!.validate()) {
                                         return;
+                                      }
                                       setState(() => isSubmitting = true);
 
                                       String? accessToken = await storage.read(
@@ -314,25 +318,40 @@ class MirvunkForm {
                                             ),
                                           );
                                         } else {
-                                          final data = jsonDecode(
-                                            response.body,
+                                          await BugReportService.reportApiFailure(
+                                            title: 'Create event API failed',
+                                            errorMessage: response.body,
+                                            pageUrl: '/events/create',
+                                            statusCode: response.statusCode,
+                                            endpoint: ApiEndpoints.createEvent,
                                           );
                                           ScaffoldMessenger.of(
                                             context,
                                           ).showSnackBar(
-                                            SnackBar(
+                                            const SnackBar(
                                               content: Text(
-                                                data['message'] ??
-                                                    'Failed to add Mirvnuk',
+                                                ApiEndpoints
+                                                    .genericApiFailureMessage,
                                               ),
                                             ),
                                           );
                                         }
                                       } catch (e) {
+                                        await BugReportService.reportApiFailure(
+                                          title: 'Create event API exception',
+                                          errorMessage: e.toString(),
+                                          pageUrl: '/events/create',
+                                          endpoint: ApiEndpoints.createEvent,
+                                        );
                                         ScaffoldMessenger.of(
                                           context,
                                         ).showSnackBar(
-                                          SnackBar(content: Text('Error: $e')),
+                                          const SnackBar(
+                                            content: Text(
+                                              ApiEndpoints
+                                                  .genericApiFailureMessage,
+                                            ),
+                                          ),
                                         );
                                       } finally {
                                         setState(() => isSubmitting = false);

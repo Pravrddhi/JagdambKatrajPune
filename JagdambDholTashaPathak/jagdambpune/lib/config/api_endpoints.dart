@@ -6,10 +6,9 @@ import 'dart:io';
 class ApiEndpoints {
   // Base URL for API requests. Change this according to environment.
   // Uncomment the production URL when deploying.
-  static const String baseUrl = 'https://myriam-confirmatory-darlena.ngrok-free.dev/api';
-  // static const String baseUrl = 'http://10.0.2.2/api';
+  // static const String baseUrl = 'https://myriam-confirmatory-darlena.ngrok-free.dev/api';
+  static const String baseUrl = 'http://10.0.2.2/api';
   static const String pathakId = "1";
-
 
   // -------------------
   // Storage Keys
@@ -17,6 +16,8 @@ class ApiEndpoints {
   static const String accessTokenKey = 'access_token';
   static const String refreshTokenKey = 'refresh_token';
   static const String pinKey = 'pin';
+  static const String isGatPramukhKey = 'is_gat_pramukh';
+  static const String gatPramukhNameKey = 'gat_pramukh_name';
 
   // -------------------
   // Authentication Endpoints
@@ -64,8 +65,15 @@ class ApiEndpoints {
   /// Create a new notification
   static const String createNotification = '$baseUrl/notifications/create/';
 
+  /// Submit a new bug report
+  static const String createBugReport =
+      '$baseUrl/notifications/bug-report/create/';
+
   /// Fetch feature flags for the client app
   static const String featureFlags = '$baseUrl/feature-flags/';
+
+  /// Get all gats
+  static const String getGats = '$baseUrl/gats';
 
   /// Get users (admin only)
   static const String fetchAllUsers = '$baseUrl/users/';
@@ -74,8 +82,7 @@ class ApiEndpoints {
   static const String userByIdBase = '$baseUrl/user';
 
   /// Base endpoint to activate a user (api/notifications/activate-user/<int:user_id>/)
-  static const String activateUserBase =
-      '$baseUrl/notifications/activate-user';
+  static const String activateUserBase = '$baseUrl/notifications/activate-user';
 
   /// Endpoint to refresh access token using refresh token
   static const String refreshToken = '$baseUrl/auth/token/refresh/';
@@ -90,6 +97,10 @@ class ApiEndpoints {
   // -------------------
   // Miscellaneous Constants
   // -------------------
+
+  /// Generic message shown for API failures.
+  static const String genericApiFailureMessage =
+      'Something went wrong. Bug has reported to admins';
 
   /// Helper method to build Uri with optional query parameters
   static Uri buildUri(String endpoint, [Map<String, dynamic>? queryParams]) {
