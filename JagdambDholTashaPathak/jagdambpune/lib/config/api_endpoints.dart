@@ -4,18 +4,10 @@ import 'package:flutter/foundation.dart';
 
 /// Centralized class for managing API endpoints and related utilities.
 class ApiEndpoints {
-  // Base URLs by platform:
-  // - Android emulator uses 10.0.2.2 to reach host machine.
-  // - Web should use a browser-reachable URL.
-  static const String _androidBaseUrl = 'http://10.0.2.2/api';
-  static const String _webBaseUrl = 'http://localhost/api';
-
-  // Override for any platform with:
-  // flutter run --dart-define=API_BASE_URL=https://your-url/api
-  static final String baseUrl =
-      const String.fromEnvironment('API_BASE_URL', defaultValue: '').isNotEmpty
-      ? const String.fromEnvironment('API_BASE_URL')
-      : (kIsWeb ? _webBaseUrl : _androidBaseUrl);
+  // Base URL for API requests. Change this according to environment.
+  // Uncomment the production URL when deploying.
+  // static const String baseUrl = 'https://myriam-confirmatory-darlena.ngrok-free.dev/api';
+  static const String baseUrl = 'https://api.jagdamb.co.in/api';
   static const String pathakId = "1";
 
   // -------------------
