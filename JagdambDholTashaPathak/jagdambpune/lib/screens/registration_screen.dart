@@ -14,6 +14,7 @@ import 'home_screen.dart';
 import '../config/api_endpoints.dart';
 import 'package:flutter/services.dart';
 import '../services/fcm_service.dart';
+import '../services/bug_report_service.dart';
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
@@ -102,9 +103,22 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           return [];
         }
       } else {
+        await BugReportService.reportApiFailure(
+          title: 'Fetch instruments API failed',
+          errorMessage: response.body,
+          pageUrl: '/registration',
+          statusCode: response.statusCode,
+          endpoint: ApiEndpoints.getInstruments,
+        );
         return [];
       }
     } catch (e) {
+      await BugReportService.reportApiFailure(
+        title: 'Fetch instruments API exception',
+        errorMessage: e.toString(),
+        pageUrl: '/registration',
+        endpoint: ApiEndpoints.getInstruments,
+      );
       return [];
     }
   }
@@ -150,24 +164,47 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       _fieldErrors['phone_number'] = null;
     });
 
-    final response = await http.post(
-      Uri.parse(ApiEndpoints.checkPhoneNumber),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'phone_number': phoneNumber}),
-    );
+    try {
+      final response = await http.post(
+        Uri.parse(ApiEndpoints.checkPhoneNumber),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'phone_number': phoneNumber}),
+      );
 
-    setState(() {
-      _isCheckingPhone = false;
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final exists = data['status'] as bool;
-        if (exists) {
-          _fieldErrors['phone_number'] = "Phone number already registered.";
+      setState(() {
+        _isCheckingPhone = false;
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final exists = data['status'] as bool;
+          if (exists) {
+            _fieldErrors['phone_number'] = "Phone number already registered.";
+          }
+        } else {
+          _fieldErrors['phone_number'] = ApiEndpoints.genericApiFailureMessage;
         }
-      } else {
-        _fieldErrors['phone_number'] = "Error checking phone number.";
+      });
+
+      if (response.statusCode != 200) {
+        await BugReportService.reportApiFailure(
+          title: 'Check phone number API failed',
+          errorMessage: response.body,
+          pageUrl: '/registration',
+          statusCode: response.statusCode,
+          endpoint: ApiEndpoints.checkPhoneNumber,
+        );
       }
-    });
+    } catch (e) {
+      await BugReportService.reportApiFailure(
+        title: 'Check phone number API exception',
+        errorMessage: e.toString(),
+        pageUrl: '/registration',
+        endpoint: ApiEndpoints.checkPhoneNumber,
+      );
+      setState(() {
+        _isCheckingPhone = false;
+        _fieldErrors['phone_number'] = ApiEndpoints.genericApiFailureMessage;
+      });
+    }
     _validateForm();
   }
 
@@ -225,58 +262,63 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       _errorMessage = null;
     });
 
-    final response = await http.post(
-      Uri.parse(ApiEndpoints.register),
-      headers: {"Content-Type": "application/json"},
-      body: jsonEncode({
-        "phone_number": _phoneController.text,
-        "first_name": _firstNameController.text,
-        "last_name": _lastNameController.text,
-        "gender": selectedSex,
-        "instrument": selectedInstrument,
-        "device_id": await _getDeviceId(),
-        "pathak_id": ApiEndpoints.pathakId,
-      }),
-    );
-
-    setState(() => isLoading = false);
-
-    if (response.statusCode == 201) {
-      final data = jsonDecode(response.body);
-      final accessToken = data['access_token'];
-      // Ask for notification permission right after successful registration,
-      // before the set-PIN dialog appears on the next screen.
-      await FCMService().requestNotificationPermission();
-      await _promptBiometricAfterNotificationPermission();
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (_) => HomeScreen(
-            authToken: accessToken,
-            phoneNumber: _phoneController.text,
-            isRegistration: true,
-          ),
-        ),
+    try {
+      final response = await http.post(
+        Uri.parse(ApiEndpoints.register),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "phone_number": _phoneController.text,
+          "first_name": _firstNameController.text,
+          "last_name": _lastNameController.text,
+          "gender": selectedSex,
+          "instrument": selectedInstrument,
+          "device_id": await _getDeviceId(),
+          "pathak_id": ApiEndpoints.pathakId,
+        }),
       );
-    } else {
-      final data = jsonDecode(response.body);
+
+      setState(() => isLoading = false);
+
+      if (response.statusCode == 201) {
+        final data = jsonDecode(response.body);
+        final accessToken = data['access_token'];
+        // Ask for notification permission right after successful registration,
+        // before the set-PIN dialog appears on the next screen.
+        await FCMService().requestNotificationPermission();
+        await _promptBiometricAfterNotificationPermission();
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => HomeScreen(
+              authToken: accessToken,
+              phoneNumber: _phoneController.text,
+              isRegistration: true,
+            ),
+          ),
+        );
+      } else {
+        await BugReportService.reportApiFailure(
+          title: 'Registration API failed',
+          errorMessage: response.body,
+          pageUrl: '/registration',
+          statusCode: response.statusCode,
+          endpoint: ApiEndpoints.register,
+        );
+
+        setState(() {
+          _errorMessage = ApiEndpoints.genericApiFailureMessage;
+        });
+      }
+    } catch (e) {
+      await BugReportService.reportApiFailure(
+        title: 'Registration API exception',
+        errorMessage: e.toString(),
+        pageUrl: '/registration',
+        endpoint: ApiEndpoints.register,
+      );
       setState(() {
-        if (data != null &&
-            data.containsKey('message') &&
-            data['message'] is Map) {
-          final messageMap = data['message'] as Map<String, dynamic>;
-
-          final firstKey = messageMap.keys.first;
-          final firstValue = messageMap[firstKey];
-
-          if (firstValue is List && firstValue.isNotEmpty) {
-            _errorMessage = firstValue.first;
-          } else {
-            _errorMessage = firstValue.toString();
-          }
-        } else {
-          _errorMessage = "Registration failed";
-        }
+        isLoading = false;
+        _errorMessage = ApiEndpoints.genericApiFailureMessage;
       });
     }
   }

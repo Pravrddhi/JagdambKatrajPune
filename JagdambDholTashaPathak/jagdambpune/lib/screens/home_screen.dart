@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:provider/provider.dart';
@@ -12,6 +14,7 @@ import '../services/fcm_service.dart';
 import '../services/user_service.dart';
 import '../components/get_emergency_details.dart';
 import '../providers/notification_provider.dart';
+import '../config/api_endpoints.dart';
 
 const storage = FlutterSecureStorage();
 
@@ -46,9 +49,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late final Animation<double> _fadeAnimation;
 
   bool _isFabOpen = false;
-  bool _isNotificationsDialogOpen = false;
   late final AnimationController _fabAnimationController;
   late final Animation<double> _fabAnimation;
+
+  final List<String> _motivationalSayings = const [
+    'Practice with discipline today, perform with confidence tomorrow.',
+    'Team rhythm is stronger than individual speed.',
+    'Small daily effort builds unstoppable performance.',
+    'Consistency beats intensity when repeated every day.',
+    'Respect the beat, trust the team, enjoy the journey.',
+  ];
+  late final PageController _sayingsPageController;
+  Timer? _sayingsTimer;
+  int _currentSayingIndex = 0;
 
   @override
   void initState() {
@@ -78,8 +91,28 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       curve: Curves.easeInOut,
     );
 
+    _sayingsPageController = PageController();
+    _startSayingsAutoScroll();
+
     // Start user initialization workflow
     _initializeUser();
+  }
+
+  void _startSayingsAutoScroll() {
+    _sayingsTimer?.cancel();
+    _sayingsTimer = Timer.periodic(const Duration(seconds: 6), (_) {
+      if (!mounted || !_sayingsPageController.hasClients) {
+        return;
+      }
+
+      final next = (_currentSayingIndex + 1) % _motivationalSayings.length;
+      _sayingsPageController.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 700),
+        curve: Curves.easeInOut,
+      );
+      _currentSayingIndex = next;
+    });
   }
 
   /// Initialize user info depending on registration status
@@ -160,13 +193,35 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     try {
       final userData = await UserService.fetchUserDetails(token);
+      final storedIsGatPramukhRaw = await storage.read(
+        key: ApiEndpoints.isGatPramukhKey,
+      );
+      final storedGatPramukhName = await storage.read(
+        key: ApiEndpoints.gatPramukhNameKey,
+      );
+
+      final mergedUserData = Map<String, dynamic>.from(userData);
+      if (mergedUserData['is_gat_pramukh'] == null &&
+          storedIsGatPramukhRaw != null) {
+        mergedUserData['is_gat_pramukh'] =
+            storedIsGatPramukhRaw.toLowerCase() == 'true' ||
+            storedIsGatPramukhRaw == '1';
+      }
+      if ((mergedUserData['gat_pramukh_name'] == null ||
+              mergedUserData['gat_pramukh_name'].toString().trim().isEmpty) &&
+          storedGatPramukhName != null &&
+          storedGatPramukhName.trim().isNotEmpty) {
+        mergedUserData['gat_pramukh_name'] = storedGatPramukhName.trim();
+      }
+
       if (!mounted) return false;
 
       setState(() {
-        _userDetails = userData;
+        _userDetails = mergedUserData;
 
-        if (userData['events'] != null && userData['events'].isNotEmpty) {
-          _events = List<Map<String, dynamic>>.from(userData['events']);
+        if (mergedUserData['events'] != null &&
+            mergedUserData['events'].isNotEmpty) {
+          _events = List<Map<String, dynamic>>.from(mergedUserData['events']);
         } else {
           _events = [];
         }
@@ -202,7 +257,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     } catch (e) {
       if (!mounted) return false;
       setState(() {
-        _errorMessage = e.toString();
+        _errorMessage = ApiEndpoints.genericApiFailureMessage;
         _userDetails = null;
         _events = [];
       });
@@ -210,6 +265,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  bool _parseBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value == 1;
+    final normalized = value?.toString().trim().toLowerCase();
+    return normalized == 'true' || normalized == '1' || normalized == 'yes';
+  }
+
+  bool get _isPathakAdmin {
+    final role = _userDetails?['role']?.toString().trim().toLowerCase();
+    return role == 'pathak_admin' || role == 'pathak-admin';
+  }
+
+  bool get _isGatPramukh {
+    final userDetails = _userDetails;
+    if (userDetails == null) {
+      return false;
+    }
+
+    final role = userDetails['role']?.toString().trim().toLowerCase();
+    final isRoleGatPramukh = role == 'gat_pramukh' || role == 'gat-pramukh';
+
+    return isRoleGatPramukh ||
+        _parseBool(userDetails['is_gat_pramukh']) ||
+        _parseBool(userDetails['isGatPramukh']);
+  }
+
+  bool get _canOpenMirvunkForm {
+    final role = _userDetails?['role']?.toString().trim().toLowerCase();
+    return _userDetails != null && role != 'vadak';
+  }
+
+  bool get _canSendNotification {
+    return _isPathakAdmin || _isGatPramukh;
+  }
+
+  bool get _hasFabActions {
+    return _canOpenMirvunkForm || _canSendNotification;
   }
 
   void _handleLogout() {
@@ -227,22 +321,71 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
-  Future<void> _showNotificationsDialog() async {
-    if (_isNotificationsDialogOpen) return;
-    _isNotificationsDialogOpen = true;
-    await showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) {
-        return Consumer<NotificationProvider>(
-          builder: (_, notificationProvider, __) {
-            final notifications = notificationProvider.notifications;
+  Widget _buildNotificationsPanel() {
+    return Consumer<NotificationProvider>(
+      builder: (_, notificationProvider, __) {
+        final notifications = notificationProvider.notifications;
 
-            return AlertDialog(
-              title: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: AppColors.accentYellow.withValues(alpha: 0.6),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.06),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  const Text('Notifications'),
+                  const Icon(
+                    Icons.notifications_active,
+                    color: AppColors.primaryMaroon,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Recent Notifications',
+                      style: TextStyle(
+                        color: AppColors.primaryMaroon,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                  if (notifications.isNotEmpty)
+                    Container(
+                      margin: const EdgeInsets.only(right: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade700,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        notifications.length > 99
+                            ? '99+'
+                            : notifications.length.toString(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                   if (notifications.isNotEmpty)
                     TextButton(
                       onPressed: notificationProvider.clearAll,
@@ -250,50 +393,147 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                 ],
               ),
-              content: SizedBox(
-                width: double.maxFinite,
+              const SizedBox(height: 6),
+              Expanded(
                 child: notifications.isEmpty
-                    ? const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                        child: Center(child: Text('No notifications')),
+                    ? const Center(
+                        child: Text(
+                          'No notifications yet',
+                          style: TextStyle(color: AppColors.primaryMaroon),
+                        ),
                       )
                     : ListView.separated(
-                        shrinkWrap: true,
                         itemCount: notifications.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        separatorBuilder: (_, __) => const SizedBox(height: 6),
                         itemBuilder: (_, index) {
                           final item = notifications[index];
-                          return ListTile(
-                            contentPadding: EdgeInsets.zero,
-                            title: Text(item.title),
-                            subtitle: Text(item.message),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.clear),
-                              onPressed: () => notificationProvider
-                                  .clearNotification(item.id),
+                          return Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppColors.background,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        item.title,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: AppColors.primaryMaroon,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    InkWell(
+                                      onTap: () => notificationProvider
+                                          .clearNotification(item.id),
+                                      borderRadius: BorderRadius.circular(12),
+                                      child: const Padding(
+                                        padding: EdgeInsets.all(2),
+                                        child: Icon(
+                                          Icons.close,
+                                          size: 16,
+                                          color: AppColors.primaryMaroon,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  item.message,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    color: AppColors.primaryMaroon,
+                                  ),
+                                ),
+                              ],
                             ),
                           );
                         },
                       ),
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext),
-                  child: const Text('Close'),
-                ),
-              ],
-            );
-          },
+            ],
+          ),
         );
       },
     );
-    _isNotificationsDialogOpen = false;
+  }
+
+  Widget _buildMotivationalSayingsPanel() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppColors.accentYellow.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(
+                Icons.auto_awesome,
+                color: AppColors.primaryMaroon,
+                size: 18,
+              ),
+              SizedBox(width: 8),
+              Text(
+                'Motivation Corner',
+                style: TextStyle(
+                  color: AppColors.primaryMaroon,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: PageView.builder(
+              controller: _sayingsPageController,
+              scrollDirection: Axis.vertical,
+              itemCount: _motivationalSayings.length,
+              onPageChanged: (index) => _currentSayingIndex = index,
+              itemBuilder: (_, index) {
+                return Center(
+                  child: Text(
+                    _motivationalSayings[index],
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      height: 1.35,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   void dispose() {
     _animationController.dispose();
     _fabAnimationController.dispose();
+    _sayingsTimer?.cancel();
+    _sayingsPageController.dispose();
     super.dispose();
   }
 
@@ -304,51 +544,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       appBar: AppBar(
         title: const Text('Home'),
         backgroundColor: AppColors.primaryMaroon,
-        actions: [
-          Consumer<NotificationProvider>(
-            builder: (_, notificationProvider, __) {
-              final unreadCount = notificationProvider.unreadCount;
-
-              return Padding(
-                padding: const EdgeInsets.only(right: 10),
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    IconButton(
-                      onPressed: _showNotificationsDialog,
-                      icon: const Icon(Icons.notifications),
-                    ),
-                    if (unreadCount > 0)
-                      Positioned(
-                        right: 4,
-                        top: 4,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.red.shade700,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          constraints: const BoxConstraints(minWidth: 18),
-                          child: Text(
-                            unreadCount > 99 ? '99+' : unreadCount.toString(),
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              );
-            },
-          ),
-        ],
+        actions: const [],
       ),
       drawer: AppDrawer(
         firstName: _userDetails?['first_name'],
@@ -383,18 +579,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 20),
                   Expanded(
-                    child: _events.isNotEmpty
-                        ? SingleChildScrollView(
-                            child: UpcomingEvents(events: _events),
-                          )
-                        : const Center(
-                            child: Text(
-                              'No upcoming events',
-                              style: TextStyle(color: AppColors.primaryMaroon),
-                            ),
-                          ),
+                    child: Column(
+                      children: [
+                        const SizedBox(height: 12),
+                        Expanded(flex: 3, child: _buildNotificationsPanel()),
+                        const SizedBox(height: 12),
+                        Expanded(
+                          flex: 7,
+                          child: _events.isNotEmpty
+                              ? SingleChildScrollView(
+                                  child: UpcomingEvents(events: _events),
+                                )
+                              : _buildMotivationalSayingsPanel(),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
               )
@@ -404,54 +604,55 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               )
             : Container(), // show empty container if none of above
       ),
-      floatingActionButton:
-          (_userDetails != null && _userDetails!['role'] != 'vadak')
+      floatingActionButton: _hasFabActions
           ? SizedBox(
               width: 150,
               height: 150,
               child: Stack(
                 alignment: Alignment.bottomRight,
                 children: [
-                  Positioned(
-                    bottom: 80,
-                    right: 0,
-                    child: ScaleTransition(
-                      scale: _fabAnimation,
-                      child: FloatingActionButton(
-                        heroTag: 'add_mirvnuk',
-                        mini: true,
-                        backgroundColor: AppColors.accentYellow,
-                        onPressed: () async {
-                          _toggleFabMenu();
-                          await MirvunkForm.open(context);
-                          String? token = await storage.read(
-                            key: 'access_token',
-                          );
-                          if (token != null && token.isNotEmpty) {
-                            _loadUserDetails(token);
-                          }
-                        },
-                        child: const Icon(Icons.event),
+                  if (_canOpenMirvunkForm)
+                    Positioned(
+                      bottom: 80,
+                      right: 0,
+                      child: ScaleTransition(
+                        scale: _fabAnimation,
+                        child: FloatingActionButton(
+                          heroTag: 'add_mirvnuk',
+                          mini: true,
+                          backgroundColor: AppColors.accentYellow,
+                          onPressed: () async {
+                            _toggleFabMenu();
+                            await MirvunkForm.open(context);
+                            String? token = await storage.read(
+                              key: 'access_token',
+                            );
+                            if (token != null && token.isNotEmpty) {
+                              _loadUserDetails(token);
+                            }
+                          },
+                          child: const Icon(Icons.event),
+                        ),
                       ),
                     ),
-                  ),
-                  Positioned(
-                    bottom: 0,
-                    right: 80,
-                    child: ScaleTransition(
-                      scale: _fabAnimation,
-                      child: FloatingActionButton(
-                        heroTag: 'add_notification',
-                        mini: true,
-                        backgroundColor: AppColors.accentYellow,
-                        onPressed: () async {
-                          _toggleFabMenu();
-                          await NotificationForm.open(context);
-                        },
-                        child: const Icon(Icons.notifications),
+                  if (_canSendNotification)
+                    Positioned(
+                      bottom: 0,
+                      right: 80,
+                      child: ScaleTransition(
+                        scale: _fabAnimation,
+                        child: FloatingActionButton(
+                          heroTag: 'add_notification',
+                          mini: true,
+                          backgroundColor: AppColors.accentYellow,
+                          onPressed: () async {
+                            _toggleFabMenu();
+                            await NotificationForm.open(context);
+                          },
+                          child: const Icon(Icons.notifications),
+                        ),
                       ),
                     ),
-                  ),
                   FloatingActionButton(
                     heroTag: 'main',
                     backgroundColor: AppColors.accentYellow,

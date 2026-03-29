@@ -1,10 +1,22 @@
 import 'package:flutter/material.dart';
+import '../config/api_endpoints.dart';
 import '../models/user.dart';
 import '../services/api_service.dart';
 import '../theme/app_colors.dart';
 
 class AllUsersScreen extends StatefulWidget {
-  const AllUsersScreen({super.key});
+  final bool showStatusFilters;
+  final bool isPathakAdmin;
+  final bool isGatPramukh;
+  final String? gatPramukhName;
+
+  const AllUsersScreen({
+    super.key,
+    this.showStatusFilters = true,
+    this.isPathakAdmin = false,
+    this.isGatPramukh = false,
+    this.gatPramukhName,
+  });
 
   @override
   State<AllUsersScreen> createState() => _AllUsersScreenState();
@@ -13,7 +25,10 @@ class AllUsersScreen extends StatefulWidget {
 class _AllUsersScreenState extends State<AllUsersScreen> {
   List<User> _users = [];
   List<User> _filteredUsers = [];
+  List<String> _gatFilterOptions = ['all'];
+  Map<String, String> _gatAliasToCanonical = {};
   String _statusFilter = 'all';
+  String _selectedGatName = 'all';
 
   bool _isLoading = true;
   String? _errorMessage;
@@ -22,6 +37,18 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
 
   int get _pendingCount =>
       _users.where((user) => user.isActive == false).length;
+
+  String _normalizeText(String? value) {
+    return (value ?? '').trim().toLowerCase();
+  }
+
+  String _normalizeGat(String? value) => _normalizeText(value);
+
+  String _resolveCanonicalGat(String? value) {
+    final normalized = _normalizeGat(value);
+    if (normalized.isEmpty) return normalized;
+    return _gatAliasToCanonical[normalized] ?? normalized;
+  }
 
   @override
   void initState() {
@@ -44,10 +71,61 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
       });
 
       final users = await ApiService.fetchAllUsers();
+      List<String> gatOptions = _gatFilterOptions;
+      Map<String, String> gatAliasToCanonical = <String, String>{};
+
+      if (widget.isPathakAdmin) {
+        try {
+          final gats = await ApiService.fetchGats();
+          for (final gat in gats) {
+            final name = gat['name']?.toString().trim();
+            if (name == null || name.isEmpty) continue;
+            final canonical = _normalizeGat(name);
+            gatAliasToCanonical[canonical] = canonical;
+
+            final id = gat['id']?.toString().trim();
+            if (id != null && id.isNotEmpty) {
+              gatAliasToCanonical[_normalizeGat(id)] = canonical;
+            }
+          }
+
+          final names =
+              gats
+                  .map((gat) => gat['name']?.toString().trim())
+                  .whereType<String>()
+                  .where((name) => name.isNotEmpty)
+                  .toSet()
+                  .toList()
+                ..sort();
+          gatOptions = ['all', ...names];
+        } catch (_) {
+          // Fallback to deriving gat names from users if gats endpoint fails.
+          final names =
+              users
+                  .map((user) => user.gatName?.trim())
+                  .whereType<String>()
+                  .where((name) => name.isNotEmpty)
+                  .toSet()
+                  .toList()
+                ..sort();
+          gatOptions = ['all', ...names];
+
+          for (final name in names) {
+            final normalized = _normalizeGat(name);
+            gatAliasToCanonical[normalized] = normalized;
+          }
+        }
+      }
 
       setState(() {
         _users = users;
         _filteredUsers = users;
+        _gatFilterOptions = gatOptions;
+        _gatAliasToCanonical = gatAliasToCanonical;
+        if (_selectedGatName != 'all' &&
+            !_gatFilterOptions.contains(_selectedGatName)) {
+          _selectedGatName = 'all';
+        }
         _isLoading = false;
       });
       _applyFilters();
@@ -58,7 +136,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
       }
 
       setState(() {
-        _errorMessage = e.toString();
+        _errorMessage = ApiEndpoints.genericApiFailureMessage;
         _isLoading = false;
       });
     }
@@ -79,7 +157,29 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
           _ => true,
         };
 
-        return matchesSearch && matchesStatus;
+        final userGat = user.gatName?.trim() ?? '';
+        final normalizedUserGat = _resolveCanonicalGat(userGat);
+        final normalizedSelectedGat = _resolveCanonicalGat(_selectedGatName);
+        final matchesGat =
+            !widget.isPathakAdmin ||
+            _selectedGatName == 'all' ||
+            normalizedUserGat == normalizedSelectedGat;
+
+        final shouldApplyGatPramukhScope =
+            widget.isGatPramukh && !widget.isPathakAdmin;
+        final normalizedLoggedInGatPramukh = _normalizeText(
+          widget.gatPramukhName,
+        );
+        final normalizedUserGatPramukh = _normalizeText(user.gatPramukhName);
+        final matchesGatPramukhScope =
+            !shouldApplyGatPramukhScope ||
+            normalizedLoggedInGatPramukh.isEmpty ||
+            normalizedUserGatPramukh == normalizedLoggedInGatPramukh;
+
+        return matchesSearch &&
+            matchesStatus &&
+            matchesGat &&
+            matchesGatPramukhScope;
       }).toList();
     });
   }
@@ -89,6 +189,14 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
       return;
     }
     _statusFilter = status;
+    _applyFilters();
+  }
+
+  void _setGatFilter(String? gatName) {
+    if (gatName == null || _selectedGatName == gatName) {
+      return;
+    }
+    _selectedGatName = gatName;
     _applyFilters();
   }
 
@@ -149,7 +257,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load user details: $e')),
+        const SnackBar(content: Text(ApiEndpoints.genericApiFailureMessage)),
       );
     } finally {
       if (mounted) {
@@ -167,17 +275,6 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
 
     try {
       await ApiService.activateUser(userId);
-
-      try {
-        await ApiService.sendPersonalNotification(
-          targetUser: userId,
-          title: 'Account Approved',
-          message:
-              'Your account has been approved by admin. You can now login.',
-        );
-      } catch (_) {
-        // User activation already succeeded; notification failure should not block approval UX.
-      }
 
       if (!mounted) return;
 
@@ -211,9 +308,9 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         return;
       }
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to approve user: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(ApiEndpoints.genericApiFailureMessage)),
+      );
       setState(() {
         _isLoading = false;
       });
@@ -508,45 +605,89 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                     ),
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Row(
-                    children: [
-                      ChoiceChip(
-                        label: const Text('All'),
-                        selected: _statusFilter == 'all',
-                        selectedColor: AppColors.accentYellow,
-                        onSelected: (_) => _setStatusFilter('all'),
-                        labelStyle: const TextStyle(
-                          color: AppColors.primaryMaroon,
-                          fontWeight: FontWeight.w600,
+                if (widget.showStatusFilters)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        ChoiceChip(
+                          label: const Text('All'),
+                          selected: _statusFilter == 'all',
+                          selectedColor: AppColors.accentYellow,
+                          onSelected: (_) => _setStatusFilter('all'),
+                          labelStyle: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      ChoiceChip(
-                        label: Text('Pending ($_pendingCount)'),
-                        selected: _statusFilter == 'pending',
-                        selectedColor: AppColors.accentYellow,
-                        onSelected: (_) => _setStatusFilter('pending'),
-                        labelStyle: const TextStyle(
-                          color: AppColors.primaryMaroon,
-                          fontWeight: FontWeight.w600,
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: Text('Pending ($_pendingCount)'),
+                          selected: _statusFilter == 'pending',
+                          selectedColor: AppColors.accentYellow,
+                          onSelected: (_) => _setStatusFilter('pending'),
+                          labelStyle: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      ChoiceChip(
-                        label: const Text('Approved'),
-                        selected: _statusFilter == 'approved',
-                        selectedColor: AppColors.accentYellow,
-                        onSelected: (_) => _setStatusFilter('approved'),
-                        labelStyle: const TextStyle(
-                          color: AppColors.primaryMaroon,
-                          fontWeight: FontWeight.w600,
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: const Text('Approved'),
+                          selected: _statusFilter == 'approved',
+                          selectedColor: AppColors.accentYellow,
+                          onSelected: (_) => _setStatusFilter('approved'),
+                          labelStyle: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
+                if (widget.isPathakAdmin)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primaryMaroon.withAlpha(16),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _gatFilterOptions.contains(_selectedGatName)
+                              ? _selectedGatName
+                              : 'all',
+                          isExpanded: true,
+                          icon: const Icon(
+                            Icons.keyboard_arrow_down,
+                            color: AppColors.primaryMaroon,
+                          ),
+                          style: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          items: _gatFilterOptions
+                              .map(
+                                (gat) => DropdownMenuItem<String>(
+                                  value: gat,
+                                  child: Text(gat == 'all' ? 'All Gats' : gat),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: _setGatFilter,
+                        ),
+                      ),
+                    ),
+                  ),
                 const SizedBox(height: 10),
                 Expanded(
                   child: _filteredUsers.isEmpty

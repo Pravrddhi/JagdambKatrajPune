@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../config/api_endpoints.dart';
 import '../services/api_service.dart';
 import '../theme/app_colors.dart';
 
@@ -111,7 +112,7 @@ class _NotificationDialogState extends State<_NotificationDialog> {
       }
 
       setState(() {
-        _inlineError = 'Failed to send notification: $e';
+        _inlineError = ApiEndpoints.genericApiFailureMessage;
       });
     } finally {
       if (mounted) {
@@ -124,84 +125,155 @@ class _NotificationDialogState extends State<_NotificationDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return Dialog(
-      insetPadding: const EdgeInsets.all(10),
-      backgroundColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Send Notification',
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: AppColors.primaryMaroon,
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close, color: AppColors.primaryMaroon),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return AnimatedPadding(
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOut,
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: Dialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: SafeArea(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.of(context).size.height * 0.82,
             ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _titleController,
-              decoration: const InputDecoration(
-                labelText: 'Title',
-                prefixIcon: Icon(Icons.title, color: AppColors.primaryMaroon),
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _messageController,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                labelText: 'Message',
-                prefixIcon: Icon(Icons.message, color: AppColors.primaryMaroon),
-                border: OutlineInputBorder(),
-              ),
-            ),
-            if (_inlineError != null) ...[
-              const SizedBox(height: 10),
-              Text(_inlineError!, style: const TextStyle(color: Colors.red)),
-            ],
-            const SizedBox(height: 14),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accentYellow,
-                  foregroundColor: AppColors.primaryMaroon,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-                onPressed: _isSubmitting ? null : _submit,
-                child: _isSubmitting
-                    ? const SizedBox(
-                        height: 18,
-                        width: 18,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
+            child: Scrollbar(
+              thumbVisibility: true,
+              child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          decoration: BoxDecoration(
+                            color: AppColors.accentYellow.withValues(
+                              alpha: 0.3,
+                            ),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          padding: const EdgeInsets.all(8),
+                          child: const Icon(
+                            Icons.notifications_active,
+                            color: AppColors.primaryMaroon,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Text(
+                            'Send Notification',
+                            style: TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.primaryMaroon,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.close,
+                            color: AppColors.primaryMaroon,
+                          ),
+                          tooltip: 'Close',
+                          onPressed: () => Navigator.of(context).pop(),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Enter title and message to notify all targeted users.',
+                      style: TextStyle(color: AppColors.primaryMaroon),
+                    ),
+                    const SizedBox(height: 14),
+                    TextFormField(
+                      controller: _titleController,
+                      textInputAction: TextInputAction.next,
+                      decoration: const InputDecoration(
+                        labelText: 'Title',
+                        hintText: 'Eg: Practice Update',
+                        prefixIcon: Icon(
+                          Icons.title,
                           color: AppColors.primaryMaroon,
                         ),
-                      )
-                    : const Text(
-                        'Submit',
-                        style: TextStyle(color: AppColors.primaryMaroon),
+                        border: OutlineInputBorder(),
                       ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _messageController,
+                      minLines: 3,
+                      maxLines: 6,
+                      decoration: const InputDecoration(
+                        alignLabelWithHint: true,
+                        labelText: 'Message',
+                        hintText: 'Write your notification message here...',
+                        prefixIcon: Icon(
+                          Icons.message,
+                          color: AppColors.primaryMaroon,
+                        ),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    if (_inlineError != null) ...[
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.red.shade50,
+                          border: Border.all(color: Colors.red.shade200),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          _inlineError!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.accentYellow,
+                          foregroundColor: AppColors.primaryMaroon,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        onPressed: _isSubmitting ? null : _submit,
+                        child: _isSubmitting
+                            ? const SizedBox(
+                                height: 18,
+                                width: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: AppColors.primaryMaroon,
+                                ),
+                              )
+                            : const Text(
+                                'Send Notification',
+                                style: TextStyle(
+                                  color: AppColors.primaryMaroon,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
