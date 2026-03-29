@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:jagdhambtrustpune/config/api_endpoints.dart';
+import 'package:jagdhambtrustpune/services/bug_report_service.dart';
 import 'package:jagdhambtrustpune/theme/app_colors.dart';
 import '../widgets/common_button.dart';
 import '../widgets/input_box.dart'; // import your custom input box
@@ -56,8 +57,9 @@ class EmergencyContactDialog {
                           ),
                         ],
                         validator: (value) {
-                          if (value == null || value.isEmpty)
+                          if (value == null || value.isEmpty) {
                             return "Emergency Name is required.";
+                          }
                           return null;
                         },
                       ),
@@ -73,8 +75,9 @@ class EmergencyContactDialog {
                           FilteringTextInputFormatter.digitsOnly,
                         ],
                         validator: (value) {
-                          if (value == null || value.isEmpty)
+                          if (value == null || value.isEmpty) {
                             return "Emergency Phone is required.";
+                          }
                           return null;
                         },
                       ),
@@ -136,7 +139,7 @@ class EmergencyContactDialog {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(
                             content: Text(
-                              "Failed to update emergency contact",
+                              ApiEndpoints.genericApiFailureMessage,
                               selectionColor: AppColors.accentYellow,
                             ),
                           ),
@@ -180,9 +183,22 @@ class EmergencyContactDialog {
         final data = jsonDecode(response.body);
         return data["success"] == true;
       }
+
+      await BugReportService.reportApiFailure(
+        title: 'Emergency contact update API failed',
+        errorMessage: response.body,
+        pageUrl: '/emergency-contact',
+        statusCode: response.statusCode,
+        endpoint: ApiEndpoints.getEmergencyContacts,
+      );
       return false;
     } catch (e) {
-      print("Error submitting emergency contact: $e");
+      await BugReportService.reportApiFailure(
+        title: 'Emergency contact update API exception',
+        errorMessage: e.toString(),
+        pageUrl: '/emergency-contact',
+        endpoint: ApiEndpoints.getEmergencyContacts,
+      );
       return false;
     }
   }

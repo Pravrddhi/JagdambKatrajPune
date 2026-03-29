@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_endpoints.dart';
 import '../components/get_device_id.dart';
+import '../services/bug_report_service.dart';
 import '../widgets/setpin_dialog.dart';
 import '../widgets/common_button.dart';
 import '../widgets/input_box.dart';
@@ -17,7 +18,8 @@ class ResetPinScreen extends StatefulWidget {
 }
 
 class _ResetPinScreenState extends State<ResetPinScreen> {
-  final TextEditingController phoneController = TextEditingController(); // Controller for phone input
+  final TextEditingController phoneController =
+      TextEditingController(); // Controller for phone input
   bool isLoading = false; // Loading indicator
   String errorMessage = ''; // Error message display string
   bool _isPhoneNumberValid = false; // Tracks if phone input length is valid
@@ -25,7 +27,9 @@ class _ResetPinScreenState extends State<ResetPinScreen> {
   @override
   void initState() {
     super.initState();
-    phoneController.addListener(_validatePhoneNumber); // Validate phone length on input changes
+    phoneController.addListener(
+      _validatePhoneNumber,
+    ); // Validate phone length on input changes
   }
 
   @override
@@ -58,7 +62,7 @@ class _ResetPinScreenState extends State<ResetPinScreen> {
     }
 
     setState(() {
-      isLoading = true;  // Show spinner during API call
+      isLoading = true; // Show spinner during API call
       errorMessage = ''; // Clear previous error
     });
 
@@ -81,15 +85,27 @@ class _ResetPinScreenState extends State<ResetPinScreen> {
         showSetPinDialog(context, phoneNumber, true);
       } else {
         // API returned error, show message if present
-        print(data['message']);
+        await BugReportService.reportApiFailure(
+          title: 'Verify device phone API failed',
+          errorMessage: response.body,
+          pageUrl: '/reset-pin',
+          statusCode: response.statusCode,
+          endpoint: ApiEndpoints.verifyDevicePhone,
+        );
         setState(() {
-          errorMessage = data['message'] ?? "Device and phone do not match";
+          errorMessage = ApiEndpoints.genericApiFailureMessage;
         });
       }
     } catch (e) {
       // Network or parsing error
+      await BugReportService.reportApiFailure(
+        title: 'Verify device phone API exception',
+        errorMessage: e.toString(),
+        pageUrl: '/reset-pin',
+        endpoint: ApiEndpoints.verifyDevicePhone,
+      );
       setState(() {
-        errorMessage = "Network error. Please try again.";
+        errorMessage = ApiEndpoints.genericApiFailureMessage;
       });
     } finally {
       // Stop loading spinner whether success or failure

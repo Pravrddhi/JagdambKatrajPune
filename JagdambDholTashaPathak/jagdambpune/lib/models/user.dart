@@ -30,6 +30,18 @@ class User {
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
+    final dynamic gatRaw =
+        json['gat_name'] ??
+        json['gat'] ??
+        json['gatName'] ??
+        json['group'] ??
+        json['gat_id'];
+    final String? parsedGatName = switch (gatRaw) {
+      null => null,
+      Map<String, dynamic> map => map['name']?.toString(),
+      _ => gatRaw.toString(),
+    };
+
     return User(
       id: json['id'] is int
           ? json['id'] as int
@@ -48,7 +60,7 @@ class User {
       bloodGroup: json['blood_group'],
       emergencyContactName: json['emergency_contact_name'],
       emergencyContactPhone: json['emergency_contact_phone'],
-      gatName: json['gat_name'],
+      gatName: parsedGatName,
       gatPramukhName: json['gat_pramukh_name'],
     );
   }

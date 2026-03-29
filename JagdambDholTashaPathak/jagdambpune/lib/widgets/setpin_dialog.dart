@@ -4,6 +4,7 @@ import '../theme/app_colors.dart';
 import '../widgets/input_box.dart';
 import 'common_button.dart';
 import '../config/api_endpoints.dart';
+import '../services/bug_report_service.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -30,41 +31,60 @@ Future<String> showSetPinDialog(
 
                 setState(() => isLoading = true);
 
-                final response = await http.post(
-                  Uri.parse(ApiEndpoints.setPin),
-                  headers: {'Content-Type': 'application/json'},
-                  body: jsonEncode({
-                    'phone_number': phoneNumber,
-                    'pin': pinController.text,
-                  }),
-                );
+                try {
+                  final response = await http.post(
+                    Uri.parse(ApiEndpoints.setPin),
+                    headers: {'Content-Type': 'application/json'},
+                    body: jsonEncode({
+                      'phone_number': phoneNumber,
+                      'pin': pinController.text,
+                    }),
+                  );
 
-                setState(() => isLoading = false);
+                  setState(() => isLoading = false);
 
-                if (response.statusCode == 200) {
-                  final data = jsonDecode(response.body);
-                  print(data);
-                  await storage.write(key: 'pin', value: pinController.text);
-                  if (isReset) {
-                    // If it's a reset flow, navigate to the login screen
-                    Navigator.of(dialogContext).pop();
-                    Navigator.of(dialogContext).pushReplacementNamed('/login');
+                  if (response.statusCode == 200) {
+                    final data = jsonDecode(response.body);
+                    await storage.write(key: 'pin', value: pinController.text);
+                    if (isReset) {
+                      // If it's a reset flow, navigate to the login screen
+                      Navigator.of(dialogContext).pop();
+                      Navigator.of(
+                        dialogContext,
+                      ).pushReplacementNamed('/login');
+                    } else {
+                      await storage.write(
+                        key: 'access_token',
+                        value: data['access_token'],
+                      );
+                      await storage.write(
+                        key: 'refresh_token',
+                        value: data['refresh_token'],
+                      );
+                      Navigator.of(dialogContext).pop(data['access_token']);
+                    }
                   } else {
-                    await storage.write(
-                      key: 'access_token',
-                      value: data['access_token'],
+                    await BugReportService.reportApiFailure(
+                      title: 'Set PIN API failed',
+                      errorMessage: response.body,
+                      pageUrl: '/set-pin',
+                      statusCode: response.statusCode,
+                      endpoint: ApiEndpoints.setPin,
                     );
-                    await storage.write(
-                      key: 'refresh_token',
-                      value: data['refresh_token'],
-                    );
-                    Navigator.of(dialogContext).pop(data['access_token']);
+                    setState(() {
+                      errorText = ApiEndpoints.genericApiFailureMessage;
+                    });
                   }
-                } else {
-                  final errorData = jsonDecode(response.body);
-                  print(errorData);
+                } catch (e) {
+                  await BugReportService.reportApiFailure(
+                    title: 'Set PIN API exception',
+                    errorMessage: e.toString(),
+                    pageUrl: '/set-pin',
+                    endpoint: ApiEndpoints.setPin,
+                  );
                   setState(() {
-                    errorText = errorData['message'] ?? 'Something went wrong';
+                    isLoading = false;
+                    errorText = ApiEndpoints.genericApiFailureMessage;
                   });
                 }
               }
