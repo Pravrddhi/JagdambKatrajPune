@@ -41,6 +41,13 @@ class WebApiService {
       final bool isSuccessful =
           response.statusCode == 200 && decoded['status'] == true;
       if (!isSuccessful) {
+        final message =
+            decoded['message']?.toString() ??
+            decoded['detail']?.toString() ??
+            decoded['error']?.toString();
+        if (message != null && message.trim().isNotEmpty) {
+          throw Exception(message.trim());
+        }
         throw Exception(
           'Web password login failed (status code ${response.statusCode})',
         );

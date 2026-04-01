@@ -35,8 +35,22 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
 
   final TextEditingController _searchController = TextEditingController();
 
-  int get _pendingCount =>
-      _users.where((user) => user.isActive == false).length;
+  int get _pendingCount => _users.where((user) => _isPending(user)).length;
+
+  int get _rejectedCount => _users.where((user) => _isRejected(user)).length;
+
+  bool _isPending(User user) => user.approvalStatus == 0;
+
+  bool _isApproved(User user) => user.approvalStatus == 1;
+
+  bool _isRejected(User user) => user.approvalStatus == 3;
+
+  String _statusLabel(User user) {
+    if (_isApproved(user)) return 'Approved';
+    if (_isRejected(user)) return 'Rejected';
+    if (_isPending(user)) return 'Pending';
+    return user.isActive == true ? 'Active' : 'Inactive';
+  }
 
   String _normalizeText(String? value) {
     return (value ?? '').trim().toLowerCase();
@@ -152,8 +166,8 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         final matchesSearch = name.contains(query);
 
         final matchesStatus = switch (_statusFilter) {
-          'pending' => user.isActive == false,
-          'approved' => user.isActive != false,
+          'pending' => _isPending(user),
+          'rejected' => _isRejected(user),
           _ => true,
         };
 
@@ -247,7 +261,13 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
     try {
       final detailedUser = await ApiService.fetchUserById(userId);
       if (!mounted) return;
-      _showUserDetails(detailedUser, fallbackUserId: userId);
+      _showUserDetails(
+        detailedUser.copyWith(
+          approvalStatus: detailedUser.approvalStatus ?? user.approvalStatus,
+          isActive: detailedUser.isActive ?? user.isActive,
+        ),
+        fallbackUserId: userId,
+      );
     } catch (e) {
       if (!mounted) return;
 
@@ -274,7 +294,11 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
     });
 
     try {
-      await ApiService.activateUser(userId);
+      final message = await ApiService.updateUserApproval(
+        userId: userId,
+        decision: 1,
+        comment: 'All details verified.',
+      );
 
       if (!mounted) return;
 
@@ -286,7 +310,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         context: context,
         builder: (_) => AlertDialog(
           title: const Text('Success'),
-          content: const Text('User approved'),
+          content: Text(message),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -308,13 +332,111 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         return;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text(ApiEndpoints.genericApiFailureMessage)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
       setState(() {
         _isLoading = false;
       });
     }
+  }
+
+  Future<void> _rejectUser(int userId) async {
+    final commentController = TextEditingController();
+    String? errorText;
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Reject User'),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Rejection comment is required.'),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: commentController,
+                      autofocus: true,
+                      minLines: 2,
+                      maxLines: 4,
+                      decoration: InputDecoration(
+                        hintText: 'Enter rejection reason',
+                        errorText: errorText,
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    final comment = commentController.text.trim();
+                    if (comment.isEmpty) {
+                      setDialogState(() {
+                        errorText = 'Rejection comment is required.';
+                      });
+                      return;
+                    }
+
+                    Navigator.pop(dialogContext);
+                    setState(() {
+                      _isLoading = true;
+                    });
+
+                    try {
+                      final message = await ApiService.updateUserApproval(
+                        userId: userId,
+                        decision: 0,
+                        comment: comment,
+                      );
+
+                      if (!mounted) return;
+                      // Close the user-details popup after reject dialog is closed.
+                      Navigator.of(this.context).pop();
+                      _markUserAsRejectedLocally(userId);
+                      setState(() {
+                        _isLoading = false;
+                      });
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text(message)));
+                    } catch (e) {
+                      if (!mounted) return;
+
+                      if (_isSessionExpiredError(e)) {
+                        await _redirectToLoginWithMessage();
+                        return;
+                      }
+
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text(e.toString())));
+                      setState(() {
+                        _isLoading = false;
+                      });
+                    }
+                  },
+                  child: const Text('Reject'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    commentController.dispose();
   }
 
   void _markUserAsApprovedLocally(int userId) {
@@ -323,21 +445,18 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         return user;
       }
 
-      return User(
-        id: user.id,
-        isActive: true,
-        phoneNumber: user.phoneNumber,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        instrument: user.instrument,
-        sex: user.sex,
-        role: user.role,
-        bloodGroup: user.bloodGroup,
-        emergencyContactName: user.emergencyContactName,
-        emergencyContactPhone: user.emergencyContactPhone,
-        gatName: user.gatName,
-        gatPramukhName: user.gatPramukhName,
-      );
+      return user.copyWith(isActive: true, approvalStatus: 1);
+    }).toList();
+    _applyFilters();
+  }
+
+  void _markUserAsRejectedLocally(int userId) {
+    _users = _users.map<User>((user) {
+      if (user.id != userId) {
+        return user;
+      }
+
+      return user.copyWith(isActive: false, approvalStatus: 3);
     }).toList();
     _applyFilters();
   }
@@ -391,8 +510,9 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                 children: [
                   _row('Phone', user.phoneNumber),
                   _row('Role', user.role),
-                  _row('Status', user.isActive == true ? 'Active' : 'Inactive'),
+                  _row('Status', _statusLabel(user)),
                   _row('Instrument', user.instrument),
+                  _row('Joined Year', user.joiningYear),
                   _row('Sex', user.sex),
                   _row('Blood Group', user.bloodGroup),
                 ],
@@ -410,7 +530,21 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
           ),
         ),
         actions: [
-          if (user.isActive != true)
+          if (_statusFilter == 'pending' && _isPending(user))
+            TextButton(
+              onPressed: effectiveUserId == null
+                  ? null
+                  : () => _rejectUser(effectiveUserId),
+              child: const Text(
+                'Reject',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          if ((_statusFilter == 'pending' && _isPending(user)) ||
+              (_statusFilter == 'rejected' && _isRejected(user)))
             ElevatedButton(
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.accentYellow,
@@ -633,10 +767,10 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                         ),
                         const SizedBox(width: 8),
                         ChoiceChip(
-                          label: const Text('Approved'),
-                          selected: _statusFilter == 'approved',
+                          label: Text('Rejected ($_rejectedCount)'),
+                          selected: _statusFilter == 'rejected',
                           selectedColor: AppColors.accentYellow,
-                          onSelected: (_) => _setStatusFilter('approved'),
+                          onSelected: (_) => _setStatusFilter('rejected'),
                           labelStyle: const TextStyle(
                             color: AppColors.primaryMaroon,
                             fontWeight: FontWeight.w600,

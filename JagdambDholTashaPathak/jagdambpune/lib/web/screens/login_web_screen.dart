@@ -42,7 +42,7 @@ class LoginWebScreen extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: AppColors.primaryMaroon,
               borderRadius: BorderRadius.circular(22),
               boxShadow: const [
                 BoxShadow(
@@ -64,7 +64,7 @@ class LoginWebScreen extends StatelessWidget {
                 const Text(
                   'Login',
                   style: TextStyle(
-                    color: AppColors.primaryMaroon,
+                    color: AppColors.textLight,
                     fontSize: 30,
                     fontWeight: FontWeight.bold,
                   ),
@@ -76,15 +76,13 @@ class LoginWebScreen extends StatelessWidget {
                   keyboardType: TextInputType.phone,
                   maxLength: 10,
                   inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  useLightStyle: true,
                   onChanged: onPhoneChanged,
                 ),
                 const SizedBox(height: 14),
                 PremiumInputBox(
                   controller: passwordController,
-                  label: 'Enter password',
-                  isPassword: true,
-                  useLightStyle: true,
+                  label: 'Enter 6-digit PIN',
+                  isPin: true,
                   onChanged: onPasswordChanged,
                 ),
                 if (errorMessage.isNotEmpty)
@@ -93,7 +91,7 @@ class LoginWebScreen extends StatelessWidget {
                     child: Text(
                       errorMessage,
                       style: const TextStyle(
-                        color: AppColors.errorRed,
+                        color: AppColors.accentYellow,
                         fontSize: 14,
                       ),
                     ),
@@ -112,7 +110,7 @@ class LoginWebScreen extends StatelessWidget {
                     width: 18,
                     child: CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: AppColors.primaryMaroon,
+                      color: AppColors.accentYellow,
                     ),
                   )
                 else
@@ -125,7 +123,7 @@ class LoginWebScreen extends StatelessWidget {
                           child: const Text(
                             'Registration',
                             style: TextStyle(
-                              color: AppColors.primaryMaroon,
+                              color: AppColors.accentYellow,
                               decoration: TextDecoration.underline,
                               fontSize: 14,
                             ),
@@ -137,7 +135,7 @@ class LoginWebScreen extends StatelessWidget {
                           child: const Text(
                             'Reset PIN',
                             style: TextStyle(
-                              color: AppColors.primaryMaroon,
+                              color: AppColors.accentYellow,
                               decoration: TextDecoration.underline,
                               fontSize: 14,
                             ),

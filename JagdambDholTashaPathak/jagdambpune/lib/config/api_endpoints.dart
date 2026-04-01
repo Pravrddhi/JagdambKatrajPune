@@ -1,7 +1,5 @@
 // lib/config/api_endpoints.dart
 
-import 'package:flutter/foundation.dart';
-
 /// Centralized class for managing API endpoints and related utilities.
 class ApiEndpoints {
   // Base URL for API requests. Change this according to environment.
@@ -87,6 +85,9 @@ class ApiEndpoints {
   /// Base endpoint to activate a user (api/notifications/activate-user/<int:user_id>/)
   static final String activateUserBase = '$baseUrl/notifications/activate-user';
 
+  /// Base endpoint to approve/reject a user (PATCH /api/users/{user_id}/approval/)
+  static final String userApprovalBase = '$baseUrl/users';
+
   /// Endpoint to refresh access token using refresh token
   static final String refreshToken = '$baseUrl/auth/token/refresh/';
 
@@ -135,4 +136,7 @@ class ApiEndpoints {
 
   /// Build endpoint to activate user by id
   static String getActivateUser(int id) => '$activateUserBase/$id/';
+
+  /// Build endpoint to approve/reject user by id
+  static String getUserApproval(int id) => '$userApprovalBase/$id/approval/';
 }

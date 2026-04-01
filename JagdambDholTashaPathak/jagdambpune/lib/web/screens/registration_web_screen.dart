@@ -1,11 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
-import '../../components/get_device_id.dart';
 import '../../config/api_endpoints.dart';
 import '../../services/bug_report_service.dart';
 import '../../theme/app_colors.dart';
@@ -33,6 +33,8 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
 
   String? selectedSex;
   String? selectedInstrument;
+  DateTime? selectedDob;
+  int? selectedJoiningYear;
 
   bool _isCheckingPhone = false;
   bool _isFormValid = false;
@@ -40,6 +42,17 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
 
   List<String> _instruments = [];
   Timer? _debounceTimer;
+
+  /// Generate a random device ID with 5-10 characters mix of digits and letters
+  String _generateRandomDeviceId() {
+    const String chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    Random random = Random();
+    int length = random.nextInt(6) + 5; // 5 to 10 characters
+    return List.generate(
+      length,
+      (index) => chars[random.nextInt(chars.length)],
+    ).join();
+  }
 
   @override
   void initState() {
@@ -230,7 +243,11 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
           'last_name': _lastNameController.text,
           'gender': selectedSex,
           'instrument': selectedInstrument,
-          'device_id': await getDeviceId(),
+          'dob': selectedDob != null
+              ? '${selectedDob!.year}-${selectedDob!.month.toString().padLeft(2, '0')}-${selectedDob!.day.toString().padLeft(2, '0')}'
+              : null,
+          'joining_year': selectedJoiningYear,
+          'device_id': _generateRandomDeviceId(),
           'pathak_id': ApiEndpoints.pathakId,
         }),
       );
@@ -240,6 +257,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
       if (response.statusCode == 201) {
         final data = jsonDecode(response.body);
         final accessToken = data['access_token'];
+        if (!mounted) return;
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -299,7 +317,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: AppColors.primaryMaroon,
                 borderRadius: BorderRadius.circular(22),
                 boxShadow: const [
                   BoxShadow(
@@ -316,7 +334,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                     alignment: Alignment.topLeft,
                     child: IconButton(
                       icon: const Icon(Icons.arrow_back),
-                      color: AppColors.primaryMaroon,
+                      color: AppColors.textLight,
                       onPressed: () => Navigator.of(context).pop(),
                     ),
                   ),
@@ -330,7 +348,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                   const Text(
                     'Registration',
                     style: TextStyle(
-                      color: AppColors.primaryMaroon,
+                      color: AppColors.textLight,
                       fontSize: 30,
                       fontWeight: FontWeight.bold,
                     ),
@@ -342,7 +360,6 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z\s]')),
                     ],
-                    useLightStyle: true,
                   ),
                   if (_fieldErrors['first_name'] != null)
                     Padding(
@@ -350,7 +367,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       child: Text(
                         _fieldErrors['first_name']!,
                         style: const TextStyle(
-                          color: AppColors.errorRed,
+                          color: AppColors.accentYellow,
                           fontSize: 13,
                         ),
                       ),
@@ -362,7 +379,6 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                     inputFormatters: [
                       FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z\s]')),
                     ],
-                    useLightStyle: true,
                   ),
                   if (_fieldErrors['last_name'] != null)
                     Padding(
@@ -370,7 +386,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       child: Text(
                         _fieldErrors['last_name']!,
                         style: const TextStyle(
-                          color: AppColors.errorRed,
+                          color: AppColors.accentYellow,
                           fontSize: 13,
                         ),
                       ),
@@ -383,7 +399,6 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                     maxLength: 10,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     focusNode: _phoneFocusNode,
-                    useLightStyle: true,
                   ),
                   if (_isCheckingPhone)
                     const Padding(
@@ -396,7 +411,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                             child: CircularProgressIndicator(
                               strokeWidth: 2,
                               valueColor: AlwaysStoppedAnimation<Color>(
-                                AppColors.primaryMaroon,
+                                AppColors.accentYellow,
                               ),
                             ),
                           ),
@@ -404,7 +419,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                           Text(
                             'Checking phone number...',
                             style: TextStyle(
-                              color: AppColors.primaryMaroon,
+                              color: AppColors.accentYellow,
                               fontSize: 13,
                             ),
                           ),
@@ -417,7 +432,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       child: Text(
                         _fieldErrors['phone_number']!,
                         style: const TextStyle(
-                          color: AppColors.errorRed,
+                          color: AppColors.accentYellow,
                           fontSize: 13,
                         ),
                       ),
@@ -433,10 +448,6 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       });
                       _validateForm();
                     },
-                    backgroundColor: Colors.white,
-                    labelColor: AppColors.primaryMaroon,
-                    textColor: AppColors.primaryMaroon,
-                    dropdownMenuColor: Colors.white,
                   ),
                   if (_fieldErrors['sex'] != null)
                     Padding(
@@ -444,11 +455,80 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       child: Text(
                         _fieldErrors['sex']!,
                         style: const TextStyle(
-                          color: AppColors.errorRed,
+                          color: AppColors.accentYellow,
                           fontSize: 13,
                         ),
                       ),
                     ),
+                  const SizedBox(height: 16),
+                  GestureDetector(
+                    onTap: () async {
+                      final DateTime? picked = await showDatePicker(
+                        context: context,
+                        initialDate: selectedDob ?? DateTime(2000),
+                        firstDate: DateTime(1950),
+                        lastDate: DateTime.now(),
+                      );
+                      if (picked != null && picked != selectedDob) {
+                        setState(() {
+                          selectedDob = picked;
+                        });
+                        _validateForm();
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryMaroon,
+                        borderRadius: BorderRadius.circular(12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.accentYellow.withAlpha(77),
+                            blurRadius: 12,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            selectedDob != null
+                                ? '${selectedDob!.day}/${selectedDob!.month}/${selectedDob!.year}'
+                                : 'Date of Birth',
+                            style: TextStyle(
+                              color: selectedDob != null
+                                  ? AppColors.textLight
+                                  : AppColors.textLight,
+                              fontSize: 16,
+                            ),
+                          ),
+                          Icon(
+                            Icons.calendar_today,
+                            color: AppColors.accentYellow,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  PremiumDropDown(
+                    label: 'Joining Year',
+                    value: selectedJoiningYear?.toString(),
+                    options: List.generate(
+                      30,
+                      (index) => (DateTime.now().year - index).toString(),
+                    ),
+                    onChanged: (val) {
+                      setState(() {
+                        selectedJoiningYear = int.tryParse(val ?? '');
+                      });
+                      _validateForm();
+                    },
+                  ),
                   const SizedBox(height: 16),
                   PremiumDropDown(
                     label: 'Instrument',
@@ -460,10 +540,6 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       });
                       _validateForm();
                     },
-                    backgroundColor: Colors.white,
-                    labelColor: AppColors.primaryMaroon,
-                    textColor: AppColors.primaryMaroon,
-                    dropdownMenuColor: Colors.white,
                   ),
                   if (_fieldErrors['instrument'] != null)
                     Padding(
@@ -471,7 +547,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       child: Text(
                         _fieldErrors['instrument']!,
                         style: const TextStyle(
-                          color: AppColors.errorRed,
+                          color: AppColors.accentYellow,
                           fontSize: 13,
                         ),
                       ),
