@@ -1,52 +1,72 @@
-name: Flutter CI
+name: Branch Promotion
 
 on:
   push:
-    branches: [develop, pre-release, master]
-  pull_request:
-    branches: [develop, pre-release, master]
+    branches:
+      - develop
+      - pre-release
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: Source branch to promote from
+        required: true
+        default: develop
+      target_branch:
+        description: Target branch to promote into
+        required: true
+        default: pre-release
 
-concurrency:
-  group: flutter-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
-  test:
-    name: Analyze and Test
+  promote-develop-to-pre-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - name: Create/Update PR develop -> pre-release
+        uses: repo-sync/pull-request@v2
         with:
-          channel: stable
+          source_branch: develop
+          destination_branch: pre-release
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          pr_title: "Promote develop to pre-release"
+          pr_body: |
+            Automated promotion PR from `develop` to `pre-release`.
+            Triggered by push to `develop`.
+          pr_label: automation,branch-promotion
 
-      - name: Flutter version
-        run: flutter --version
-
-      - name: Install dependencies
-        run: flutter pub get
-
-      - name: Analyze project source
-        run: flutter analyze
-
-      - name: Run tests
-        run: flutter test
-
-      - name: Build web (dev release)
-        run: flutter build web --release --dart-define=APP_ENV=dev -o build/web-dev
-
-  master-approval-gate:
-    name: Master Approval Gate
-    if: github.ref == 'refs/heads/master'
-    needs: test
+  promote-pre-release-to-master:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/pre-release'
     runs-on: ubuntu-latest
-    environment:
-      name: production
-
     steps:
-      - name: Gate passed after required environment approval
-        run: echo "Approved for master branch."
+      - name: Create/Update PR pre-release -> master
+        uses: repo-sync/pull-request@v2
+        with:
+          source_branch: pre-release
+          destination_branch: master
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          pr_title: "Promote pre-release to master"
+          pr_body: |
+            Automated promotion PR from `pre-release` to `master`.
+            Triggered by push to `pre-release`.
+            Merge is still controlled by branch protections / required approvals.
+          pr_label: automation,branch-promotion
+
+  manual-promotion:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create/Update PR from workflow_dispatch input
+        uses: repo-sync/pull-request@v2
+        with:
+          source_branch: ${{ github.event.inputs.source_branch }}
+          destination_branch: ${{ github.event.inputs.target_branch }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          pr_title: "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
+          pr_body: |
+            Manual promotion PR created via workflow_dispatch.
+            Source: `${{ github.event.inputs.source_branch }}`
+            Target: `${{ github.event.inputs.target_branch }}`
+          pr_label: automation,branch-promotion
