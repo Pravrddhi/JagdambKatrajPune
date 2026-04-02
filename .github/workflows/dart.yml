@@ -25,6 +25,12 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout backend-dev
+        uses: actions/checkout@v4
+        with:
+          repository: Pravrddhi/backend-dev
+          token: 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
+
       - name: Ensure PR develop -> pre-release exists
         env:
           GH_TOKEN: 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
@@ -32,6 +38,7 @@ jobs:
           set -euo pipefail
 
           existing_pr_count=$(gh pr list \
+            --repo Pravrddhi/backend-dev \
             --base pre-release \
             --head develop \
             --state open \
@@ -44,6 +51,7 @@ jobs:
           fi
 
           gh pr create \
+            --repo Pravrddhi/backend-dev \
             --base pre-release \
             --head develop \
             --title "Promote develop to pre-release" \
@@ -53,6 +61,12 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/pre-release'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout backend-dev
+        uses: actions/checkout@v4
+        with:
+          repository: Pravrddhi/backend-dev
+          token: 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
+
       - name: Ensure PR pre-release -> master exists
         env:
           GH_TOKEN: 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
@@ -60,6 +74,7 @@ jobs:
           set -euo pipefail
 
           existing_pr_count=$(gh pr list \
+            --repo Pravrddhi/backend-dev \
             --base master \
             --head pre-release \
             --state open \
@@ -72,6 +87,7 @@ jobs:
           fi
 
           gh pr create \
+            --repo Pravrddhi/backend-dev \
             --base master \
             --head pre-release \
             --title "Promote pre-release to master" \
@@ -81,6 +97,12 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout backend-dev
+        uses: actions/checkout@v4
+        with:
+          repository: Pravrddhi/backend-dev
+          token: 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
+
       - name: Ensure manual promotion PR exists
         env:
           GH_TOKEN: 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
@@ -90,6 +112,7 @@ jobs:
           set -euo pipefail
 
           existing_pr_count=$(gh pr list \
+            --repo Pravrddhi/backend-dev \
             --base "$TARGET_BRANCH" \
             --head "$SOURCE_BRANCH" \
             --state open \
@@ -102,6 +125,7 @@ jobs:
           fi
 
           gh pr create \
+            --repo Pravrddhi/backend-dev \
             --base "$TARGET_BRANCH" \
             --head "$SOURCE_BRANCH" \
             --title "Promote $SOURCE_BRANCH to $TARGET_BRANCH" \
