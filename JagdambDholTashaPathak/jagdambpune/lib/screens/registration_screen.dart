@@ -13,7 +13,6 @@ import 'package:android_id/android_id.dart';
 import 'home_screen.dart';
 import '../config/api_endpoints.dart';
 import 'package:flutter/services.dart';
-import '../services/fcm_service.dart';
 import '../services/bug_report_service.dart';
 
 class RegistrationScreen extends StatefulWidget {
@@ -384,9 +383,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       if (response.statusCode == 201) {
         final data = jsonDecode(response.body);
         final accessToken = data['access_token'];
-        // Ask for notification permission right after successful registration,
-        // before the set-PIN dialog appears on the next screen.
-        await FCMService().requestNotificationPermission();
         await _promptBiometricAfterNotificationPermission();
         Navigator.pushReplacement(
           context,

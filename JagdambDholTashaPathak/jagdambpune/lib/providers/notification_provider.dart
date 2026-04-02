@@ -40,6 +40,7 @@ class AppNotification {
 class NotificationProvider with ChangeNotifier {
   static const _storage = FlutterSecureStorage();
   static const _storageKey = 'app_notifications';
+  static const Duration _dedupeWindow = Duration(seconds: 8);
 
   List<AppNotification> _notifications = [];
 
@@ -99,11 +100,27 @@ class NotificationProvider with ChangeNotifier {
     required String title,
     required String message,
   }) async {
+    final normalizedTitle = title.trim();
+    final normalizedMessage = message.trim();
+    final now = DateTime.now();
+
+    final duplicateExists = _notifications.any((item) {
+      final sameContent =
+          item.title.trim().toLowerCase() == normalizedTitle.toLowerCase() &&
+          item.message.trim().toLowerCase() == normalizedMessage.toLowerCase();
+      final withinWindow = now.difference(item.createdAt) < _dedupeWindow;
+      return sameContent && withinWindow;
+    });
+
+    if (duplicateExists) {
+      return;
+    }
+
     final item = AppNotification(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
-      title: title,
-      message: message,
-      createdAt: DateTime.now(),
+      title: normalizedTitle,
+      message: normalizedMessage,
+      createdAt: now,
     );
 
     _notifications = [item, ..._notifications];

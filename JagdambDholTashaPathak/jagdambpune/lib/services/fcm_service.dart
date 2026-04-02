@@ -21,6 +21,7 @@ class FCMService {
 
   /// Ask user permission to show notifications.
   Future<bool> requestNotificationPermission() async {
+    print('[FCM] requestNotificationPermission called kIsWeb=$kIsWeb');
     final settings = await _fcm.requestPermission(
       alert: true,
       badge: true,
@@ -31,6 +32,9 @@ class FCMService {
         settings.authorizationStatus == AuthorizationStatus.authorized ||
         settings.authorizationStatus == AuthorizationStatus.provisional;
 
+    print(
+      '[FCM] requestNotificationPermission result: isGranted=$isGranted status=${settings.authorizationStatus}',
+    );
     return isGranted;
   }
 
@@ -107,17 +111,25 @@ class FCMService {
 
   /// Ensure latest token is sent to backend (useful on app start/login resume)
   Future<void> syncCurrentTokenToServer({bool isLogin = true}) async {
-    print('[FCM] syncCurrentTokenToServer start isLogin=$isLogin');
+    print(
+      '[FCM] syncCurrentTokenToServer start isLogin=$isLogin kIsWeb=$kIsWeb',
+    );
     final token = await getFcmToken(isLogin: isLogin);
+    print(
+      '[FCM] getFcmToken result: ${token == null ? 'null' : 'token length=${token.length}'}',
+    );
     if (token != null && token.isNotEmpty) {
-      print('[FCM] sync using fresh token');
+      print('[FCM] sync using fresh token length=${token.length}');
       await sendTokenToServer(token);
       return;
     }
 
     final cachedToken = await storage.read(key: _cachedFcmTokenKey);
+    print(
+      '[FCM] cached token: ${cachedToken == null ? 'null' : 'length=${cachedToken.length}'}',
+    );
     if (cachedToken != null && cachedToken.isNotEmpty) {
-      print('[FCM] sync using cached token');
+      print('[FCM] sync using cached token length=${cachedToken.length}');
       await sendTokenToServer(cachedToken);
     } else {
       print('[FCM] sync skipped: no fresh or cached token');
@@ -146,19 +158,28 @@ class FCMService {
       String? accessToken = await storage.read(
         key: ApiEndpoints.accessTokenKey,
       );
+      print(
+        '[FCM] retrieved accessToken from storage: ${accessToken == null ? 'null' : 'length=${accessToken.length}'}',
+      );
       if (accessToken == null || accessToken.isEmpty) {
         print('[FCM] sendTokenToServer skipped: missing access token');
         return;
       }
 
-      print('[FCM] calling ${ApiEndpoints.updateFCMToken}');
+      print(
+        '[FCM] calling ${ApiEndpoints.updateFCMToken} with token length=${token.length}',
+      );
 
       http.Response response = await _updateFcmToken(accessToken, token);
+      print(
+        '[FCM] update-fcm-token response received: statusCode=${response.statusCode}',
+      );
       debugPrint(
         '[FCM] update-fcm-token response: ${response.statusCode} ${response.body}',
       );
 
       if (response.statusCode == 401) {
+        print('[FCM] Token expired (401), attempting refresh...');
         final refreshed = await AuthService.refreshAccessToken();
         if (refreshed) {
           final newAccessToken = await storage.read(
@@ -166,6 +187,9 @@ class FCMService {
           );
           if (newAccessToken != null && newAccessToken.isNotEmpty) {
             response = await _updateFcmToken(newAccessToken, token);
+            print(
+              '[FCM] update-fcm-token retry response: ${response.statusCode}',
+            );
             debugPrint(
               '[FCM] update-fcm-token retry response: ${response.statusCode} ${response.body}',
             );
@@ -174,6 +198,7 @@ class FCMService {
       }
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
+        print('[FCM] API returned error: ${response.statusCode}');
         await BugReportService.reportApiFailure(
           title: 'FCM token update API failed',
           errorMessage: response.body,
@@ -181,10 +206,12 @@ class FCMService {
           statusCode: response.statusCode,
           endpoint: ApiEndpoints.updateFCMToken,
         );
+      } else {
+        print('[FCM] Token successfully sent to backend');
       }
     } catch (e) {
+      print('[FCM] update-fcm-token exception caught: $e');
       debugPrint('[FCM] update-fcm-token exception: $e');
-      print('[FCM] update-fcm-token exception: $e');
       await BugReportService.reportApiFailure(
         title: 'FCM token update API exception',
         errorMessage: e.toString(),

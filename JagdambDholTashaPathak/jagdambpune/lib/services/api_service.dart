@@ -9,6 +9,11 @@ import 'refresh_token_service.dart'; // Import your AuthService that handles tok
 
 class ApiService {
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
+  static final Map<String, Future<void>> _inFlightNotificationRequests =
+      <String, Future<void>>{};
+  static String? _lastNotificationFingerprint;
+  static DateTime? _lastNotificationAt;
+  static const Duration _notificationDedupeWindow = Duration(seconds: 10);
 
   static Future<FeatureFlags> fetchFeatureFlags() async {
     try {
@@ -277,7 +282,38 @@ class ApiService {
     required String title,
     required String message,
   }) async {
-    return _createNotification(title: title, message: message);
+    final normalizedTitle = title.trim();
+    final normalizedMessage = message.trim();
+    final fingerprint =
+        '${normalizedTitle.toLowerCase()}::${normalizedMessage.toLowerCase()}';
+
+    final existingRequest = _inFlightNotificationRequests[fingerprint];
+    if (existingRequest != null) {
+      return existingRequest;
+    }
+
+    final now = DateTime.now();
+    final isRecentDuplicate =
+        _lastNotificationFingerprint == fingerprint &&
+        _lastNotificationAt != null &&
+        now.difference(_lastNotificationAt!) < _notificationDedupeWindow;
+    if (isRecentDuplicate) {
+      return;
+    }
+
+    final request = _createNotification(
+      title: normalizedTitle,
+      message: normalizedMessage,
+    );
+    _inFlightNotificationRequests[fingerprint] = request;
+
+    try {
+      await request;
+      _lastNotificationFingerprint = fingerprint;
+      _lastNotificationAt = DateTime.now();
+    } finally {
+      _inFlightNotificationRequests.remove(fingerprint);
+    }
   }
 
   static Future<void> _createNotification({
@@ -311,10 +347,8 @@ class ApiService {
         }
         throw Exception('Failed to send notification');
       } else if (response.statusCode == 401) {
-        final success = await _handleTokenRefresh();
-        if (success) {
-          return _createNotification(title: title, message: message);
-        }
+        // Avoid duplicate notification-create attempts on web by not retrying
+        // this mutating endpoint automatically.
         throw Exception('Session expired. Please login again.');
       } else {
         throw Exception(

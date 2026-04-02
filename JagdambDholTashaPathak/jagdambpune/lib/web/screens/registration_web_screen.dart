@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import '../../config/api_endpoints.dart';
@@ -12,6 +13,8 @@ import '../../widgets/common_button.dart';
 import '../../widgets/drop_down.dart';
 import '../../widgets/input_box.dart';
 import '../../screens/home_screen.dart';
+
+const FlutterSecureStorage _storage = FlutterSecureStorage();
 
 class RegistrationWebScreen extends StatefulWidget {
   const RegistrationWebScreen({super.key});
@@ -357,12 +360,21 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
 
       if (response.statusCode == 201) {
         final accessToken = responseData['access_token'];
+        final normalizedAccessToken = accessToken?.toString().trim() ?? '';
+
+        if (normalizedAccessToken.isNotEmpty) {
+          await _storage.write(
+            key: ApiEndpoints.accessTokenKey,
+            value: normalizedAccessToken,
+          );
+        }
+
         if (!mounted) return;
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (_) => HomeScreen(
-              authToken: accessToken,
+              authToken: normalizedAccessToken,
               phoneNumber: _phoneController.text,
               isRegistration: true,
             ),

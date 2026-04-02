@@ -39,6 +39,34 @@ class _LoginScreenState extends State<LoginScreen> {
   String _errorMessage = '';
   bool _isDeviceRegistered = false;
 
+  bool? _toNullableBool(dynamic value) {
+    if (value == null) return null;
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+      if (normalized == 'true' || normalized == '1' || normalized == 'yes') {
+        return true;
+      }
+      if (normalized == 'false' || normalized == '0' || normalized == 'no') {
+        return false;
+      }
+    }
+    return null;
+  }
+
+  bool? _extractHasFcmToken(Map<String, dynamic> payload) {
+    final topLevel = _toNullableBool(payload['has_fcm_token']);
+    if (topLevel != null) return topLevel;
+
+    final nested = payload['data'];
+    if (nested is Map<String, dynamic>) {
+      return _toNullableBool(nested['has_fcm_token']);
+    }
+
+    return null;
+  }
+
   String _friendlyErrorMessage(Object error) {
     final raw = error.toString().trim();
     const prefix = 'Exception: ';
@@ -250,6 +278,7 @@ class _LoginScreenState extends State<LoginScreen> {
           data['refresh_token']?.toString() ??
           profileData['refresh_token']?.toString() ??
           '';
+      final hasFcmToken = _extractHasFcmToken(data);
 
       if (accessToken.isEmpty) {
         setState(() {
@@ -347,6 +376,7 @@ class _LoginScreenState extends State<LoginScreen> {
             authToken: accessToken,
             phoneNumber: '',
             isRegistration: false,
+            hasFcmToken: hasFcmToken,
           ),
         ),
       );

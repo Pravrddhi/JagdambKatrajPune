@@ -23,12 +23,14 @@ class HomeScreen extends StatefulWidget {
   final String authToken;
   final String phoneNumber;
   final bool isRegistration;
+  final bool? hasFcmToken;
 
   const HomeScreen({
     super.key,
     required this.authToken,
     required this.phoneNumber,
     required this.isRegistration,
+    this.hasFcmToken,
   });
 
   @override
@@ -63,6 +65,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late final PageController _sayingsPageController;
   Timer? _sayingsTimer;
   int _currentSayingIndex = 0;
+  bool _hasSyncedFcmOnHome = false;
 
   @override
   void initState() {
@@ -116,25 +119,31 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
+  Future<void> _requestAndSyncFcmTokenOnWeb() async {
+    if (!kIsWeb) {
+      return;
+    }
+
+    if (_hasSyncedFcmOnHome) {
+      return;
+    }
+    _hasSyncedFcmOnHome = true;
+
+    print('[FCM-HOME] Starting FCM permission request and sync on web');
+    final fcmService = FCMService();
+    final permissionGranted = await fcmService.requestNotificationPermission();
+    print('[FCM-HOME] Permission granted: $permissionGranted');
+    if (permissionGranted) {
+      print('[FCM-HOME] Calling syncCurrentTokenToServer');
+      await fcmService.syncCurrentTokenToServer(isLogin: true);
+    }
+  }
+
   /// Initialize user info depending on registration status
   Future<void> _initializeUser() async {
     final fcmService = FCMService();
     try {
       fcmService.listenTokenRefresh();
-      final permissionGranted = await fcmService
-          .requestNotificationPermission();
-      if (kIsWeb && !permissionGranted && mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Allow browser notifications to receive alerts on web.',
-              ),
-            ),
-          );
-        });
-      }
     } catch (_) {
       // Never block core app flow (including emergency popup) on notification setup.
     }
@@ -172,21 +181,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             value: effectiveHomeToken,
           );
 
-          try {
-            await fcmService.syncCurrentTokenToServer(isLogin: false);
-            if (kIsWeb) {
-              Future.delayed(const Duration(seconds: 2), () async {
-                try {
-                  await fcmService.syncCurrentTokenToServer(isLogin: true);
-                } catch (_) {}
-              });
-            }
-          } catch (_) {
-            // Continue to home initialization even if FCM sync fails.
-          }
-
           final loaded = await _loadUserDetails(effectiveHomeToken);
           if (!mounted || !loaded) return;
+          try {
+            print('[FCM-HOME] Registration flow: calling FCM sync');
+            await _requestAndSyncFcmTokenOnWeb();
+          } catch (_) {
+            // Continue home even if token sync fails.
+          }
         } else {
           // PIN dialog was dismissed without a token — fall back to login.
           Navigator.of(
@@ -198,36 +200,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       String? token = await storage.read(key: 'access_token');
       if (token != null && token.isNotEmpty) {
         accessToken = token;
-        try {
-          await fcmService.syncCurrentTokenToServer(isLogin: false);
-          if (kIsWeb) {
-            Future.delayed(const Duration(seconds: 2), () async {
-              try {
-                await fcmService.syncCurrentTokenToServer(isLogin: true);
-              } catch (_) {}
-            });
-          }
-        } catch (_) {
-          // Continue to home initialization even if FCM sync fails.
-        }
         final loaded = await _loadUserDetails(accessToken);
         if (!mounted || !loaded) return;
+        try {
+          print('[FCM-HOME] Stored token flow: calling FCM sync');
+          await _requestAndSyncFcmTokenOnWeb();
+        } catch (_) {
+          // Continue home even if token sync fails.
+        }
         await _showEmergencyDialogOnFirstLoginIfNeeded(accessToken);
       } else {
-        try {
-          await fcmService.syncCurrentTokenToServer(isLogin: false);
-          if (kIsWeb) {
-            Future.delayed(const Duration(seconds: 2), () async {
-              try {
-                await fcmService.syncCurrentTokenToServer(isLogin: true);
-              } catch (_) {}
-            });
-          }
-        } catch (_) {
-          // Continue to home initialization even if FCM sync fails.
-        }
         final loaded = await _loadUserDetails(widget.authToken);
         if (!mounted || !loaded) return;
+        try {
+          print('[FCM-HOME] Widget auth token flow: calling FCM sync');
+          await _requestAndSyncFcmTokenOnWeb();
+        } catch (_) {
+          // Continue home even if token sync fails.
+        }
         await _showEmergencyDialogOnFirstLoginIfNeeded(widget.authToken);
       }
     }
