@@ -84,6 +84,14 @@ class NotificationProvider with ChangeNotifier {
     final raw = jsonEncode(
       _notifications.map((item) => item.toJson()).toList(),
     );
+    if (kIsWeb) {
+      try {
+        await _storage.write(key: _storageKey, value: raw);
+      } catch (_) {
+        // Best effort persistence for web.
+      }
+      return;
+    }
     await _storage.write(key: _storageKey, value: raw);
   }
 
@@ -99,18 +107,36 @@ class NotificationProvider with ChangeNotifier {
     );
 
     _notifications = [item, ..._notifications];
+    if (kIsWeb) {
+      notifyListeners();
+      await _persist();
+      return;
+    }
+
     await _persist();
     notifyListeners();
   }
 
   Future<void> clearNotification(String id) async {
     _notifications = _notifications.where((item) => item.id != id).toList();
+    if (kIsWeb) {
+      notifyListeners();
+      await _persist();
+      return;
+    }
+
     await _persist();
     notifyListeners();
   }
 
   Future<void> clearAll() async {
     _notifications = [];
+    if (kIsWeb) {
+      notifyListeners();
+      await _persist();
+      return;
+    }
+
     await _persist();
     notifyListeners();
   }

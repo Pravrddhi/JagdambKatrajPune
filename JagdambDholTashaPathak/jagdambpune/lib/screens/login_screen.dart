@@ -9,7 +9,6 @@ import '../../theme/app_colors.dart';
 import '../widgets/logging_in_overlay.dart';
 import '../config/api_endpoints.dart';
 import 'home_screen.dart';
-import '../services/fcm_service.dart';
 import '../services/bug_report_service.dart';
 import '../services/web_api_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -243,6 +242,21 @@ class _LoginScreenState extends State<LoginScreen> {
       final profileData = data['data'] is Map<String, dynamic>
           ? Map<String, dynamic>.from(data['data'])
           : const <String, dynamic>{};
+      final accessToken =
+          data['access_token']?.toString() ??
+          profileData['access_token']?.toString() ??
+          '';
+      final refreshToken =
+          data['refresh_token']?.toString() ??
+          profileData['refresh_token']?.toString() ??
+          '';
+
+      if (accessToken.isEmpty) {
+        setState(() {
+          _errorMessage = _loginFailureMessage;
+        });
+        return;
+      }
       final rawApprovalStatus =
           profileData['approval_status'] ?? data['approval_status'];
       final approvalStatus = rawApprovalStatus is int
@@ -253,7 +267,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ? profileData['approval_comment'].toString().trim()
           : data['approval_comment']?.toString().trim() ?? '';
 
-      if (approvalStatus == 2) {
+      if (approvalStatus == 0) {
         await _clearStoredSessionForUnapprovedUser();
         if (!mounted) return;
         await showDialog(
@@ -297,14 +311,13 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      await storage.write(
-        key: ApiEndpoints.accessTokenKey,
-        value: data['access_token'],
-      );
-      await storage.write(
-        key: ApiEndpoints.refreshTokenKey,
-        value: data['refresh_token'],
-      );
+      await storage.write(key: ApiEndpoints.accessTokenKey, value: accessToken);
+      if (refreshToken.isNotEmpty) {
+        await storage.write(
+          key: ApiEndpoints.refreshTokenKey,
+          value: refreshToken,
+        );
+      }
       await storage.write(
         key: ApiEndpoints.isGatPramukhKey,
         value: isGatPramukh.toString(),
@@ -327,20 +340,11 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       }
 
-      try {
-        String? fcmToken = await FCMService().getFcmToken(isLogin: false);
-        if (fcmToken != null) {
-          await FCMService().sendTokenToServer(fcmToken);
-        }
-      } catch (_) {
-        // FCM setup must not block successful login.
-      }
-
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
           builder: (context) => HomeScreen(
-            authToken: data['access_token'],
+            authToken: accessToken,
             phoneNumber: '',
             isRegistration: false,
           ),
