@@ -1,0 +1,52 @@
+name: Flutter CI
+
+on:
+  push:
+    branches: [develop, pre-release, master]
+  pull_request:
+    branches: [develop, pre-release, master]
+
+concurrency:
+  group: flutter-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Analyze and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze project source
+        run: flutter analyze
+
+      - name: Run tests
+        run: flutter test
+
+      - name: Build web (dev release)
+        run: flutter build web --release --dart-define=APP_ENV=dev -o build/web-dev
+
+  master-approval-gate:
+    name: Master Approval Gate
+    if: github.ref == 'refs/heads/master'
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+
+    steps:
+      - name: Gate passed after required environment approval
+        run: echo "Approved for master branch."
