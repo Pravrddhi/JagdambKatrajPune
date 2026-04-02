@@ -16,6 +16,8 @@ import 'screens/registration_screen.dart';
 import 'screens/reset_pin.dart';
 import 'screens/splash_screen.dart';
 import 'theme/app_colors.dart';
+import 'web/fcm_web_bridge_stub.dart'
+    if (dart.library.html) 'web/fcm_web_bridge_web.dart';
 import 'web/screens/registration_web_screen.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
@@ -152,7 +154,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         },
       );
 
-  void _handleIncomingMessage(RemoteMessage message) {
+  Future<void> _handleIncomingMessage(RemoteMessage message) async {
     final notification = message.notification;
     final title =
         notification?.title ??
@@ -169,9 +171,13 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         '';
 
     final provider = context.read<NotificationProvider>();
-    provider.addNotification(title: title, message: body);
+    if (kIsWeb) {
+      await provider.addNotification(title: title, message: body);
+    } else {
+      provider.addNotification(title: title, message: body);
+    }
 
-    if (title.isNotEmpty || body.isNotEmpty) {
+    if (!kIsWeb && (title.isNotEmpty || body.isNotEmpty)) {
       flutterLocalNotificationsPlugin.show(
         message.hashCode,
         title,
@@ -195,9 +201,23 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
+    if (kIsWeb) {
+      initializeWebFcmBridge((title, body) async {
+        if (!mounted) return;
+        await context.read<NotificationProvider>().addNotification(
+          title: title,
+          message: body,
+        );
+      });
+    }
+
     if (_firebaseReady) {
-      FirebaseMessaging.onMessage.listen(_handleIncomingMessage);
-      FirebaseMessaging.onMessageOpenedApp.listen(_handleIncomingMessage);
+      FirebaseMessaging.onMessage.listen((message) {
+        _handleIncomingMessage(message);
+      });
+      FirebaseMessaging.onMessageOpenedApp.listen((message) {
+        _handleIncomingMessage(message);
+      });
       FirebaseMessaging.instance.getInitialMessage().then((message) {
         if (message != null && mounted) {
           _handleIncomingMessage(message);
