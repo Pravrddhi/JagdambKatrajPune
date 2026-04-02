@@ -5,15 +5,6 @@ import '../config/api_endpoints.dart';
 import 'bug_report_service.dart';
 import 'refresh_token_service.dart';
 
-class UserInactiveException implements Exception {
-  final String message;
-
-  UserInactiveException([this.message = 'User is inactive']);
-
-  @override
-  String toString() => message;
-}
-
 class UserService {
   static const _storage = FlutterSecureStorage();
 
@@ -34,12 +25,6 @@ class UserService {
         }
       } else if (response.statusCode == 401) {
         final errorData = jsonDecode(response.body);
-
-        if (errorData['code'] == 'user_inactive') {
-          throw UserInactiveException(
-            errorData['detail']?.toString() ?? 'User is inactive',
-          );
-        }
 
         if (errorData['code'] == 'token_not_valid' &&
             errorData['messages'] != null &&
@@ -69,10 +54,6 @@ class UserService {
         );
       }
     } catch (e, st) {
-      if (e is UserInactiveException) {
-        rethrow;
-      }
-
       await BugReportService.reportApiFailure(
         title: 'User details API failure',
         errorMessage: e.toString(),

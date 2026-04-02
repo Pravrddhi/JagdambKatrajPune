@@ -21,66 +21,92 @@ class CommonDialogForm {
     return showDialog<T>(
       context: context,
       builder: (context) {
-        return Dialog(
-          insetPadding: const EdgeInsets.all(10), // Padding around dialog edges
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12), // Rounded corners
-          ),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Title row with close button aligned right
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        final mediaQuery = MediaQuery.of(context);
+        final screenHeight = mediaQuery.size.height;
+        final bottomInset = mediaQuery.viewInsets.bottom;
+        const verticalInset = 10.0;
+        final availableHeight =
+            (screenHeight - bottomInset - (verticalInset * 2)).clamp(
+              220.0,
+              screenHeight,
+            );
+
+        return AnimatedPadding(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+          padding: EdgeInsets.only(bottom: bottomInset),
+          child: Dialog(
+            insetPadding: const EdgeInsets.all(
+              10,
+            ), // Padding around dialog edges
+            backgroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12), // Rounded corners
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: availableHeight),
+              child: SingleChildScrollView(
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primaryMaroon,
-                      ),
+                    // Title row with close button aligned right
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          title,
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.primaryMaroon,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(
+                            Icons.close,
+                            color: AppColors.primaryMaroon,
+                          ),
+                          onPressed: () {
+                            Navigator.of(
+                              context,
+                            ).pop(); // Close dialog on icon tap
+                          },
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.close,
-                        color: AppColors.primaryMaroon,
+                    const SizedBox(height: 16),
+                    // Insert all field widgets provided in the fields list
+                    ...fields,
+                    const SizedBox(height: 12),
+                    // Submit button row with full width
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.accentYellow,
+                          foregroundColor: AppColors.primaryMaroon,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        onPressed: () async {
+                          await onSubmit(); // Await async submit callback
+                          Navigator.of(
+                            context,
+                          ).pop(); // Close dialog after submit
+                        },
+                        child: const Text(
+                          "Submit",
+                          style: TextStyle(color: AppColors.primaryMaroon),
+                        ),
                       ),
-                      onPressed: () {
-                        Navigator.of(context).pop(); // Close dialog on icon tap
-                      },
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-                // Insert all field widgets provided in the fields list
-                ...fields,
-                const SizedBox(height: 12),
-                // Submit button row with full width
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.accentYellow,
-                      foregroundColor: AppColors.primaryMaroon,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    onPressed: () async {
-                      await onSubmit(); // Await async submit callback
-                      Navigator.of(context).pop(); // Close dialog after submit
-                    },
-                    child: const Text(
-                      "Submit",
-                      style: TextStyle(color: AppColors.primaryMaroon),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         );

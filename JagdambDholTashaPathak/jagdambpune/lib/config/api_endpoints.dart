@@ -2,10 +2,24 @@
 
 /// Centralized class for managing API endpoints and related utilities.
 class ApiEndpoints {
-  // Base URL for API requests. Change this according to environment.
-  // Uncomment the production URL when deploying.
-  // static const String baseUrl = 'https://myriam-confirmatory-darlena.ngrok-free.dev/api';
-  static const String baseUrl = 'https://api.jagdamb.co.in/api';
+  // Base URL for API requests.
+  // Override with: --dart-define=API_BASE_URL=https://your-domain/api
+  // This allows separate dev/prod builds without code edits.
+  static const String _defaultBaseUrl = 'https://api.jagdamb.co.in/api';
+  static const String baseUrlFromDefine = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: _defaultBaseUrl,
+  );
+  static String get baseUrl {
+    final normalized = baseUrlFromDefine.trim();
+    if (normalized.isEmpty) {
+      return _defaultBaseUrl;
+    }
+    return normalized.endsWith('/')
+        ? normalized.substring(0, normalized.length - 1)
+        : normalized;
+  }
+
   static const String pathakId = "1";
 
   // -------------------
@@ -62,6 +76,9 @@ class ApiEndpoints {
 
   /// Create a new event
   static final String createEvent = '$baseUrl/events/create/';
+
+  /// Update status of a Mirvnuk event (0=not started, 1=live, 2=ended, 3=cancelled)
+  static final String updateMirvnukStatus = '$baseUrl/mirvnuk-status/';
 
   /// Create a new notification
   static final String createNotification = '$baseUrl/notifications/create/';

@@ -84,17 +84,19 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
   }
 
   Future<List<String>> _fetchInstruments(int pathakId) async {
-    final url = Uri.parse("${ApiEndpoints.getInstruments}/$pathakId");
+    final url = Uri.parse("${ApiEndpoints.getInstruments}/$pathakId/");
     try {
       final response = await http.get(url);
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+      final dynamic data = json.decode(response.body);
 
-        if (data["status"] == true) {
-          List<dynamic> instruments = data["instruments"];
-          return instruments.map((e) => e.toString()).toList();
-        }
-        return [];
+      if (response.statusCode == 200) {
+        final rawInstruments = _extractInstrumentList(data);
+
+        return rawInstruments
+            .map(_instrumentNameFromItem)
+            .where((value) => value.isNotEmpty)
+            .toSet()
+            .toList();
       } else {
         await BugReportService.reportApiFailure(
           title: 'Fetch instruments API failed',
@@ -116,6 +118,68 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     }
   }
 
+  List<dynamic> _extractInstrumentList(dynamic data) {
+    if (data is List) {
+      return data;
+    }
+
+    if (data is Map<String, dynamic>) {
+      const listKeys = [
+        'instruments',
+        'data',
+        'results',
+        'instrument_list',
+        'instrument_names',
+        'items',
+      ];
+
+      for (final key in listKeys) {
+        final payload = data[key];
+        if (payload is List) {
+          return payload;
+        }
+      }
+
+      for (final value in data.values) {
+        if (value is List) {
+          return value;
+        }
+      }
+    }
+
+    return <dynamic>[];
+  }
+
+  String _instrumentNameFromItem(dynamic item) {
+    if (item is String) {
+      return item.trim();
+    }
+
+    if (item is Map) {
+      const nameKeys = [
+        'name',
+        'instrument',
+        'title',
+        'instrument_name',
+        'instrumentName',
+        'label',
+        'value',
+      ];
+
+      for (final key in nameKeys) {
+        final value = item[key];
+        if (value != null) {
+          final normalized = value.toString().trim();
+          if (normalized.isNotEmpty) {
+            return normalized;
+          }
+        }
+      }
+    }
+
+    return item.toString().trim();
+  }
+
   void _loadInstruments() async {
     int pathakId = int.tryParse(ApiEndpoints.pathakId.toString()) ?? 0;
     if (pathakId == 0) return;
@@ -131,6 +195,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
         validateFirstName(_firstNameController.text) &&
         validateLastName(_lastNameController.text) &&
         validatePhone(_phoneController.text) &&
+        selectedDob != null &&
         validateSelection(selectedSex) &&
         validateSelection(selectedInstrument) &&
         _fieldErrors.values.every((error) => error == null);
@@ -145,6 +210,36 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
   bool validatePhone(String phone) => RegExp(r'^\d{10}$').hasMatch(phone);
   bool validateSelection(String? value) => value != null;
 
+  bool _isAtLeast18(DateTime dob) {
+    final now = DateTime.now();
+    int age = now.year - dob.year;
+    final hasNotHadBirthdayYet =
+        now.month < dob.month || (now.month == dob.month && now.day < dob.day);
+    if (hasNotHadBirthdayYet) {
+      age -= 1;
+    }
+    return age >= 18;
+  }
+
+  Future<void> _showUnderAgePopup() async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text('Access Denied'),
+        content: const Text(
+          'below 18 are not allowed please ask your parents to login',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _checkPhoneNumberExists(String phoneNumber) async {
     if (phoneNumber.length != 10) return;
 
@@ -154,17 +249,19 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     });
 
     try {
+      final requestPayload = {'phone_number': phoneNumber};
       final response = await http.post(
         Uri.parse(ApiEndpoints.checkPhoneNumber),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'phone_number': phoneNumber}),
+        body: jsonEncode(requestPayload),
       );
+
+      final responseData = jsonDecode(response.body);
 
       setState(() {
         _isCheckingPhone = false;
         if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final exists = data['status'] as bool;
+          final exists = responseData['status'] as bool;
           if (exists) {
             _fieldErrors['phone_number'] = 'Phone number already registered.';
           }
@@ -209,6 +306,9 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     if (!validatePhone(_phoneController.text)) {
       errors['phone_number'] = 'Phone number must be 10 digits only.';
     }
+    if (selectedDob == null) {
+      errors['dob'] = 'Date of Birth is required.';
+    }
     if (!validateSelection(selectedSex)) {
       errors['sex'] = 'Please select a gender.';
     }
@@ -233,30 +333,33 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
       _errorMessage = null;
     });
 
+    final requestPayload = {
+      'phone_number': _phoneController.text,
+      'first_name': _firstNameController.text,
+      'last_name': _lastNameController.text,
+      'gender': selectedSex,
+      'instrument': selectedInstrument,
+      'dob': selectedDob != null
+          ? '${selectedDob!.year}-${selectedDob!.month.toString().padLeft(2, '0')}-${selectedDob!.day.toString().padLeft(2, '0')}'
+          : null,
+      'joining_year': selectedJoiningYear,
+      'device_id': _generateRandomDeviceId(),
+      'pathak_id': ApiEndpoints.pathakId,
+    };
+
     try {
       final response = await http.post(
         Uri.parse(ApiEndpoints.register),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'phone_number': _phoneController.text,
-          'first_name': _firstNameController.text,
-          'last_name': _lastNameController.text,
-          'gender': selectedSex,
-          'instrument': selectedInstrument,
-          'dob': selectedDob != null
-              ? '${selectedDob!.year}-${selectedDob!.month.toString().padLeft(2, '0')}-${selectedDob!.day.toString().padLeft(2, '0')}'
-              : null,
-          'joining_year': selectedJoiningYear,
-          'device_id': _generateRandomDeviceId(),
-          'pathak_id': ApiEndpoints.pathakId,
-        }),
+        body: jsonEncode(requestPayload),
       );
+
+      final responseData = jsonDecode(response.body);
 
       setState(() => isLoading = false);
 
       if (response.statusCode == 201) {
-        final data = jsonDecode(response.body);
-        final accessToken = data['access_token'];
+        final accessToken = responseData['access_token'];
         if (!mounted) return;
         Navigator.pushReplacement(
           context,
@@ -472,7 +575,15 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       if (picked != null && picked != selectedDob) {
                         setState(() {
                           selectedDob = picked;
+                          _fieldErrors.remove('dob');
                         });
+                        if (!_isAtLeast18(picked)) {
+                          setState(() {
+                            selectedDob = null;
+                            _fieldErrors['dob'] = 'You must be 18 years old';
+                          });
+                          await _showUnderAgePopup();
+                        }
                         _validateForm();
                       }
                     },
@@ -514,6 +625,17 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       ),
                     ),
                   ),
+                  if (_fieldErrors['dob'] != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4.0, left: 4.0),
+                      child: Text(
+                        _fieldErrors['dob']!,
+                        style: const TextStyle(
+                          color: AppColors.accentYellow,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
                   const SizedBox(height: 16),
                   PremiumDropDown(
                     label: 'Joining Year',
