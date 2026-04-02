@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - develop
-      - pre-release
+      - release
   workflow_dispatch:
     inputs:
       source_branch:
@@ -14,14 +14,14 @@ on:
       target_branch:
         description: Target branch to promote into
         required: true
-        default: pre-release
+        default: release
 
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
-  promote-develop-to-pre-release:
+  promote-develop-to-release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
     steps:
@@ -31,7 +31,7 @@ jobs:
           repository: Pravrddhi/backend-dev
           token: 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
 
-      - name: Ensure PR develop -> pre-release exists
+      - name: Ensure PR develop -> release exists
         env:
           GH_TOKEN: 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
         run: |
@@ -39,7 +39,7 @@ jobs:
 
           existing_pr_count=$(gh pr list \
             --repo Pravrddhi/backend-dev \
-            --base pre-release \
+            --base release \
             --head develop \
             --state open \
             --json number \
@@ -52,13 +52,13 @@ jobs:
 
           gh pr create \
             --repo Pravrddhi/backend-dev \
-            --base pre-release \
+            --base release \
             --head develop \
             --title "Promote develop to pre-release" \
             --body "Automated promotion PR from develop to pre-release."
 
   promote-pre-release-to-master:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/pre-release'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout backend-dev
@@ -67,7 +67,7 @@ jobs:
           repository: Pravrddhi/backend-dev
           token: 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
 
-      - name: Ensure PR pre-release -> master exists
+      - name: Ensure PR release -> master exists
         env:
           GH_TOKEN: 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
         run: |
@@ -76,13 +76,13 @@ jobs:
           existing_pr_count=$(gh pr list \
             --repo Pravrddhi/backend-dev \
             --base master \
-            --head pre-release \
+            --head release\
             --state open \
             --json number \
             --jq 'length')
 
           if [ "$existing_pr_count" -gt 0 ]; then
-            echo "Open PR already exists for pre-release -> master"
+            echo "Open PR already exists for release -> master"
             exit 0
           fi
 
