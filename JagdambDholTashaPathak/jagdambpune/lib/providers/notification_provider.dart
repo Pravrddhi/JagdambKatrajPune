@@ -40,6 +40,7 @@ class AppNotification {
 class NotificationProvider with ChangeNotifier {
   static const _storage = FlutterSecureStorage();
   static const _storageKey = 'app_notifications';
+  static const Duration _dedupeWindow = Duration(seconds: 8);
 
   List<AppNotification> _notifications = [];
 
@@ -84,6 +85,14 @@ class NotificationProvider with ChangeNotifier {
     final raw = jsonEncode(
       _notifications.map((item) => item.toJson()).toList(),
     );
+    if (kIsWeb) {
+      try {
+        await _storage.write(key: _storageKey, value: raw);
+      } catch (_) {
+        // Best effort persistence for web.
+      }
+      return;
+    }
     await _storage.write(key: _storageKey, value: raw);
   }
 
@@ -91,26 +100,60 @@ class NotificationProvider with ChangeNotifier {
     required String title,
     required String message,
   }) async {
+    final normalizedTitle = title.trim();
+    final normalizedMessage = message.trim();
+    final now = DateTime.now();
+
+    final duplicateExists = _notifications.any((item) {
+      final sameContent =
+          item.title.trim().toLowerCase() == normalizedTitle.toLowerCase() &&
+          item.message.trim().toLowerCase() == normalizedMessage.toLowerCase();
+      final withinWindow = now.difference(item.createdAt) < _dedupeWindow;
+      return sameContent && withinWindow;
+    });
+
+    if (duplicateExists) {
+      return;
+    }
+
     final item = AppNotification(
       id: DateTime.now().microsecondsSinceEpoch.toString(),
-      title: title,
-      message: message,
-      createdAt: DateTime.now(),
+      title: normalizedTitle,
+      message: normalizedMessage,
+      createdAt: now,
     );
 
     _notifications = [item, ..._notifications];
+    if (kIsWeb) {
+      notifyListeners();
+      await _persist();
+      return;
+    }
+
     await _persist();
     notifyListeners();
   }
 
   Future<void> clearNotification(String id) async {
     _notifications = _notifications.where((item) => item.id != id).toList();
+    if (kIsWeb) {
+      notifyListeners();
+      await _persist();
+      return;
+    }
+
     await _persist();
     notifyListeners();
   }
 
   Future<void> clearAll() async {
     _notifications = [];
+    if (kIsWeb) {
+      notifyListeners();
+      await _persist();
+      return;
+    }
+
     await _persist();
     notifyListeners();
   }

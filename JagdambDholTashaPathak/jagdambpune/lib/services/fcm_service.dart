@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_endpoints.dart';
@@ -10,9 +12,16 @@ class FCMService {
   static const FlutterSecureStorage storage = FlutterSecureStorage();
   static final FirebaseMessaging _fcm = FirebaseMessaging.instance;
   static bool _isRefreshListenerAttached = false;
+  static const String _cachedFcmTokenKey = 'cached_fcm_token';
+  static const String _webVapidKey = String.fromEnvironment(
+    'FIREBASE_WEB_VAPID_KEY',
+    defaultValue:
+        'BHabFcp7zlBBZhkM_PiiHdGBji4v8Rpm-iG4ZLqxfHGGqCWLT2_EWv1pdpB-TqRlQ_MOE-QP0x7OOQaVGpKCZLk',
+  );
 
   /// Ask user permission to show notifications.
   Future<bool> requestNotificationPermission() async {
+    print('[FCM] requestNotificationPermission called kIsWeb=$kIsWeb');
     final settings = await _fcm.requestPermission(
       alert: true,
       badge: true,
@@ -23,21 +32,65 @@ class FCMService {
         settings.authorizationStatus == AuthorizationStatus.authorized ||
         settings.authorizationStatus == AuthorizationStatus.provisional;
 
+    print(
+      '[FCM] requestNotificationPermission result: isGranted=$isGranted status=${settings.authorizationStatus}',
+    );
     return isGranted;
   }
 
   /// Get current FCM token
   /// [isLogin]: if true, do not request permission (already granted)
   Future<String?> getFcmToken({bool isLogin = false}) async {
+    print('[FCM] getFcmToken start isLogin=$isLogin isWeb=$kIsWeb');
     if (!isLogin) {
       final granted = await requestNotificationPermission();
+      print('[FCM] notification permission granted=$granted');
       if (!granted) {
+        print('[FCM] token fetch aborted: permission not granted');
         return null;
       }
     }
 
     // Get the token
-    String? token = await _fcm.getToken();
+    String? token;
+    if (kIsWeb) {
+      if (_webVapidKey.trim().isEmpty) {
+        await BugReportService.reportApiFailure(
+          title: 'Missing web VAPID key for FCM token',
+          errorMessage:
+              'FIREBASE_WEB_VAPID_KEY dart-define is empty. Web FCM token cannot be generated.',
+          pageUrl: '/notifications/update-fcm-token',
+          endpoint: ApiEndpoints.updateFCMToken,
+        );
+        return null;
+      }
+      for (var attempt = 0; attempt < 3; attempt++) {
+        print('[FCM] web getToken attempt=${attempt + 1}');
+        try {
+          token = await _fcm
+              .getToken(vapidKey: _webVapidKey)
+              .timeout(const Duration(seconds: 10));
+          print(
+            '[FCM] web getToken attempt=${attempt + 1} result=${token == null || token.isEmpty ? 'empty' : 'ok'}',
+          );
+        } catch (e) {
+          print('[FCM] web getToken attempt=${attempt + 1} exception=$e');
+        }
+        if (token != null && token.isNotEmpty) {
+          break;
+        }
+        await Future.delayed(const Duration(milliseconds: 800));
+      }
+    } else {
+      token = await _fcm.getToken();
+    }
+
+    if (token != null && token.isNotEmpty) {
+      await storage.write(key: _cachedFcmTokenKey, value: token);
+      print('[FCM] token fetched length=${token.length}');
+    } else {
+      print('[FCM] token fetch returned null/empty');
+    }
     return token;
   }
 
@@ -49,17 +102,38 @@ class FCMService {
     _isRefreshListenerAttached = true;
 
     _fcm.onTokenRefresh.listen((newToken) async {
+      if (newToken.isNotEmpty) {
+        await storage.write(key: _cachedFcmTokenKey, value: newToken);
+      }
       await sendTokenToServer(newToken);
     });
   }
 
   /// Ensure latest token is sent to backend (useful on app start/login resume)
   Future<void> syncCurrentTokenToServer({bool isLogin = true}) async {
+    print(
+      '[FCM] syncCurrentTokenToServer start isLogin=$isLogin kIsWeb=$kIsWeb',
+    );
     final token = await getFcmToken(isLogin: isLogin);
-    if (token == null || token.isEmpty) {
+    print(
+      '[FCM] getFcmToken result: ${token == null ? 'null' : 'token length=${token.length}'}',
+    );
+    if (token != null && token.isNotEmpty) {
+      print('[FCM] sync using fresh token length=${token.length}');
+      await sendTokenToServer(token);
       return;
     }
-    await sendTokenToServer(token);
+
+    final cachedToken = await storage.read(key: _cachedFcmTokenKey);
+    print(
+      '[FCM] cached token: ${cachedToken == null ? 'null' : 'length=${cachedToken.length}'}',
+    );
+    if (cachedToken != null && cachedToken.isNotEmpty) {
+      print('[FCM] sync using cached token length=${cachedToken.length}');
+      await sendTokenToServer(cachedToken);
+    } else {
+      print('[FCM] sync skipped: no fresh or cached token');
+    }
   }
 
   /// Subscribe to a topic
@@ -75,35 +149,56 @@ class FCMService {
   /// Send FCM token to backend
   Future<void> sendTokenToServer(String token) async {
     try {
+      print('[FCM] sendTokenToServer called tokenLength=${token.length}');
       if (token.isEmpty) {
+        print('[FCM] sendTokenToServer skipped: empty token');
         return;
       }
 
       String? accessToken = await storage.read(
         key: ApiEndpoints.accessTokenKey,
       );
+      print(
+        '[FCM] retrieved accessToken from storage: ${accessToken == null ? 'null' : 'length=${accessToken.length}'}',
+      );
       if (accessToken == null || accessToken.isEmpty) {
+        print('[FCM] sendTokenToServer skipped: missing access token');
         return;
       }
 
-      http.Response response = await _updateFcmTokenWithPatch(
-        accessToken,
-        token,
+      print(
+        '[FCM] calling ${ApiEndpoints.updateFCMToken} with token length=${token.length}',
+      );
+
+      http.Response response = await _updateFcmToken(accessToken, token);
+      print(
+        '[FCM] update-fcm-token response received: statusCode=${response.statusCode}',
+      );
+      debugPrint(
+        '[FCM] update-fcm-token response: ${response.statusCode} ${response.body}',
       );
 
       if (response.statusCode == 401) {
+        print('[FCM] Token expired (401), attempting refresh...');
         final refreshed = await AuthService.refreshAccessToken();
         if (refreshed) {
           final newAccessToken = await storage.read(
             key: ApiEndpoints.accessTokenKey,
           );
           if (newAccessToken != null && newAccessToken.isNotEmpty) {
-            response = await _updateFcmTokenWithPatch(newAccessToken, token);
+            response = await _updateFcmToken(newAccessToken, token);
+            print(
+              '[FCM] update-fcm-token retry response: ${response.statusCode}',
+            );
+            debugPrint(
+              '[FCM] update-fcm-token retry response: ${response.statusCode} ${response.body}',
+            );
           }
         }
       }
 
-      if (response.statusCode != 200) {
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        print('[FCM] API returned error: ${response.statusCode}');
         await BugReportService.reportApiFailure(
           title: 'FCM token update API failed',
           errorMessage: response.body,
@@ -111,8 +206,12 @@ class FCMService {
           statusCode: response.statusCode,
           endpoint: ApiEndpoints.updateFCMToken,
         );
+      } else {
+        print('[FCM] Token successfully sent to backend');
       }
     } catch (e) {
+      print('[FCM] update-fcm-token exception caught: $e');
+      debugPrint('[FCM] update-fcm-token exception: $e');
       await BugReportService.reportApiFailure(
         title: 'FCM token update API exception',
         errorMessage: e.toString(),
@@ -122,11 +221,11 @@ class FCMService {
     }
   }
 
-  Future<http.Response> _updateFcmTokenWithPatch(
+  Future<http.Response> _updateFcmToken(
     String accessToken,
     String token,
-  ) {
-    return http.patch(
+  ) async {
+    final response = await http.patch(
       Uri.parse(ApiEndpoints.updateFCMToken),
       headers: {
         'Authorization': 'Bearer $accessToken',
@@ -134,5 +233,7 @@ class FCMService {
       },
       body: jsonEncode({'fcm_token': token}),
     );
+
+    return response;
   }
 }
