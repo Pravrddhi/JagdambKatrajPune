@@ -3,67 +3,23 @@ name: Branch Promotion
 on:
   push:
     branches:
-      - develop
       - release
   workflow_dispatch:
     inputs:
       source_branch:
         description: Source branch to promote from
         required: true
-        default: develop
+        default: release
       target_branch:
         description: Target branch to promote into
         required: true
-        default: release
+        default: master
 
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
-  promote-develop-to-release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout backend-dev
-        uses: actions/checkout@v4
-        with:
-          repository: Pravrddhi/backend-dev
-          token: ${{ secrets.GITHUBTOKEN }}
-
-      - name: Ensure PR develop -> release exists
-        env:
-          GH_TOKEN: ${{ secrets.GITHUBTOKEN }}
-        run: |
-          set -euo pipefail
-
-          git fetch origin develop release
-          ahead_count=$(git rev-list --count origin/release..origin/develop)
-          if [ "$ahead_count" -eq 0 ]; then
-            echo "No new commits to promote from develop to release"
-            exit 0
-          fi
-
-          existing_pr_count=$(gh pr list \
-            --repo Pravrddhi/backend-dev \
-            --base release \
-            --head develop \
-            --state open \
-            --json number \
-            --jq 'length')
-
-          if [ "$existing_pr_count" -gt 0 ]; then
-            echo "Open PR already exists for develop -> release"
-            exit 0
-          fi
-
-          gh pr create \
-            --repo Pravrddhi/backend-dev \
-            --base release \
-            --head develop \
-            --title "Promote develop to release" \
-            --body "Automated promotion PR from develop to release."
-
   promote-release-to-master:
     if: github.event_name == 'push' && github.ref == 'refs/heads/release'
     runs-on: ubuntu-latest
