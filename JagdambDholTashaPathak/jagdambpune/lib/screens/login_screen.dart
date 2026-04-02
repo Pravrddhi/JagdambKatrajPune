@@ -18,6 +18,7 @@ import '../widgets/input_box.dart';
 import 'package:provider/provider.dart';
 import '../providers/feature_flags_provider.dart';
 import '../web/screens/login_web_screen.dart';
+import '../components/get_emergency_details.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -28,6 +29,8 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   static const String _loginFailureMessage = 'Something went wrong';
+  static const String _showEmergencyAfterFirstLoginKey =
+      'show_emergency_after_first_login';
 
   final TextEditingController _pinController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
@@ -39,6 +42,15 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoggingIn = false;
   String _errorMessage = '';
   bool _isDeviceRegistered = false;
+
+  String _friendlyErrorMessage(Object error) {
+    final raw = error.toString().trim();
+    const prefix = 'Exception: ';
+    if (raw.startsWith(prefix)) {
+      return raw.substring(prefix.length).trim();
+    }
+    return raw;
+  }
 
   @override
   void initState() {
@@ -231,6 +243,9 @@ class _LoginScreenState extends State<LoginScreen> {
           data['is_gat_pramukh'] == true ||
           data['is_gat_pramukh']?.toString().toLowerCase() == 'true' ||
           data['is_gat_pramukh']?.toString() == '1';
+      final profileData = data['data'] is Map<String, dynamic>
+          ? Map<String, dynamic>.from(data['data'])
+          : const <String, dynamic>{};
 
       await storage.write(
         key: ApiEndpoints.accessTokenKey,
@@ -246,12 +261,49 @@ class _LoginScreenState extends State<LoginScreen> {
       );
       await storage.write(
         key: ApiEndpoints.gatPramukhNameKey,
-        value: data['gat_pramukh_name']?.toString() ?? '',
+        value:
+            profileData['gat_pramukh_name']?.toString() ??
+            data['gat_pramukh_name']?.toString() ??
+            '',
       );
-      String? fcmToken = await FCMService().getFcmToken(isLogin: false);
-      if (fcmToken != null) {
-        await FCMService().sendTokenToServer(fcmToken);
+      final joiningYearValue =
+          profileData['joining_year'] ??
+          profileData['joiningYear'] ??
+          profileData['joined_year'];
+      if (joiningYearValue != null) {
+        await storage.write(
+          key: 'joining_year',
+          value: joiningYearValue.toString(),
+        );
       }
+
+      if (isWeb) {
+        try {
+          final rawFlag = await storage.read(
+            key: _showEmergencyAfterFirstLoginKey,
+          );
+          final shouldShowEmergency = rawFlag == 'true' || rawFlag == '1';
+          if (shouldShowEmergency && mounted) {
+            await EmergencyContactDialog.show(context, data['access_token']);
+            await storage.write(
+              key: _showEmergencyAfterFirstLoginKey,
+              value: 'false',
+            );
+          }
+        } catch (_) {
+          // Emergency dialog must not block successful login on web.
+        }
+      }
+
+      try {
+        String? fcmToken = await FCMService().getFcmToken(isLogin: false);
+        if (fcmToken != null) {
+          await FCMService().sendTokenToServer(fcmToken);
+        }
+      } catch (_) {
+        // FCM setup must not block successful login.
+      }
+
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -272,7 +324,7 @@ class _LoginScreenState extends State<LoginScreen> {
             : ApiEndpoints.loginWithPin,
       );
       setState(() {
-        _errorMessage = _loginFailureMessage;
+        _errorMessage = isWeb ? _friendlyErrorMessage(e) : _loginFailureMessage;
       });
     } finally {
       setState(() {

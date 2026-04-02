@@ -18,12 +18,20 @@ class BugReportService {
     String? endpoint,
   }) async {
     try {
+      // Web flow should not post bug reports to protected endpoint.
+      if (kIsWeb) {
+        return;
+      }
+
       final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
 
-      final headers = <String, String>{'Content-Type': 'application/json'};
-      if (token != null && token.isNotEmpty) {
-        headers['Authorization'] = 'Bearer $token';
+      // Avoid unauthenticated requests to protected bug-report API.
+      if (token == null || token.isEmpty) {
+        return;
       }
+
+      final headers = <String, String>{'Content-Type': 'application/json'};
+      headers['Authorization'] = 'Bearer $token';
 
       final payload = {
         'title': title,
