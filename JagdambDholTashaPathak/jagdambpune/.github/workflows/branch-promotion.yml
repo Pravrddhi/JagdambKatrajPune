@@ -3,107 +3,70 @@ name: Branch Promotion
 on:
   push:
     branches:
+      - develop
       - release
   workflow_dispatch:
     inputs:
       source_branch:
         description: Source branch to promote from
         required: true
-        default: release
+        default: develop
       target_branch:
         description: Target branch to promote into
         required: true
-        default: master
+        default: release
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
-  promote-release-to-master:
+  promote-develop-to-pre-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create/Update PR develop -> release
+        uses: repo-sync/pull-request@v2
+        with:
+          source_branch: develop
+          destination_branch: release
+          github_token: ${{ secrets.GITHUBTOKEN }}
+          pr_title: "Promote develop to release"
+          pr_body: |
+            Automated promotion PR from `develop` to `release`.
+            Triggered by push to `develop`.
+          pr_label: automation,branch-promotion
+
+  promote-pre-release-to-master:
     if: github.event_name == 'push' && github.ref == 'refs/heads/release'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout backend-dev
-        uses: actions/checkout@v4
+      - name: Create/Update PR release -> master
+        uses: repo-sync/pull-request@v2
         with:
-          repository: Pravrddhi/backend-dev
-          token: ${{ secrets.GITHUBTOKEN }}
-
-      - name: Ensure PR release -> master exists
-        env:
-          GH_TOKEN: ${{ secrets.GITHUBTOKEN }}
-        run: |
-          set -euo pipefail
-
-          git fetch origin release master
-          ahead_count=$(git rev-list --count origin/master..origin/release)
-          if [ "$ahead_count" -eq 0 ]; then
-            echo "No new commits to promote from release to master"
-            exit 0
-          fi
-
-          existing_pr_count=$(gh pr list \
-            --repo Pravrddhi/backend-dev \
-            --base master \
-            --head release \
-            --state open \
-            --json number \
-            --jq 'length')
-
-          if [ "$existing_pr_count" -gt 0 ]; then
-            echo "Open PR already exists for release -> master"
-            exit 0
-          fi
-
-          gh pr create \
-            --repo Pravrddhi/backend-dev \
-            --base master \
-            --head release \
-            --title "Promote release to master" \
-            --body "Automated promotion PR from release to master."
+          source_branch: pre-release
+          destination_branch: master
+          github_token: ${{ secrets.GITHUBTOKEN }}
+          pr_title: "Promote pre-release to master"
+          pr_body: |
+            Automated promotion PR from `pre-release` to `master`.
+            Triggered by push to `pre-release`.
+            Merge is still controlled by branch protections / required approvals.
+          pr_label: automation,branch-promotion
 
   manual-promotion:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout backend-dev
-        uses: actions/checkout@v4
+      - name: Create/Update PR from workflow_dispatch input
+        uses: repo-sync/pull-request@v2
         with:
-          repository: Pravrddhi/backend-dev
-          token: ${{ secrets.GITHUBTOKEN }}
-
-      - name: Ensure manual promotion PR exists
-        env:
-          GH_TOKEN: ${{ secrets.GITHUBTOKEN }}
-          SOURCE_BRANCH: ${{ github.event.inputs.source_branch }}
-          TARGET_BRANCH: ${{ github.event.inputs.target_branch }}
-        run: |
-          set -euo pipefail
-
-          git fetch origin "$SOURCE_BRANCH" "$TARGET_BRANCH"
-          ahead_count=$(git rev-list --count "origin/$TARGET_BRANCH..origin/$SOURCE_BRANCH")
-          if [ "$ahead_count" -eq 0 ]; then
-            echo "No new commits to promote from $SOURCE_BRANCH to $TARGET_BRANCH"
-            exit 0
-          fi
-
-          existing_pr_count=$(gh pr list \
-            --repo Pravrddhi/backend-dev \
-            --base "$TARGET_BRANCH" \
-            --head "$SOURCE_BRANCH" \
-            --state open \
-            --json number \
-            --jq 'length')
-
-          if [ "$existing_pr_count" -gt 0 ]; then
-            echo "Open PR already exists for $SOURCE_BRANCH -> $TARGET_BRANCH"
-            exit 0
-          fi
-
-          gh pr create \
-            --repo Pravrddhi/backend-dev \
-            --base "$TARGET_BRANCH" \
-            --head "$SOURCE_BRANCH" \
-            --title "Promote $SOURCE_BRANCH to $TARGET_BRANCH" \
-            --body "Automated promotion PR from $SOURCE_BRANCH to $TARGET_BRANCH."
+          source_branch: ${{ github.event.inputs.source_branch }}
+          destination_branch: ${{ github.event.inputs.target_branch }}
+          github_token: ${{ secrets.GITHUBTOKEN }}
+          pr_title: "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
+          pr_body: |
+            Manual promotion PR created via workflow_dispatch.
+            Source: `${{ github.event.inputs.source_branch }}`
+            Target: `${{ github.event.inputs.target_branch }}`
+          pr_label: automation,branch-promotion
