@@ -1,10 +1,12 @@
 class User {
   final int? id;
   final bool? isActive;
+  final int? approvalStatus;
   final String? phoneNumber;
   final String? firstName;
   final String? lastName;
   final String? instrument;
+  final String? joiningYear;
   final String? sex;
   final String? role;
   final String? bloodGroup;
@@ -16,10 +18,12 @@ class User {
   User({
     this.id,
     this.isActive,
+    this.approvalStatus,
     this.phoneNumber,
     this.firstName,
     this.lastName,
     this.instrument,
+    this.joiningYear,
     this.sex,
     this.role,
     this.bloodGroup,
@@ -46,15 +50,32 @@ class User {
       id: json['id'] is int
           ? json['id'] as int
           : int.tryParse('${json['id'] ?? ''}'),
-      isActive: json['is_active'] is bool
-          ? json['is_active'] as bool
-          : (json['is_active'] == null
-                ? null
-                : '${json['is_active']}'.toLowerCase() == 'true'),
+      approvalStatus: json['approval_status'] is int
+          ? json['approval_status'] as int
+          : int.tryParse('${json['approval_status'] ?? ''}'),
+      isActive: (() {
+        if (json['is_active'] is bool) {
+          return json['is_active'] as bool;
+        }
+
+        if (json['is_active'] != null) {
+          return '${json['is_active']}'.toLowerCase() == 'true';
+        }
+
+        final parsedApprovalStatus = json['approval_status'] is int
+            ? json['approval_status'] as int
+            : int.tryParse('${json['approval_status'] ?? ''}');
+        if (parsedApprovalStatus == null) {
+          return null;
+        }
+
+        return parsedApprovalStatus == 1;
+      })(),
       phoneNumber: json['phone_number'],
       firstName: json['first_name'],
       lastName: json['last_name'],
       instrument: json['instrument'],
+      joiningYear: json['joining_year']?.toString(),
       sex: json['sex'],
       role: json['role'],
       bloodGroup: json['blood_group'],
@@ -68,10 +89,12 @@ class User {
   User copyWith({
     int? id,
     bool? isActive,
+    int? approvalStatus,
     String? phoneNumber,
     String? firstName,
     String? lastName,
     String? instrument,
+    String? joiningYear,
     String? sex,
     String? role,
     String? bloodGroup,
@@ -83,10 +106,12 @@ class User {
     return User(
       id: id ?? this.id,
       isActive: isActive ?? this.isActive,
+      approvalStatus: approvalStatus ?? this.approvalStatus,
       phoneNumber: phoneNumber ?? this.phoneNumber,
       firstName: firstName ?? this.firstName,
       lastName: lastName ?? this.lastName,
       instrument: instrument ?? this.instrument,
+      joiningYear: joiningYear ?? this.joiningYear,
       sex: sex ?? this.sex,
       role: role ?? this.role,
       bloodGroup: bloodGroup ?? this.bloodGroup,

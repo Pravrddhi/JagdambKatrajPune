@@ -8,7 +8,6 @@ class ProfileScreen extends StatelessWidget {
 
   /// Controls visibility of the "Update Profile" button
   // final bool showUpdateProfile;
-  
 
   const ProfileScreen({
     super.key,
@@ -20,15 +19,32 @@ class ProfileScreen extends StatelessWidget {
     /// Prepare user details, excluding unnecessary keys
     final flags = Provider.of<FeatureFlagsProvider>(context).flags;
     final filteredDetails = userDetails.entries
-        .where(
-          (entry) => entry.key != 'events' && entry.key != 'role',
-        )
-        .map(
-          (entry) => {
-            'label': entry.key.replaceAll('_', ' ').toUpperCase(),
-            'value': '${entry.value ?? 'N/A'}',
-          },
-        )
+        .where((entry) {
+          if (entry.key == 'events' ||
+              entry.key == 'role' ||
+              entry.key == 'is_gat_pramukh' ||
+              entry.key == 'approval_status') {
+            return false;
+          }
+
+          final value = entry.value;
+          if (value == null) {
+            return false;
+          }
+          if (value is String && value.trim().isEmpty) {
+            return false;
+          }
+          return true;
+        })
+        .map((entry) {
+          final label =
+              entry.key == 'joining_year' ||
+                  entry.key == 'joiningYear' ||
+                  entry.key == 'joined_year'
+              ? 'JOINED YEAR'
+              : entry.key.replaceAll('_', ' ').toUpperCase();
+          return {'label': label, 'value': '${entry.value}'};
+        })
         .toList();
 
     return Scaffold(
@@ -76,11 +92,7 @@ class _Avatar extends StatelessWidget {
       child: CircleAvatar(
         radius: 50,
         backgroundColor: AppColors.accentYellow,
-        child: Icon(
-          Icons.person,
-          size: 50,
-          color: AppColors.primaryMaroon,
-        ),
+        child: Icon(Icons.person, size: 50, color: AppColors.primaryMaroon),
       ),
     );
   }
@@ -103,9 +115,7 @@ class _UserDetailsCard extends StatelessWidget {
     return Card(
       color: AppColors.background,
       elevation: 6,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -134,9 +144,7 @@ class _UserDetailsCard extends StatelessWidget {
                       padding: const EdgeInsets.all(8),
                       child: Text(
                         item['value']!,
-                        style: const TextStyle(
-                          color: AppColors.primaryMaroon,
-                        ),
+                        style: const TextStyle(color: AppColors.primaryMaroon),
                       ),
                     ),
                   ],
@@ -159,9 +167,7 @@ class _UserDetailsCard extends StatelessWidget {
                 onPressed: () {
                   // TODO: Navigate to Update Profile screen
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Update profile clicked!'),
-                    ),
+                    const SnackBar(content: Text('Update profile clicked!')),
                   );
                 },
                 icon: const Icon(Icons.edit),
@@ -188,9 +194,7 @@ class _LogoutButton extends StatelessWidget {
         backgroundColor: Colors.red,
         foregroundColor: Colors.white,
         minimumSize: const Size(double.infinity, 48),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
       onPressed: () {
         // TODO: Clear session/token if required

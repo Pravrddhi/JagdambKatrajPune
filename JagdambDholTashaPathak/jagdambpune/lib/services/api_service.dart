@@ -193,7 +193,11 @@ class ApiService {
     }
   }
 
-  static Future<String> activateUser(int userId) async {
+  static Future<String> updateUserApproval({
+    required int userId,
+    required int decision,
+    String? comment,
+  }) async {
     try {
       String? storedAccessToken = await _storage.read(
         key: ApiEndpoints.accessTokenKey,
@@ -203,40 +207,67 @@ class ApiService {
         throw Exception('No access token found. Please login again.');
       }
 
-      final uri = Uri.parse(ApiEndpoints.getActivateUser(userId));
+      final uri = Uri.parse(ApiEndpoints.getUserApproval(userId));
 
-      final response = await http.post(
+      final payload = <String, dynamic>{'decision': decision};
+      if (comment != null && comment.trim().isNotEmpty) {
+        payload['comment'] = comment.trim();
+      }
+
+      final response = await http.patch(
         uri,
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer $storedAccessToken',
         },
+        body: jsonEncode(payload),
       );
 
       if (response.statusCode == 200) {
         final dynamic decoded = jsonDecode(response.body);
         if (decoded is Map<String, dynamic> && decoded['status'] == true) {
-          return decoded['message']?.toString() ?? 'User approved';
+          return decoded['message']?.toString() ?? 'User approval updated';
         }
-        throw Exception('Failed to approve user');
+        throw Exception('Failed to update user approval');
+      } else if (response.statusCode == 400 ||
+          response.statusCode == 403 ||
+          response.statusCode == 404) {
+        final dynamic decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          final message = decoded['message']?.toString();
+          if (message != null && message.isNotEmpty) {
+            throw Exception(message);
+          }
+          final commentErrors = decoded['comment'];
+          if (commentErrors is List && commentErrors.isNotEmpty) {
+            throw Exception(commentErrors.first.toString());
+          }
+        }
+        throw Exception(
+          'Failed to update user approval (status code ${response.statusCode})',
+        );
       } else if (response.statusCode == 401) {
         final success = await _handleTokenRefresh();
         if (success) {
-          return activateUser(userId);
+          return updateUserApproval(
+            userId: userId,
+            decision: decision,
+            comment: comment,
+          );
         }
         throw Exception('Session expired. Please login again.');
       } else {
         throw Exception(
-          'Failed to approve user (status code ${response.statusCode})',
+          'Failed to update user approval (status code ${response.statusCode})',
         );
       }
     } catch (e, st) {
       await BugReportService.reportApiFailure(
-        title: 'Activate user API failure',
+        title: 'User approval API failure',
         errorMessage: e.toString(),
         stackTrace: st.toString(),
-        pageUrl: '/users/activate/$userId',
-        endpoint: ApiEndpoints.getActivateUser(userId),
+        pageUrl: '/users/$userId/approval',
+        endpoint: ApiEndpoints.getUserApproval(userId),
       );
       rethrow;
     }

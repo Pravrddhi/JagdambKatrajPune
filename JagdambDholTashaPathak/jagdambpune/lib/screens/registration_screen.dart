@@ -42,6 +42,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   // Dropdown selections
   String? selectedSex;
   String? selectedInstrument;
+  DateTime? selectedDob;
+  int? selectedJoiningYear;
 
   // Loading states
   bool _isCheckingPhone = false;
@@ -272,6 +274,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           "last_name": _lastNameController.text,
           "gender": selectedSex,
           "instrument": selectedInstrument,
+          "dob": selectedDob != null
+              ? '${selectedDob!.year}-${selectedDob!.month.toString().padLeft(2, '0')}-${selectedDob!.day.toString().padLeft(2, '0')}'
+              : null,
+          "joining_year": selectedJoiningYear,
           "device_id": await _getDeviceId(),
           "pathak_id": ApiEndpoints.pathakId,
         }),
@@ -496,6 +502,77 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                     ),
                   ),
                 ),
+              const SizedBox(height: 16),
+
+              // Date of Birth picker
+              GestureDetector(
+                onTap: () async {
+                  final DateTime? picked = await showDatePicker(
+                    context: context,
+                    initialDate: selectedDob ?? DateTime(2000),
+                    firstDate: DateTime(1950),
+                    lastDate: DateTime.now(),
+                  );
+                  if (picked != null && picked != selectedDob) {
+                    setState(() {
+                      selectedDob = picked;
+                    });
+                    _validateForm();
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 12,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryMaroon,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.accentYellow.withAlpha(77),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        selectedDob != null
+                            ? '${selectedDob!.day}/${selectedDob!.month}/${selectedDob!.year}'
+                            : 'Date of Birth',
+                        style: const TextStyle(
+                          color: AppColors.textLight,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const Icon(
+                        Icons.calendar_today,
+                        color: AppColors.accentYellow,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Joining Year dropdown
+              PremiumDropDown(
+                label: "Joining Year",
+                value: selectedJoiningYear?.toString(),
+                options: List.generate(
+                  30,
+                  (index) => (DateTime.now().year - index).toString(),
+                ),
+                onChanged: (val) {
+                  setState(() {
+                    selectedJoiningYear = int.tryParse(val ?? '');
+                  });
+                  _validateForm();
+                },
+              ),
               const SizedBox(height: 16),
 
               // Instrument dropdown
