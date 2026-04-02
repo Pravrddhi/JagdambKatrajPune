@@ -42,11 +42,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     return;
   }
 
-  if (kDebugMode) {
-    print('[FCM BG] notification block: ${message.notification?.title}');
-    print('[FCM BG] data keys: ${message.data}');
-  }
-
   final notification = message.notification;
   final title =
       notification?.title ??
@@ -61,10 +56,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       message.data['notification_body']?.toString() ??
       message.data['text']?.toString() ??
       '';
-
-  if (kDebugMode) {
-    print('[FCM BG] resolved title: $title, body: $body');
-  }
 
   // For data-only messages (no notification block) show a local notification
   // so the user sees something even when the app is in background/killed.
@@ -114,9 +105,6 @@ Future<void> main() async {
     _firebaseReady = true;
   } catch (e) {
     _firebaseReady = false;
-    if (kDebugMode) {
-      print('[Firebase] Init skipped: $e');
-    }
   }
 
   if (_firebaseReady) {
@@ -165,11 +153,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       );
 
   void _handleIncomingMessage(RemoteMessage message) {
-    if (kDebugMode) {
-      print('[FCM FG] notification block: ${message.notification?.title}');
-      print('[FCM FG] data: ${message.data}');
-    }
-
     final notification = message.notification;
     final title =
         notification?.title ??

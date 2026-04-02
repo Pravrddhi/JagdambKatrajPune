@@ -67,7 +67,6 @@ class _ResetPinScreenState extends State<ResetPinScreen> {
     });
 
     final deviceId = await getDeviceId(); // Obtain unique device id
-    print(deviceId);
 
     try {
       final response = await http.post(
@@ -76,11 +75,8 @@ class _ResetPinScreenState extends State<ResetPinScreen> {
         body: jsonEncode({"device_id": deviceId, "phone_number": phoneNumber}),
       );
 
-      final data = jsonDecode(response.body);
-
       if (response.statusCode == 200) {
         // Verification successful, proceed to set PIN dialog
-        print(data);
         Navigator.pop(context); // Close current screen
         showSetPinDialog(context, phoneNumber, true);
       } else {

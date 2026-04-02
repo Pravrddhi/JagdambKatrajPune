@@ -32,123 +32,143 @@ class EmergencyContactDialog {
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
+        final mediaQuery = MediaQuery.of(context);
+        final screenHeight = mediaQuery.size.height;
+        final bottomInset = mediaQuery.viewInsets.bottom;
+        const verticalInset = 20.0;
+        final availableHeight =
+            (screenHeight - bottomInset - (verticalInset * 2)).clamp(
+              220.0,
+              screenHeight,
+            );
+
         return StatefulBuilder(
           builder: (context, setState) {
-            return AlertDialog(
-              backgroundColor: Colors.white,
-              title: const Text(
-                "Emergency Details",
-                style: TextStyle(color: AppColors.primaryMaroon),
-              ),
-              content: Form(
-                key: formKey,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Custom input box for name
-                      PremiumInputBox(
-                        controller: nameController,
-                        label: "Emergency Name",
-                        useLightStyle: true,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.allow(
-                            RegExp(r'[a-zA-Z\s]'),
+            return AnimatedPadding(
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOut,
+              padding: EdgeInsets.only(bottom: bottomInset),
+              child: AlertDialog(
+                backgroundColor: Colors.white,
+                title: const Text(
+                  "Emergency Details",
+                  style: TextStyle(color: AppColors.primaryMaroon),
+                ),
+                content: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: availableHeight),
+                  child: Form(
+                    key: formKey,
+                    child: SingleChildScrollView(
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // Custom input box for name
+                          PremiumInputBox(
+                            controller: nameController,
+                            label: "Emergency Name",
+                            useLightStyle: true,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.allow(
+                                RegExp(r'[a-zA-Z\s]'),
+                              ),
+                            ],
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return "Emergency Name is required.";
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 10),
+                          // Custom input box for phone
+                          PremiumInputBox(
+                            controller: phoneController,
+                            label: "Emergency Phone",
+                            useLightStyle: true,
+                            keyboardType: TextInputType.phone,
+                            maxLength: 10,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
+                            validator: (value) {
+                              if (value == null || value.isEmpty) {
+                                return "Emergency Phone is required.";
+                              }
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 10),
+                          // Dropdown for blood group
+                          PremiumDropDown(
+                            value: selectedBloodGroup,
+                            label: "Select Blood Group",
+                            options: bloodGroups,
+                            backgroundColor: Colors.white,
+                            labelColor: AppColors.primaryMaroon,
+                            textColor: AppColors.primaryMaroon,
+                            dropdownMenuColor: Colors.white,
+                            onChanged: (value) {
+                              setState(() {
+                                selectedBloodGroup = value;
+                              });
+                            },
                           ),
                         ],
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return "Emergency Name is required.";
-                          }
-                          return null;
-                        },
                       ),
-                      const SizedBox(height: 10),
-                      // Custom input box for phone
-                      PremiumInputBox(
-                        controller: phoneController,
-                        label: "Emergency Phone",
-                        useLightStyle: true,
-                        keyboardType: TextInputType.phone,
-                        maxLength: 10,
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                        ],
-                        validator: (value) {
-                          if (value == null || value.isEmpty) {
-                            return "Emergency Phone is required.";
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      // Dropdown for blood group
-                      PremiumDropDown(
-                        value: selectedBloodGroup,
-                        label: "Select Blood Group",
-                        options: bloodGroups,
-                        backgroundColor: Colors.white,
-                        labelColor: AppColors.primaryMaroon,
-                        textColor: AppColors.primaryMaroon,
-                        dropdownMenuColor: Colors.white,
-                        onChanged: (value) {
-                          setState(() {
-                            selectedBloodGroup = value;
-                          });
-                        },
-                      ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-              actions: [
-                PremiumButton(
-                  text: "Update",
-                  isEnabled: !isLoading,
-                  backgroundColor: AppColors.accentYellow,
-                  textColor: AppColors.primaryMaroon,
-                  isLoading: isLoading,
-                  onPressed: () async {
-                    if (formKey.currentState!.validate()) {
-                      setState(() {
-                        isLoading = true;
-                      });
+                actions: [
+                  PremiumButton(
+                    text: "Update",
+                    isEnabled: !isLoading,
+                    backgroundColor: AppColors.accentYellow,
+                    textColor: AppColors.primaryMaroon,
+                    isLoading: isLoading,
+                    onPressed: () async {
+                      if (formKey.currentState!.validate()) {
+                        setState(() {
+                          isLoading = true;
+                        });
 
-                      bool success = await _submitEmergencyContact(
-                        nameController.text.trim(),
-                        phoneController.text.trim(),
-                        selectedBloodGroup!,
-                        token,
-                      );
-
-                      setState(() {
-                        isLoading = false;
-                      });
-
-                      if (success) {
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              "Emergency contact updated successfully",
-                              selectionColor: AppColors.accentYellow,
-                            ),
-                          ),
+                        bool success = await _submitEmergencyContact(
+                          nameController.text.trim(),
+                          phoneController.text.trim(),
+                          selectedBloodGroup!,
+                          token,
                         );
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              ApiEndpoints.genericApiFailureMessage,
-                              selectionColor: AppColors.accentYellow,
+
+                        setState(() {
+                          isLoading = false;
+                        });
+
+                        if (success) {
+                          Navigator.pop(context);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                "Emergency contact updated successfully",
+                                selectionColor: AppColors.accentYellow,
+                              ),
                             ),
-                          ),
-                        );
+                          );
+                        } else {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                ApiEndpoints.genericApiFailureMessage,
+                                selectionColor: AppColors.accentYellow,
+                              ),
+                            ),
+                          );
+                        }
                       }
-                    }
-                  },
-                ),
-              ],
+                    },
+                  ),
+                ],
+              ),
             );
           },
         );

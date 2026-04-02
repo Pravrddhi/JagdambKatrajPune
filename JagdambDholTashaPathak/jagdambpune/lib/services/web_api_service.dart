@@ -34,6 +34,7 @@ class WebApiService {
           .timeout(const Duration(seconds: 15));
 
       final decoded = jsonDecode(response.body);
+
       if (decoded is! Map<String, dynamic>) {
         throw Exception('Invalid login response format');
       }
@@ -75,13 +76,14 @@ class WebApiService {
           )
           .timeout(const Duration(seconds: 15));
 
+      final decoded = jsonDecode(response.body);
+
       if (response.statusCode != 200) {
         throw Exception(
           'Failed to load feature flags (status code ${response.statusCode})',
         );
       }
 
-      final decoded = jsonDecode(response.body);
       if (decoded is! Map<String, dynamic>) {
         throw Exception('Invalid feature flags response format');
       }

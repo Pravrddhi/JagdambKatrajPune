@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_endpoints.dart';
 import 'bug_report_service.dart';
@@ -23,10 +22,6 @@ class FCMService {
     final isGranted =
         settings.authorizationStatus == AuthorizationStatus.authorized ||
         settings.authorizationStatus == AuthorizationStatus.provisional;
-
-    if (!isGranted && kDebugMode) {
-      print("Notification permission not granted.");
-    }
 
     return isGranted;
   }
@@ -54,7 +49,6 @@ class FCMService {
     _isRefreshListenerAttached = true;
 
     _fcm.onTokenRefresh.listen((newToken) async {
-      if (kDebugMode) print("FCM Token refreshed: $newToken");
       await sendTokenToServer(newToken);
     });
   }
@@ -71,22 +65,17 @@ class FCMService {
   /// Subscribe to a topic
   Future<void> subscribeToTopic(String topic) async {
     await _fcm.subscribeToTopic(topic);
-    if (kDebugMode) print("Subscribed to topic: $topic");
   }
 
   /// Unsubscribe from a topic
   Future<void> unsubscribeFromTopic(String topic) async {
     await _fcm.unsubscribeFromTopic(topic);
-    if (kDebugMode) print("Unsubscribed from topic: $topic");
   }
 
   /// Send FCM token to backend
   Future<void> sendTokenToServer(String token) async {
     try {
       if (token.isEmpty) {
-        if (kDebugMode) {
-          print("FCM token is empty, skipping update-fcm-token call.");
-        }
         return;
       }
 
@@ -94,7 +83,6 @@ class FCMService {
         key: ApiEndpoints.accessTokenKey,
       );
       if (accessToken == null || accessToken.isEmpty) {
-        if (kDebugMode) print("Access token not found, cannot send FCM token.");
         return;
       }
 
@@ -115,24 +103,7 @@ class FCMService {
         }
       }
 
-      if (response.statusCode == 200) {
-        final dynamic decoded = jsonDecode(response.body);
-        final bool isSuccess =
-            decoded is Map<String, dynamic> &&
-            (decoded['status'] == true || decoded['fcm_token'] != null);
-
-        if (isSuccess) {
-          if (kDebugMode) {
-            print(
-              "FCM token synced successfully: ${decoded['message'] ?? 'FCM token updated successfully.'}",
-            );
-          }
-        } else {
-          if (kDebugMode) {
-            print("FCM token update response invalid: ${response.body}");
-          }
-        }
-      } else {
+      if (response.statusCode != 200) {
         await BugReportService.reportApiFailure(
           title: 'FCM token update API failed',
           errorMessage: response.body,
@@ -140,11 +111,6 @@ class FCMService {
           statusCode: response.statusCode,
           endpoint: ApiEndpoints.updateFCMToken,
         );
-        if (kDebugMode) {
-          print(
-            "Failed to sync FCM token. Status: ${response.statusCode}, Body: ${response.body}",
-          );
-        }
       }
     } catch (e) {
       await BugReportService.reportApiFailure(
@@ -153,9 +119,6 @@ class FCMService {
         pageUrl: '/notifications/update-fcm-token',
         endpoint: ApiEndpoints.updateFCMToken,
       );
-      if (kDebugMode) {
-        print("Error sending FCM token to server: $e");
-      }
     }
   }
 
