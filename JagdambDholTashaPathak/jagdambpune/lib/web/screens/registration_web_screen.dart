@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import '../../config/api_endpoints.dart';
@@ -13,6 +13,8 @@ import '../../widgets/common_button.dart';
 import '../../widgets/drop_down.dart';
 import '../../widgets/input_box.dart';
 import '../../screens/home_screen.dart';
+
+const FlutterSecureStorage _storage = FlutterSecureStorage();
 
 class RegistrationWebScreen extends StatefulWidget {
   const RegistrationWebScreen({super.key});
@@ -43,15 +45,13 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
   List<String> _instruments = [];
   Timer? _debounceTimer;
 
-  /// Generate a random device ID with 5-10 characters mix of digits and letters
-  String _generateRandomDeviceId() {
-    const String chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    Random random = Random();
-    int length = random.nextInt(6) + 5; // 5 to 10 characters
-    return List.generate(
-      length,
-      (index) => chars[random.nextInt(chars.length)],
-    ).join();
+  /// Web device id format: firstname_mobilenumber
+  String _generateWebDeviceId() {
+    final firstName = _firstNameController.text.trim().toLowerCase();
+    final normalizedFirstName = firstName.replaceAll(RegExp(r'[^a-z0-9]'), '');
+    final phone = _phoneController.text.trim().replaceAll(RegExp(r'\D'), '');
+
+    return '${normalizedFirstName}_$phone';
   }
 
   @override
@@ -343,7 +343,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
           ? '${selectedDob!.year}-${selectedDob!.month.toString().padLeft(2, '0')}-${selectedDob!.day.toString().padLeft(2, '0')}'
           : null,
       'joining_year': selectedJoiningYear,
-      'device_id': _generateRandomDeviceId(),
+      'device_id': _generateWebDeviceId(),
       'pathak_id': ApiEndpoints.pathakId,
     };
 
@@ -360,12 +360,21 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
 
       if (response.statusCode == 201) {
         final accessToken = responseData['access_token'];
+        final normalizedAccessToken = accessToken?.toString().trim() ?? '';
+
+        if (normalizedAccessToken.isNotEmpty) {
+          await _storage.write(
+            key: ApiEndpoints.accessTokenKey,
+            value: normalizedAccessToken,
+          );
+        }
+
         if (!mounted) return;
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
             builder: (_) => HomeScreen(
-              authToken: accessToken,
+              authToken: normalizedAccessToken,
               phoneNumber: _phoneController.text,
               isRegistration: true,
             ),
