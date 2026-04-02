@@ -18,7 +18,6 @@ import '../widgets/input_box.dart';
 import 'package:provider/provider.dart';
 import '../providers/feature_flags_provider.dart';
 import '../web/screens/login_web_screen.dart';
-import '../components/get_emergency_details.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -29,8 +28,6 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   static const String _loginFailureMessage = 'Something went wrong';
-  static const String _showEmergencyAfterFirstLoginKey =
-      'show_emergency_after_first_login';
 
   final TextEditingController _pinController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
@@ -246,6 +243,59 @@ class _LoginScreenState extends State<LoginScreen> {
       final profileData = data['data'] is Map<String, dynamic>
           ? Map<String, dynamic>.from(data['data'])
           : const <String, dynamic>{};
+      final rawApprovalStatus =
+          profileData['approval_status'] ?? data['approval_status'];
+      final approvalStatus = rawApprovalStatus is int
+          ? rawApprovalStatus
+          : int.tryParse(rawApprovalStatus?.toString() ?? '');
+      final approvalComment =
+          profileData['approval_comment']?.toString().trim().isNotEmpty == true
+          ? profileData['approval_comment'].toString().trim()
+          : data['approval_comment']?.toString().trim() ?? '';
+
+      if (approvalStatus == 2) {
+        await _clearStoredSessionForUnapprovedUser();
+        if (!mounted) return;
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            title: const Text('Pending Approval !'),
+            content: const Text('Please wait till admin approves the account'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
+      if (approvalStatus == 3) {
+        await _clearStoredSessionForUnapprovedUser();
+        if (!mounted) return;
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            title: const Text('Rejected !'),
+            content: Text(
+              approvalComment.isNotEmpty
+                  ? 'Your account has been rejected with below comment\n\n$approvalComment'
+                  : 'Your account has been rejected with below comment',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
 
       await storage.write(
         key: ApiEndpoints.accessTokenKey,
@@ -275,24 +325,6 @@ class _LoginScreenState extends State<LoginScreen> {
           key: 'joining_year',
           value: joiningYearValue.toString(),
         );
-      }
-
-      if (isWeb) {
-        try {
-          final rawFlag = await storage.read(
-            key: _showEmergencyAfterFirstLoginKey,
-          );
-          final shouldShowEmergency = rawFlag == 'true' || rawFlag == '1';
-          if (shouldShowEmergency && mounted) {
-            await EmergencyContactDialog.show(context, data['access_token']);
-            await storage.write(
-              key: _showEmergencyAfterFirstLoginKey,
-              value: 'false',
-            );
-          }
-        } catch (_) {
-          // Emergency dialog must not block successful login on web.
-        }
       }
 
       try {
@@ -331,6 +363,13 @@ class _LoginScreenState extends State<LoginScreen> {
         _isLoggingIn = false;
       });
     }
+  }
+
+  Future<void> _clearStoredSessionForUnapprovedUser() async {
+    await storage.delete(key: ApiEndpoints.accessTokenKey);
+    await storage.delete(key: ApiEndpoints.refreshTokenKey);
+    await storage.delete(key: ApiEndpoints.isGatPramukhKey);
+    await storage.delete(key: ApiEndpoints.gatPramukhNameKey);
   }
 
   @override

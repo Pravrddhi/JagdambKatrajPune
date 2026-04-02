@@ -91,19 +91,19 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   /// Fetch instruments from server for dropdown based on pathak_id
   Future<List<String>> _fetchInstruments(int pathakId) async {
-    final url = Uri.parse("${ApiEndpoints.getInstruments}/$pathakId");
+    final url = Uri.parse("${ApiEndpoints.getInstruments}/$pathakId/");
     try {
       final response = await http.get(url);
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
-        if (data["status"] == true) {
-          List<dynamic> instruments = data["instruments"];
-          return instruments.map((e) => e.toString()).toList();
-        } else {
-          // Server rejection
-          return [];
-        }
+        final rawInstruments = _extractInstrumentList(data);
+
+        return rawInstruments
+            .map(_instrumentNameFromItem)
+            .where((value) => value.isNotEmpty)
+            .toSet()
+            .toList();
       } else {
         await BugReportService.reportApiFailure(
           title: 'Fetch instruments API failed',
@@ -125,6 +125,68 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     }
   }
 
+  List<dynamic> _extractInstrumentList(dynamic data) {
+    if (data is List) {
+      return data;
+    }
+
+    if (data is Map<String, dynamic>) {
+      const listKeys = [
+        'instruments',
+        'data',
+        'results',
+        'instrument_list',
+        'instrument_names',
+        'items',
+      ];
+
+      for (final key in listKeys) {
+        final payload = data[key];
+        if (payload is List) {
+          return payload;
+        }
+      }
+
+      for (final value in data.values) {
+        if (value is List) {
+          return value;
+        }
+      }
+    }
+
+    return <dynamic>[];
+  }
+
+  String _instrumentNameFromItem(dynamic item) {
+    if (item is String) {
+      return item.trim();
+    }
+
+    if (item is Map) {
+      const nameKeys = [
+        'name',
+        'instrument',
+        'title',
+        'instrument_name',
+        'instrumentName',
+        'label',
+        'value',
+      ];
+
+      for (final key in nameKeys) {
+        final value = item[key];
+        if (value != null) {
+          final normalized = value.toString().trim();
+          if (normalized.isNotEmpty) {
+            return normalized;
+          }
+        }
+      }
+    }
+
+    return item.toString().trim();
+  }
+
   /// Loads instruments and updates UI state with results
   void _loadInstruments() async {
     int pathakId = int.tryParse(ApiEndpoints.pathakId.toString()) ?? 0;
@@ -142,6 +204,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         validateFirstName(_firstNameController.text) &&
         validateLastName(_lastNameController.text) &&
         validatePhone(_phoneController.text) &&
+        selectedDob != null &&
         validateSelection(selectedSex) &&
         validateSelection(selectedInstrument) &&
         _fieldErrors.values.every((error) => error == null);
@@ -156,6 +219,36 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   bool validateLastName(String lastName) => lastName.trim().isNotEmpty;
   bool validatePhone(String phone) => RegExp(r'^\d{10}$').hasMatch(phone);
   bool validateSelection(String? value) => value != null;
+
+  bool _isAtLeast18(DateTime dob) {
+    final now = DateTime.now();
+    int age = now.year - dob.year;
+    final hasNotHadBirthdayYet =
+        now.month < dob.month || (now.month == dob.month && now.day < dob.day);
+    if (hasNotHadBirthdayYet) {
+      age -= 1;
+    }
+    return age >= 18;
+  }
+
+  Future<void> _showUnderAgePopup() async {
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text('Access Denied'),
+        content: const Text(
+          'below 18 are not allowed please ask your parents to login',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
 
   /// Check via API if phone number already registered
   Future<void> _checkPhoneNumberExists(String phoneNumber) async {
@@ -239,6 +332,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     }
     if (!validatePhone(_phoneController.text)) {
       errors['phone_number'] = "Phone number must be 10 digits only.";
+    }
+    if (selectedDob == null) {
+      errors['dob'] = 'Date of Birth is required.';
     }
     if (!validateSelection(selectedSex)) {
       errors['sex'] = "Please select a gender.";
@@ -516,7 +612,15 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   if (picked != null && picked != selectedDob) {
                     setState(() {
                       selectedDob = picked;
+                      _fieldErrors.remove('dob');
                     });
+                    if (!_isAtLeast18(picked)) {
+                      setState(() {
+                        selectedDob = null;
+                        _fieldErrors['dob'] = 'You must be 18 years old';
+                      });
+                      await _showUnderAgePopup();
+                    }
                     _validateForm();
                   }
                 },
@@ -556,6 +660,17 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                   ),
                 ),
               ),
+              if (_fieldErrors['dob'] != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4.0, left: 4.0),
+                  child: Text(
+                    _fieldErrors['dob']!,
+                    style: const TextStyle(
+                      color: AppColors.accentYellow,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
               const SizedBox(height: 16),
 
               // Joining Year dropdown
