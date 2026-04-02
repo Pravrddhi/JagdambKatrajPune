@@ -23,7 +23,9 @@ class ProfileScreen extends StatelessWidget {
           if (entry.key == 'events' ||
               entry.key == 'role' ||
               entry.key == 'is_gat_pramukh' ||
-              entry.key == 'approval_status') {
+              entry.key == 'approval_status' ||
+              entry.key == 'approval_comment' ||
+              entry.key == 'approvalComment') {
             return false;
           }
 

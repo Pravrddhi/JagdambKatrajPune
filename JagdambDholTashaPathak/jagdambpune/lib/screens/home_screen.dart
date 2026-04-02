@@ -182,6 +182,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Future<void> _showEmergencyDialogOnFirstLoginIfNeeded(String token) async {
     final rawFlag = await storage.read(key: _showEmergencyAfterFirstLoginKey);
     final shouldShow = rawFlag == 'true' || rawFlag == '1';
+    final emergencyName =
+        _userDetails?['emergency_contact_name']?.toString().trim() ?? '';
+    final emergencyPhone =
+        _userDetails?['emergency_contact_phone']?.toString().trim() ?? '';
+    final hasEmergencyDetails =
+        emergencyName.isNotEmpty && emergencyPhone.isNotEmpty;
+
+    // If details already exist, never keep asking on login.
+    if (hasEmergencyDetails) {
+      await storage.write(
+        key: _showEmergencyAfterFirstLoginKey,
+        value: 'false',
+      );
+      return;
+    }
 
     if (!shouldShow || !mounted) {
       return;
@@ -197,16 +212,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       return;
     }
 
-    await EmergencyContactDialog.show(context, effectiveToken);
+    // Clear first to avoid repeated popups if dialog flow is interrupted.
     await storage.write(key: _showEmergencyAfterFirstLoginKey, value: 'false');
+    await EmergencyContactDialog.show(context, effectiveToken);
   }
 
   /// Wrapper to handle loading/error state while fetching user details
-  Future<bool> _loadUserDetails(String token) async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+  Future<bool> _loadUserDetails(String token, {bool showLoading = true}) async {
+    if (showLoading) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    } else {
+      setState(() {
+        _errorMessage = null;
+      });
+    }
 
     try {
       final userData = await UserService.fetchUserDetails(token);
@@ -247,6 +269,29 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final approvalStatus = rawApprovalStatus is int
           ? rawApprovalStatus
           : int.tryParse(rawApprovalStatus?.toString() ?? '');
+      if (approvalStatus == 2) {
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            title: const Text('Pending Approval !'),
+            content: const Text('Please wait till admin approves the account'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+
+        if (!mounted) return false;
+        Navigator.of(
+          context,
+        ).pushNamedAndRemoveUntil('/login', (route) => false);
+        return false;
+      }
+
       if (approvalStatus == 3) {
         final rejectionComment =
             mergedUserData['approval_comment']?.toString().trim() ?? '';
@@ -254,11 +299,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           context: context,
           barrierDismissible: false,
           builder: (_) => AlertDialog(
-            title: const Text('Account Rejected'),
+            title: const Text('Rejected !'),
             content: Text(
               rejectionComment.isNotEmpty
-                  ? 'Your account was rejected. Comment: $rejectionComment'
-                  : 'Your account was rejected. Please contact admin.',
+                  ? 'your account has been rejected with below comment\n\n$rejectionComment'
+                  : 'your account has been rejected with below comment',
             ),
             actions: [
               TextButton(
@@ -281,7 +326,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
         if (mergedUserData['events'] != null &&
             mergedUserData['events'].isNotEmpty) {
-          _events = List<Map<String, dynamic>>.from(mergedUserData['events']);
+          final list = List<Map<String, dynamic>>.from(
+            mergedUserData['events'],
+          );
+          list.sort((a, b) {
+            DateTime? parse(Map<String, dynamic> e) {
+              final date = e['date']?.toString().trim() ?? '';
+              final time = e['time_from']?.toString().trim() ?? '00:00';
+              if (date.isEmpty) return null;
+              return DateTime.tryParse('$date $time');
+            }
+
+            final da = parse(a);
+            final db = parse(b);
+            if (da == null && db == null) return 0;
+            if (da == null) return 1;
+            if (db == null) return -1;
+            return db.compareTo(da); // latest first
+          });
+          _events = list;
         } else {
           _events = [];
         }
@@ -289,31 +352,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
       _animationController.forward();
       return true;
-    } on UserInactiveException {
-      if (!mounted) return false;
-      final isRegistration = widget.isRegistration;
-      await showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => AlertDialog(
-          title: const Text('Pending Approval'),
-          content: Text(
-            isRegistration
-                ? 'Your registration is successful! Your account is pending admin approval. You will be able to login once approved.'
-                : 'Your account is inactive. Please ask the admin to approve your account.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-
-      if (!mounted) return false;
-      Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
-      return false;
     } catch (e) {
       if (!mounted) return false;
       setState(() {
@@ -323,8 +361,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       });
       return false;
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted && showLoading) {
+        setState(() => _isLoading = false);
+      }
     }
+  }
+
+  Future<void> _refreshEventsSection() async {
+    final storedToken = await storage.read(key: ApiEndpoints.accessTokenKey);
+    final effectiveToken = (storedToken != null && storedToken.isNotEmpty)
+        ? storedToken
+        : accessToken.trim().isNotEmpty
+        ? accessToken
+        : widget.authToken;
+
+    if (effectiveToken.trim().isEmpty) {
+      return;
+    }
+
+    await _loadUserDetails(effectiveToken, showLoading: false);
   }
 
   bool _parseBool(dynamic value) {
@@ -649,7 +704,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           flex: 7,
                           child: _events.isNotEmpty
                               ? SingleChildScrollView(
-                                  child: UpcomingEvents(events: _events),
+                                  child: UpcomingEvents(
+                                    events: _events,
+                                    isPathakAdmin: _isPathakAdmin,
+                                    onRefresh: _refreshEventsSection,
+                                  ),
                                 )
                               : _buildMotivationalSayingsPanel(),
                         ),

@@ -125,7 +125,13 @@ class _NotificationDialogState extends State<_NotificationDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final mediaQuery = MediaQuery.of(context);
+    final screenHeight = mediaQuery.size.height;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    const verticalInset = 20.0;
+
+    final availableHeight = (screenHeight - bottomInset - (verticalInset * 2))
+        .clamp(220.0, screenHeight);
 
     return AnimatedPadding(
       duration: const Duration(milliseconds: 180),
@@ -137,9 +143,7 @@ class _NotificationDialogState extends State<_NotificationDialog> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: SafeArea(
           child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.of(context).size.height * 0.82,
-            ),
+            constraints: BoxConstraints(maxHeight: availableHeight),
             child: Scrollbar(
               thumbVisibility: true,
               child: SingleChildScrollView(
