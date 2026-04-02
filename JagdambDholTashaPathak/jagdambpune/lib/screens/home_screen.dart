@@ -118,8 +118,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   /// Initialize user info depending on registration status
   Future<void> _initializeUser() async {
     final fcmService = FCMService();
-    fcmService.listenTokenRefresh();
-    await fcmService.requestNotificationPermission();
+    try {
+      fcmService.listenTokenRefresh();
+      await fcmService.requestNotificationPermission();
+    } catch (_) {
+      // Never block core app flow (including emergency popup) on notification setup.
+    }
 
     if (widget.isRegistration) {
       Future.delayed(const Duration(seconds: 2), () async {
@@ -130,41 +134,44 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         );
 
         if (!mounted) return;
-        await showDialog(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: const Text('Success'),
-            content: const Text('Registration successful.'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('OK'),
-              ),
-            ],
-          ),
-        );
 
-        // Defer emergency details to first successful login after registration.
-        await storage.write(
-          key: _showEmergencyAfterFirstLoginKey,
-          value: 'true',
-        );
-
-        if (!mounted) return;
-        Navigator.of(
-          context,
-        ).pushNamedAndRemoveUntil('/login', (route) => false);
+        // After PIN is set, load the home screen directly without going to login.
+        if (accessToken.isNotEmpty) {
+          await storage.write(
+            key: _showEmergencyAfterFirstLoginKey,
+            value: 'true',
+          );
+          try {
+            await fcmService.syncCurrentTokenToServer(isLogin: false);
+          } catch (_) {}
+          final loaded = await _loadUserDetails(accessToken);
+          if (!mounted || !loaded) return;
+          await _showEmergencyDialogOnFirstLoginIfNeeded(accessToken);
+        } else {
+          // PIN dialog was dismissed without a token — fall back to login.
+          Navigator.of(
+            context,
+          ).pushNamedAndRemoveUntil('/login', (route) => false);
+        }
       });
     } else {
       String? token = await storage.read(key: 'access_token');
       if (token != null && token.isNotEmpty) {
         accessToken = token;
-        await fcmService.syncCurrentTokenToServer(isLogin: false);
+        try {
+          await fcmService.syncCurrentTokenToServer(isLogin: false);
+        } catch (_) {
+          // Continue to home initialization even if FCM sync fails.
+        }
         final loaded = await _loadUserDetails(accessToken);
         if (!mounted || !loaded) return;
         await _showEmergencyDialogOnFirstLoginIfNeeded(accessToken);
       } else {
-        await fcmService.syncCurrentTokenToServer(isLogin: false);
+        try {
+          await fcmService.syncCurrentTokenToServer(isLogin: false);
+        } catch (_) {
+          // Continue to home initialization even if FCM sync fails.
+        }
         final loaded = await _loadUserDetails(widget.authToken);
         if (!mounted || !loaded) return;
         await _showEmergencyDialogOnFirstLoginIfNeeded(widget.authToken);
@@ -173,14 +180,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _showEmergencyDialogOnFirstLoginIfNeeded(String token) async {
-    final shouldShow =
-        await storage.read(key: _showEmergencyAfterFirstLoginKey) == 'true';
+    final rawFlag = await storage.read(key: _showEmergencyAfterFirstLoginKey);
+    final shouldShow = rawFlag == 'true' || rawFlag == '1';
 
     if (!shouldShow || !mounted) {
       return;
     }
 
-    await EmergencyContactDialog.show(context, token);
+    // Ensure dialog is shown after the first frame is painted.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+
+    final fallbackToken = await storage.read(key: ApiEndpoints.accessTokenKey);
+    final effectiveToken = token.isNotEmpty ? token : (fallbackToken ?? '');
+    if (effectiveToken.isEmpty) {
+      return;
+    }
+
+    await EmergencyContactDialog.show(context, effectiveToken);
     await storage.write(key: _showEmergencyAfterFirstLoginKey, value: 'false');
   }
 
@@ -199,6 +216,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final storedGatPramukhName = await storage.read(
         key: ApiEndpoints.gatPramukhNameKey,
       );
+      final storedJoiningYear = await storage.read(key: 'joining_year');
 
       final mergedUserData = Map<String, dynamic>.from(userData);
       if (mergedUserData['is_gat_pramukh'] == null &&
@@ -213,8 +231,50 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           storedGatPramukhName.trim().isNotEmpty) {
         mergedUserData['gat_pramukh_name'] = storedGatPramukhName.trim();
       }
+      // Normalize joined year key from possible backend variants.
+      mergedUserData['joining_year'] ??=
+          mergedUserData['joiningYear'] ?? mergedUserData['joined_year'];
+      if ((mergedUserData['joining_year'] == null ||
+              mergedUserData['joining_year'].toString().trim().isEmpty) &&
+          storedJoiningYear != null &&
+          storedJoiningYear.trim().isNotEmpty) {
+        mergedUserData['joining_year'] = storedJoiningYear.trim();
+      }
 
       if (!mounted) return false;
+
+      final rawApprovalStatus = mergedUserData['approval_status'];
+      final approvalStatus = rawApprovalStatus is int
+          ? rawApprovalStatus
+          : int.tryParse(rawApprovalStatus?.toString() ?? '');
+      if (approvalStatus == 3) {
+        final rejectionComment =
+            mergedUserData['approval_comment']?.toString().trim() ?? '';
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            title: const Text('Account Rejected'),
+            content: Text(
+              rejectionComment.isNotEmpty
+                  ? 'Your account was rejected. Comment: $rejectionComment'
+                  : 'Your account was rejected. Please contact admin.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+
+        if (!mounted) return false;
+        Navigator.of(
+          context,
+        ).pushNamedAndRemoveUntil('/login', (route) => false);
+        return false;
+      }
 
       setState(() {
         _userDetails = mergedUserData;
