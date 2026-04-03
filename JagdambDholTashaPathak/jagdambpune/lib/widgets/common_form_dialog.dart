@@ -31,84 +31,53 @@ class CommonDialogForm {
               screenHeight,
             );
 
-        return AnimatedPadding(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-          padding: EdgeInsets.only(bottom: bottomInset),
-          child: Dialog(
-            insetPadding: const EdgeInsets.all(
-              10,
-            ), // Padding around dialog edges
-            backgroundColor: Colors.white,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12), // Rounded corners
+        return AlertDialog(
+          insetPadding: const EdgeInsets.all(10),
+          backgroundColor: Colors.white,
+          title: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: AppColors.primaryMaroon,
             ),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: availableHeight),
-              child: SingleChildScrollView(
-                keyboardDismissBehavior:
-                    ScrollViewKeyboardDismissBehavior.onDrag,
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Title row with close button aligned right
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          title,
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.primaryMaroon,
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(
-                            Icons.close,
-                            color: AppColors.primaryMaroon,
-                          ),
-                          onPressed: () {
-                            Navigator.of(
-                              context,
-                            ).pop(); // Close dialog on icon tap
-                          },
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    // Insert all field widgets provided in the fields list
-                    ...fields,
-                    const SizedBox(height: 12),
-                    // Submit button row with full width
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.accentYellow,
-                          foregroundColor: AppColors.primaryMaroon,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                        ),
-                        onPressed: () async {
-                          await onSubmit(); // Await async submit callback
-                          Navigator.of(
-                            context,
-                          ).pop(); // Close dialog after submit
-                        },
-                        child: const Text(
-                          "Submit",
-                          style: TextStyle(color: AppColors.primaryMaroon),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
+          ),
+          content: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: availableHeight),
+            child: SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [...fields],
               ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.accentYellow,
+                foregroundColor: AppColors.primaryMaroon,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              onPressed: () async {
+                await onSubmit();
+                if (context.mounted) {
+                  Navigator.of(context).pop();
+                }
+              },
+              child: const Text(
+                'Submit',
+                style: TextStyle(color: AppColors.primaryMaroon),
+              ),
+            ),
+          ],
         );
       },
     );

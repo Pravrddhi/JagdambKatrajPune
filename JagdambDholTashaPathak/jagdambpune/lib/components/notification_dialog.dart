@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../config/api_endpoints.dart';
 import '../services/api_service.dart';
 import '../theme/app_colors.dart';
+import '../widgets/input_box.dart';
 
 class NotificationForm {
   static Future<void> open(BuildContext context) async {
@@ -26,11 +27,11 @@ class _NotificationDialog extends StatefulWidget {
 }
 
 class _NotificationDialogState extends State<_NotificationDialog> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _messageController = TextEditingController();
 
   bool _isSubmitting = false;
-  String? _inlineError;
 
   @override
   void dispose() {
@@ -41,20 +42,15 @@ class _NotificationDialogState extends State<_NotificationDialog> {
 
   Future<void> _submit() async {
     if (_isSubmitting) return;
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
 
     final title = _titleController.text.trim();
     final message = _messageController.text.trim();
 
-    if (title.isEmpty || message.isEmpty) {
-      setState(() {
-        _inlineError = 'Title and message are required.';
-      });
-      return;
-    }
-
     setState(() {
       _isSubmitting = true;
-      _inlineError = null;
     });
 
     try {
@@ -111,9 +107,9 @@ class _NotificationDialogState extends State<_NotificationDialog> {
         return;
       }
 
-      setState(() {
-        _inlineError = ApiEndpoints.genericApiFailureMessage;
-      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text(ApiEndpoints.genericApiFailureMessage)),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -133,18 +129,43 @@ class _NotificationDialogState extends State<_NotificationDialog> {
     final availableHeight = (screenHeight - bottomInset - (verticalInset * 2))
         .clamp(220.0, screenHeight);
 
-    return AnimatedPadding(
-      duration: const Duration(milliseconds: 180),
-      curve: Curves.easeOut,
-      padding: EdgeInsets.only(bottom: bottomInset),
-      child: AlertDialog(
-        backgroundColor: Colors.white,
-        title: const Text(
-          'Send Notification',
-          style: TextStyle(color: AppColors.primaryMaroon),
-        ),
-        content: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: availableHeight),
+    return AlertDialog(
+      backgroundColor: Colors.white,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      titlePadding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+      contentPadding: const EdgeInsets.fromLTRB(18, 6, 18, 10),
+      actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      title: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: AppColors.accentYellow.withAlpha(70),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(
+              Icons.campaign_rounded,
+              color: AppColors.primaryMaroon,
+            ),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Send Notification',
+              style: TextStyle(
+                color: AppColors.primaryMaroon,
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+      content: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: availableHeight),
+        child: Form(
+          key: _formKey,
           child: SingleChildScrollView(
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             child: Column(
@@ -152,93 +173,81 @@ class _NotificationDialogState extends State<_NotificationDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Enter title and message to notify all targeted users.',
-                  style: TextStyle(color: AppColors.primaryMaroon),
+                  'This message will be delivered to all targeted users.',
+                  style: TextStyle(
+                    color: AppColors.primaryMaroon,
+                    fontSize: 13,
+                  ),
                 ),
                 const SizedBox(height: 12),
-                TextFormField(
+                PremiumInputBox(
                   controller: _titleController,
-                  textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(
-                    labelText: 'Title',
-                    hintText: 'Eg: Practice Update',
-                    prefixIcon: Icon(
-                      Icons.title,
-                      color: AppColors.primaryMaroon,
-                    ),
-                    border: OutlineInputBorder(),
-                  ),
+                  label: 'Notification Title',
+                  useLightStyle: true,
+                  maxLength: 80,
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Notification title is required.';
+                    }
+                    return null;
+                  },
                 ),
-                const SizedBox(height: 12),
-                TextFormField(
+                const SizedBox(height: 10),
+                PremiumInputBox(
                   controller: _messageController,
-                  minLines: 3,
-                  maxLines: 6,
-                  decoration: const InputDecoration(
-                    alignLabelWithHint: true,
-                    labelText: 'Message',
-                    hintText: 'Write your notification message here...',
-                    prefixIcon: Icon(
-                      Icons.message,
-                      color: AppColors.primaryMaroon,
-                    ),
-                    border: OutlineInputBorder(),
+                  label: 'Notification Message',
+                  useLightStyle: true,
+                  maxLength: 400,
+                  onChanged: (_) => setState(() {}),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Notification message is required.';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '${_messageController.text.trim().length}/400 characters',
+                  style: TextStyle(
+                    color: AppColors.primaryMaroon.withAlpha(170),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-                if (_inlineError != null) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.red.shade50,
-                      border: Border.all(color: Colors.red.shade200),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      _inlineError!,
-                      style: const TextStyle(color: Colors.red),
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: _isSubmitting ? null : () => Navigator.of(context).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.accentYellow,
-              foregroundColor: AppColors.primaryMaroon,
-              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-            onPressed: _isSubmitting ? null : _submit,
-            child: _isSubmitting
-                ? const SizedBox(
-                    height: 18,
-                    width: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppColors.primaryMaroon,
-                    ),
-                  )
-                : const Text(
-                    'Send',
-                    style: TextStyle(
-                      color: AppColors.primaryMaroon,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-          ),
-        ],
       ),
+      actions: [
+        TextButton(
+          onPressed: _isSubmitting ? null : () => Navigator.of(context).pop(),
+          child: const Text(
+            'Cancel',
+            style: TextStyle(color: AppColors.primaryMaroon),
+          ),
+        ),
+        ElevatedButton.icon(
+          onPressed: _isSubmitting ? null : _submit,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.accentYellow,
+            foregroundColor: AppColors.primaryMaroon,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+          icon: _isSubmitting
+              ? const SizedBox(
+                  height: 14,
+                  width: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.send_rounded, size: 16),
+          label: Text(_isSubmitting ? 'Sending...' : 'Send'),
+        ),
+      ],
     );
   }
 }
