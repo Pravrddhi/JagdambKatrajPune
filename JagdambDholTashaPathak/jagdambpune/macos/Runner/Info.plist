@@ -26,6 +26,10 @@
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
+	<key>NSCameraUsageDescription</key>
+	<string>This app uses the camera to capture document images for verification.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>This app accesses your photo library so you can upload document images for verification.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

@@ -741,7 +741,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text(
-          'Home',
+          'Jagdhamb Dhol Tasha Pathak Pune',
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
         elevation: 0,

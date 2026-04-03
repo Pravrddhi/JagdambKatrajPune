@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 import '../utils/animated_navigation.dart'; // ✅ Reusable animation
 import '../screens/all_users_screen.dart';
+import '../screens/document_center_screen.dart';
 import '../screens/gat_details_screen.dart';
+import '../screens/coming_soon_screen.dart';
 
 class AppDrawer extends StatelessWidget {
   final String? firstName;
@@ -51,9 +53,47 @@ class AppDrawer extends StatelessWidget {
 
   void _navigateToGatDetails(BuildContext context) {
     Navigator.pop(context); // Close drawer first
+    final selectedGatId = int.tryParse(
+      userDetails?['gat_id']?.toString() ??
+          userDetails?['gatId']?.toString() ??
+          '',
+    );
+    final selectedGatName =
+        userDetails?['gat_name']?.toString() ??
+        userDetails?['gatName']?.toString() ??
+        userDetails?['gat']?.toString();
+
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (context) => const GatDetailsScreen()),
+      MaterialPageRoute(
+        builder: (context) => GatDetailsScreen(
+          selectedGatId: _isPathakAdmin ? null : selectedGatId,
+          selectedGatName: _isPathakAdmin ? null : selectedGatName,
+          showAutoAssignAction: _isPathakAdmin,
+          useMyGatEndpoint: !_isPathakAdmin,
+        ),
+      ),
+    );
+  }
+
+  void _navigateToComingSoon(BuildContext context, String title) {
+    Navigator.pop(context);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ComingSoonScreen(featureTitle: title),
+      ),
+    );
+  }
+
+  void _navigateToDocuments(BuildContext context) {
+    Navigator.pop(context);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) =>
+            DocumentCenterScreen(isPathakAdmin: _isPathakAdmin),
+      ),
     );
   }
 
@@ -137,15 +177,57 @@ class AppDrawer extends StatelessWidget {
               ),
               onTap: () => _navigateToAllUsers(context),
             ),
-          // Show Gat Details only for pathak_admin
-          if (_isPathakAdmin)
+          // Show Gat Details for pathak_admin, and My Gat for all gat_pramukh users
+          if (_isPathakAdmin || _isGatPramukh)
             ListTile(
               leading: const Icon(Icons.groups, color: AppColors.primaryMaroon),
-              title: const Text(
-                'Gat Details',
-                style: TextStyle(color: AppColors.primaryMaroon),
+              title: Text(
+                _isPathakAdmin ? 'Gat Details' : 'My Gat',
+                style: const TextStyle(color: AppColors.primaryMaroon),
               ),
               onTap: () => _navigateToGatDetails(context),
+            ),
+          ListTile(
+            leading: const Icon(
+              Icons.fact_check,
+              color: AppColors.primaryMaroon,
+            ),
+            title: const Text(
+              'Attendance',
+              style: TextStyle(color: AppColors.primaryMaroon),
+            ),
+            onTap: () => _navigateToComingSoon(context, 'Attendance'),
+          ),
+          ListTile(
+            leading: const Icon(
+              Icons.build_circle,
+              color: AppColors.primaryMaroon,
+            ),
+            title: const Text(
+              'Maintance',
+              style: TextStyle(color: AppColors.primaryMaroon),
+            ),
+            onTap: () => _navigateToComingSoon(context, 'Maintance'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.badge, color: AppColors.primaryMaroon),
+            title: const Text(
+              'Id Card',
+              style: TextStyle(color: AppColors.primaryMaroon),
+            ),
+            onTap: () => _navigateToDocuments(context),
+          ),
+          if (_isPathakAdmin)
+            ListTile(
+              leading: const Icon(
+                Icons.account_balance_wallet,
+                color: AppColors.primaryMaroon,
+              ),
+              title: const Text(
+                'Finance',
+                style: TextStyle(color: AppColors.primaryMaroon),
+              ),
+              onTap: () => _navigateToComingSoon(context, 'Finance'),
             ),
           const Spacer(),
         ],
