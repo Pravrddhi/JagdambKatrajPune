@@ -1,10 +1,14 @@
 class FeatureFlags {
   final bool showUpdateProfile;
   final bool showRegistration;
+  final bool showAutoAssignGat;
+  final bool showIdCardSection;
 
   FeatureFlags({
     required this.showUpdateProfile,
     required this.showRegistration,
+    required this.showAutoAssignGat,
+    required this.showIdCardSection,
   });
 
   /// Factory constructor to create FeatureFlags from API JSON
@@ -15,6 +19,12 @@ class FeatureFlags {
       ),
       showRegistration: _toBool(
         json['showRegistration'] ?? json['show_registration'],
+      ),
+      showAutoAssignGat: _toBool(
+        json['showAutoAssignGat'] ?? json['show_auto_assign_gat'],
+      ),
+      showIdCardSection: _toBool(
+        json['showIdCardSection'] ?? json['show_id_card_section'],
       ),
     );
   }

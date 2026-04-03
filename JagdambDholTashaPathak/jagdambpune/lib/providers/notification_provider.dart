@@ -98,7 +98,10 @@ class NotificationProvider with ChangeNotifier {
                 (item) =>
                     AppNotification.fromJson(Map<String, dynamic>.from(item)),
               )
-              .where((item) => !_readNotificationIds.contains(item.id))
+              .where(
+                (item) =>
+                    !item.isRead && !_readNotificationIds.contains(item.id),
+              )
               .toList();
         } else {
           _notifications = [];
@@ -257,7 +260,9 @@ class NotificationProvider with ChangeNotifier {
           .map(
             (item) => AppNotification.fromJson(Map<String, dynamic>.from(item)),
           )
-          .where((item) => !_readNotificationIds.contains(item.id))
+          .where(
+            (item) => !item.isRead && !_readNotificationIds.contains(item.id),
+          )
           .toList();
 
       // Derive count from the filtered list so locally-cleared notifications
