@@ -7,7 +7,7 @@ import '../services/authorized_api_service.dart';
 import '../theme/app_colors.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-class MirvunkForm {
+class MirvnukForm {
   static Future<void> open(BuildContext context) async {
     final formKey = GlobalKey<FormState>();
 

@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import '../config/api_endpoints.dart';
 import '../components/get_device_id.dart';
 import '../services/bug_report_service.dart';
-import '../widgets/setpin_dialog.dart';
+import '../widgets/set_pin_dialog.dart';
 import '../widgets/common_button.dart';
 import '../widgets/input_box.dart';
 import '../theme/app_colors.dart';
@@ -78,7 +78,7 @@ class _ResetPinScreenState extends State<ResetPinScreen> {
       if (response.statusCode == 200) {
         // Verification successful, proceed to set PIN dialog
         Navigator.pop(context); // Close current screen
-        showSetPinDialog(context, phoneNumber, true);
+        showSetPinDialog(context, phoneNumber, isResetFlow: true);
       } else {
         // API returned error, show message if present
         await BugReportService.reportApiFailure(

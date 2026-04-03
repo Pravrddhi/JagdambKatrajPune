@@ -9,12 +9,15 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+/// Opens a blocking dialog to set or reset a 6-digit PIN.
+///
+/// Returns the new access token for first-time PIN setup flows.
 Future<String> showSetPinDialog(
   BuildContext context,
-  String phoneNumber,
-  bool isReset,
-) async {
-  TextEditingController pinController = TextEditingController();
+  String phoneNumber, {
+  required bool isResetFlow,
+}) async {
+  final pinController = TextEditingController();
   final GlobalKey<FormState> formKey = GlobalKey<FormState>();
   const storage = FlutterSecureStorage();
   String? errorText;
@@ -46,8 +49,9 @@ Future<String> showSetPinDialog(
                   if (response.statusCode == 200) {
                     final data = jsonDecode(response.body);
                     await storage.write(key: 'pin', value: pinController.text);
-                    if (isReset) {
-                      // If it's a reset flow, navigate to the login screen
+                    // Reset flow only confirms PIN update and sends the user
+                    // back to login. Registration flow receives fresh tokens.
+                    if (isResetFlow) {
                       Navigator.of(dialogContext).pop();
                       Navigator.of(
                         dialogContext,
@@ -95,7 +99,7 @@ Future<String> showSetPinDialog(
                   borderRadius: BorderRadius.circular(16),
                 ),
                 title: Text(
-                  isReset ? 'Reset PIN' : 'Set PIN',
+                  isResetFlow ? 'Reset PIN' : 'Set PIN',
                   style: const TextStyle(color: AppColors.primaryMaroon),
                 ),
                 content: Form(
@@ -136,7 +140,7 @@ Future<String> showSetPinDialog(
                 ),
                 actions: [
                   PremiumButton(
-                    text: "Set Pin",
+                    text: "Set PIN",
                     isEnabled: !isLoading,
                     isLoading: isLoading,
                     onPressed: submitPin,

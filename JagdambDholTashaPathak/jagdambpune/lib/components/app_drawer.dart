@@ -211,10 +211,10 @@ class AppDrawer extends StatelessWidget {
               color: AppColors.primaryMaroon,
             ),
             title: const Text(
-              'Maintance',
+              'Maintenance',
               style: TextStyle(color: AppColors.primaryMaroon),
             ),
-            onTap: () => _navigateToComingSoon(context, 'Maintance'),
+            onTap: () => _navigateToComingSoon(context, 'Maintenance'),
           ),
           if (context.read<FeatureFlagsProvider>().flags?.showIdCardSection ??
               false)

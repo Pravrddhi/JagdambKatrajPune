@@ -10,7 +10,7 @@ import '../../config/api_endpoints.dart';
 import '../../services/bug_report_service.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/common_button.dart';
-import '../../widgets/drop_down.dart';
+import '../../widgets/dropdown.dart';
 import '../../widgets/input_box.dart';
 import '../../screens/home_screen.dart';
 
@@ -550,7 +550,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       ),
                     ),
                   const SizedBox(height: 16),
-                  PremiumDropDown(
+                  PremiumDropdown(
                     label: 'Gender',
                     value: selectedSex,
                     options: const ['Male', 'Female', 'Other'],
@@ -646,7 +646,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       ),
                     ),
                   const SizedBox(height: 16),
-                  PremiumDropDown(
+                  PremiumDropdown(
                     label: 'Joining Year',
                     value: selectedJoiningYear?.toString(),
                     options: List.generate(
@@ -661,7 +661,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                     },
                   ),
                   const SizedBox(height: 16),
-                  PremiumDropDown(
+                  PremiumDropdown(
                     label: 'Instrument',
                     value: selectedInstrument,
                     options: _instruments,
