@@ -236,7 +236,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     return MaterialApp(
       navigatorKey: _navigatorKey,
       navigatorObservers: [_featureFlagNavigationObserver],
-      title: 'My App',
+      title: 'jagdambkatrajpune',
       theme: ThemeData(
         primaryColor: AppColors.primaryMaroon,
         scaffoldBackgroundColor: AppColors.primaryMaroon,
