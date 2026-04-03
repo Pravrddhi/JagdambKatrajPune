@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_endpoints.dart';
 import '../theme/app_colors.dart'; // adjust path as per your project
 import '../components/link_launcher.dart';
+import '../services/authorized_api_service.dart';
 
 class UpcomingEvents extends StatefulWidget {
   final List<Map<String, dynamic>> events;
@@ -25,7 +25,6 @@ class UpcomingEvents extends StatefulWidget {
 class _UpcomingEventsState extends State<UpcomingEvents>
     with SingleTickerProviderStateMixin {
   late List<Map<String, dynamic>> _events;
-  final _storage = const FlutterSecureStorage();
   final Map<int, bool> _loading = {};
   bool _isRefreshing = false;
   // null = All, 0 = Not Started, 1 = Live, 3 = Cancelled, 4 = Completed
@@ -239,8 +238,16 @@ class _UpcomingEventsState extends State<UpcomingEvents>
     setState(() => _loading[index] = true);
 
     try {
-      final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
-      if (token == null || token.isEmpty) {
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) => http.post(
+          Uri.parse(ApiEndpoints.updateMirvnukStatus),
+          headers: ApiEndpoints.authorizedHeaders(token),
+          body: jsonEncode({'mirvnuk_id': mirvnukId, 'status': newStatus}),
+        ),
+      );
+
+      if (response == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -250,15 +257,6 @@ class _UpcomingEventsState extends State<UpcomingEvents>
         }
         return;
       }
-
-      final response = await http.post(
-        Uri.parse(ApiEndpoints.updateMirvnukStatus),
-        headers: {
-          'Authorization': 'Bearer $token',
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({'mirvnuk_id': mirvnukId, 'status': newStatus}),
-      );
 
       if (!mounted) return;
 
@@ -408,123 +406,99 @@ class _UpcomingEventsState extends State<UpcomingEvents>
               screenHeight,
             );
 
-        return AnimatedPadding(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOut,
-          padding: EdgeInsets.only(bottom: bottomInset),
-          child: Dialog(
-            insetPadding: const EdgeInsets.all(10),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: availableHeight),
-              child: Stack(
+        return AlertDialog(
+          insetPadding: const EdgeInsets.all(10),
+          title: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  event['name'] ?? '',
+                  style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.primaryMaroon,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              _statusChip(
+                event['status'] is int
+                    ? event['status'] as int
+                    : int.tryParse(event['status']?.toString() ?? ''),
+              ),
+            ],
+          ),
+          content: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: availableHeight),
+            child: SingleChildScrollView(
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Scrollable event details
-                  SingleChildScrollView(
-                    keyboardDismissBehavior:
-                        ScrollViewKeyboardDismissBehavior.onDrag,
-                    padding: const EdgeInsets.all(16.0),
-                    child: Column(
+                  if (event['date'] != null)
+                    Text(
+                      'Date: ${event['date']}',
+                      style: const TextStyle(
+                        color: AppColors.primaryMaroon,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  if (event['time_from'] != null && event['time_to'] != null)
+                    Text(
+                      'Time: ${event['time_from']} → ${event['time_to']}',
+                      style: const TextStyle(
+                        color: AppColors.primaryMaroon,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  if (event['location'] != null)
+                    Text(
+                      'Location: ${event['location']}',
+                      style: const TextStyle(
+                        color: AppColors.primaryMaroon,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  if (event['duration'] != null)
+                    Text(
+                      'Duration: ${event['duration']}',
+                      style: const TextStyle(
+                        color: AppColors.primaryMaroon,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                  if (event['description'] != null &&
+                      event['description']!.isNotEmpty)
+                    Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const SizedBox(height: 40), // space for close button
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Expanded(
-                              child: Text(
-                                event['name'] ?? '',
-                                style: const TextStyle(
-                                  fontSize: 22,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.primaryMaroon,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            _statusChip(
-                              event['status'] is int
-                                  ? event['status'] as int
-                                  : int.tryParse(
-                                      event['status']?.toString() ?? '',
-                                    ),
-                            ),
-                          ],
+                        const Text(
+                          'Description:',
+                          style: TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                        const SizedBox(height: 10),
-                        if (event['date'] != null)
-                          Text(
-                            'Date: ${event['date']}',
-                            style: const TextStyle(
-                              color: AppColors.primaryMaroon,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        if (event['time_from'] != null &&
-                            event['time_to'] != null)
-                          Text(
-                            'Time: ${event['time_from']} → ${event['time_to']}',
-                            style: const TextStyle(
-                              color: AppColors.primaryMaroon,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        if (event['location'] != null)
-                          Text(
-                            'Location: ${event['location']}',
-                            style: const TextStyle(
-                              color: AppColors.primaryMaroon,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        if (event['duration'] != null)
-                          Text(
-                            'Duration: ${event['duration']}',
-                            style: const TextStyle(
-                              color: AppColors.primaryMaroon,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        const SizedBox(height: 10),
-                        if (event['description'] != null &&
-                            event['description']!.isNotEmpty)
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Description:',
-                                style: TextStyle(
-                                  color: AppColors.primaryMaroon,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                event['description']!,
-                                style: const TextStyle(fontSize: 14),
-                              ),
-                            ],
-                          ),
+                        const SizedBox(height: 4),
+                        Text(
+                          event['description']!,
+                          style: const TextStyle(fontSize: 14),
+                        ),
                       ],
                     ),
-                  ),
-                  // Close button in top-right corner
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: IconButton(
-                      icon: const Icon(
-                        Icons.close,
-                        color: AppColors.primaryMaroon,
-                      ),
-                      onPressed: () {
-                        Navigator.of(context).pop();
-                      },
-                    ),
-                  ),
                 ],
               ),
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Close'),
+            ),
+          ],
         );
       },
     );

@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:provider/provider.dart';
@@ -11,11 +10,11 @@ import '../components/app_drawer.dart';
 import '../components/upcoming_events.dart';
 import '../components/mirvnuk_dialog.dart';
 import '../components/notification_dialog.dart';
-import '../services/fcm_service.dart';
 import '../services/user_service.dart';
 import '../components/get_emergency_details.dart';
 import '../providers/notification_provider.dart';
 import '../config/api_endpoints.dart';
+import '../services/notification_socket_service.dart';
 
 const storage = FlutterSecureStorage();
 
@@ -47,10 +46,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   String accessToken = ''; // Current access token
   List<Map<String, dynamic>> _events = []; // User's upcoming events
 
-  late final AnimationController _animationController;
-  late final Animation<Offset> _slideAnimation;
-  late final Animation<double> _fadeAnimation;
-
   bool _isFabOpen = false;
   late final AnimationController _fabAnimationController;
   late final Animation<double> _fabAnimation;
@@ -65,25 +60,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late final PageController _sayingsPageController;
   Timer? _sayingsTimer;
   int _currentSayingIndex = 0;
-  bool _hasSyncedFcmOnHome = false;
+  NotificationSocketService? _notificationSocketService;
 
   @override
   void initState() {
     super.initState();
-
-    // Initialize welcome text animations
-    _animationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 800),
-    );
-    _slideAnimation =
-        Tween<Offset>(begin: const Offset(0, 0.2), end: Offset.zero).animate(
-          CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
-        );
-    _fadeAnimation = CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeIn,
-    );
 
     // Initialize FAB menu animations
     _fabAnimationController = AnimationController(
@@ -119,35 +100,33 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     });
   }
 
-  Future<void> _requestAndSyncFcmTokenOnWeb() async {
-    if (!kIsWeb) {
+  Future<void> _syncNotificationsFromBackend() async {
+    if (!mounted) return;
+    final provider = context.read<NotificationProvider>();
+    await provider.fetchFromBackend(page: 1, pageSize: 20);
+  }
+
+  void _connectNotificationSocket(String token) {
+    final normalized = token.trim();
+    if (normalized.isEmpty) {
       return;
     }
 
-    if (_hasSyncedFcmOnHome) {
-      return;
-    }
-    _hasSyncedFcmOnHome = true;
-
-    print('[FCM-HOME] Starting FCM permission request and sync on web');
-    final fcmService = FCMService();
-    final permissionGranted = await fcmService.requestNotificationPermission();
-    print('[FCM-HOME] Permission granted: $permissionGranted');
-    if (permissionGranted) {
-      print('[FCM-HOME] Calling syncCurrentTokenToServer');
-      await fcmService.syncCurrentTokenToServer(isLogin: true);
-    }
+    _notificationSocketService?.dispose().ignore();
+    _notificationSocketService = NotificationSocketService(
+      onNotificationEvent: () {
+        if (!mounted) return;
+        context
+            .read<NotificationProvider>()
+            .fetchFromBackend(page: 1, pageSize: 20)
+            .ignore();
+      },
+    );
+    _notificationSocketService!.connect(normalized);
   }
 
   /// Initialize user info depending on registration status
   Future<void> _initializeUser() async {
-    final fcmService = FCMService();
-    try {
-      fcmService.listenTokenRefresh();
-    } catch (_) {
-      // Never block core app flow (including emergency popup) on notification setup.
-    }
-
     if (widget.isRegistration) {
       Future.delayed(const Duration(seconds: 2), () async {
         final registrationAccessToken = widget.authToken.trim();
@@ -183,12 +162,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
           final loaded = await _loadUserDetails(effectiveHomeToken);
           if (!mounted || !loaded) return;
-          try {
-            print('[FCM-HOME] Registration flow: calling FCM sync');
-            await _requestAndSyncFcmTokenOnWeb();
-          } catch (_) {
-            // Continue home even if token sync fails.
-          }
+          await _syncNotificationsFromBackend();
+          _connectNotificationSocket(effectiveHomeToken);
         } else {
           // PIN dialog was dismissed without a token — fall back to login.
           Navigator.of(
@@ -202,22 +177,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         accessToken = token;
         final loaded = await _loadUserDetails(accessToken);
         if (!mounted || !loaded) return;
-        try {
-          print('[FCM-HOME] Stored token flow: calling FCM sync');
-          await _requestAndSyncFcmTokenOnWeb();
-        } catch (_) {
-          // Continue home even if token sync fails.
-        }
+        await _syncNotificationsFromBackend();
+        _connectNotificationSocket(accessToken);
         await _showEmergencyDialogOnFirstLoginIfNeeded(accessToken);
       } else {
         final loaded = await _loadUserDetails(widget.authToken);
         if (!mounted || !loaded) return;
-        try {
-          print('[FCM-HOME] Widget auth token flow: calling FCM sync');
-          await _requestAndSyncFcmTokenOnWeb();
-        } catch (_) {
-          // Continue home even if token sync fails.
-        }
+        await _syncNotificationsFromBackend();
+        _connectNotificationSocket(widget.authToken);
         await _showEmergencyDialogOnFirstLoginIfNeeded(widget.authToken);
       }
     }
@@ -394,7 +361,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         }
       });
 
-      _animationController.forward();
       return true;
     } catch (e) {
       if (!mounted) return false;
@@ -484,6 +450,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return Consumer<NotificationProvider>(
       builder: (_, notificationProvider, __) {
         final notifications = notificationProvider.notifications;
+        final unreadCount = notificationProvider.unreadCount;
 
         return Container(
           width: double.infinity,
@@ -523,7 +490,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       ),
                     ),
                   ),
-                  if (notifications.isNotEmpty)
+                  if (unreadCount > 0)
                     Container(
                       margin: const EdgeInsets.only(right: 6),
                       padding: const EdgeInsets.symmetric(
@@ -535,9 +502,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Text(
-                        notifications.length > 99
-                            ? '99+'
-                            : notifications.length.toString(),
+                        unreadCount > 99 ? '99+' : unreadCount.toString(),
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 11,
@@ -628,12 +593,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildMotivationalSayingsPanel() {
+  Widget _buildMotivationalSayingsPanel({required bool isCompact}) {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+      padding: EdgeInsets.fromLTRB(
+        isCompact ? 12 : 14,
+        isCompact ? 12 : 14,
+        isCompact ? 12 : 14,
+        isCompact ? 8 : 10,
+      ),
       decoration: BoxDecoration(
-        color: Colors.white,
+        gradient: LinearGradient(
+          colors: [
+            Colors.white,
+            AppColors.accentYellow.withValues(alpha: 0.15),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
           color: AppColors.accentYellow.withValues(alpha: 0.5),
@@ -642,24 +619,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
               Icon(
                 Icons.auto_awesome,
                 color: AppColors.primaryMaroon,
-                size: 18,
+                size: isCompact ? 16 : 18,
               ),
-              SizedBox(width: 8),
+              SizedBox(width: isCompact ? 6 : 8),
               Text(
                 'Motivation Corner',
                 style: TextStyle(
                   color: AppColors.primaryMaroon,
                   fontWeight: FontWeight.w700,
+                  fontSize: isCompact ? 13 : 14,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 10),
+          SizedBox(height: isCompact ? 8 : 10),
           Expanded(
             child: PageView.builder(
               controller: _sayingsPageController,
@@ -671,9 +649,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   child: Text(
                     _motivationalSayings[index],
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: AppColors.primaryMaroon,
-                      fontSize: 18,
+                      fontSize: isCompact ? 16 : 18,
                       fontWeight: FontWeight.w600,
                       height: 1.35,
                     ),
@@ -687,9 +665,67 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  Widget _buildLabeledFabAction({
+    required String label,
+    required IconData icon,
+    required String heroTag,
+    required bool isCompact,
+    required Future<void> Function() onPressed,
+  }) {
+    return FadeTransition(
+      opacity: _fabAnimation,
+      child: ScaleTransition(
+        scale: _fabAnimation,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: isCompact ? 10 : 12,
+                vertical: isCompact ? 6 : 7,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: AppColors.accentYellow.withValues(alpha: 0.8),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.14),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: AppColors.primaryMaroon,
+                  fontWeight: FontWeight.w700,
+                  fontSize: isCompact ? 11 : 12,
+                ),
+              ),
+            ),
+            SizedBox(width: isCompact ? 6 : 8),
+            FloatingActionButton(
+              heroTag: heroTag,
+              mini: true,
+              backgroundColor: AppColors.accentYellow,
+              onPressed: () {
+                onPressed();
+              },
+              child: Icon(icon, color: AppColors.primaryMaroon),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
-    _animationController.dispose();
+    _notificationSocketService?.dispose().ignore();
     _fabAnimationController.dispose();
     _sayingsTimer?.cancel();
     _sayingsPageController.dispose();
@@ -698,10 +734,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+    final isCompact = size.width < 390 || size.height < 760;
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('Home'),
+        title: const Text(
+          'Home',
+          style: TextStyle(fontWeight: FontWeight.w700),
+        ),
+        elevation: 0,
         backgroundColor: AppColors.primaryMaroon,
         actions: const [],
       ),
@@ -711,79 +754,101 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         userDetails: _userDetails,
         onLogout: _handleLogout,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: _errorMessage != null
-            ? Center(
-                child: Text(
-                  _errorMessage!,
-                  style: const TextStyle(color: AppColors.accentYellow),
-                ),
-              )
-            : _userDetails != null
-            ? Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SlideTransition(
-                    position: _slideAnimation,
-                    child: FadeTransition(
-                      opacity: _fadeAnimation,
-                      child: Text(
-                        'Welcome, ${_userDetails?['first_name'] ?? ''}!',
-                        style: const TextStyle(
-                          color: AppColors.primaryMaroon,
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
+      body: Stack(
+        children: [
+          Positioned(
+            top: isCompact ? -90 : -80,
+            right: isCompact ? -50 : -30,
+            child: Container(
+              width: isCompact ? 180 : 220,
+              height: isCompact ? 180 : 220,
+              decoration: BoxDecoration(
+                color: AppColors.accentYellow.withValues(alpha: 0.16),
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+          Positioned(
+            bottom: isCompact ? -120 : -100,
+            left: isCompact ? -100 : -60,
+            child: Container(
+              width: isCompact ? 210 : 260,
+              height: isCompact ? 210 : 260,
+              decoration: BoxDecoration(
+                color: AppColors.primaryMaroon.withValues(alpha: 0.08),
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.all(isCompact ? 12 : 16),
+            child: _errorMessage != null
+                ? Center(
+                    child: Text(
+                      _errorMessage!,
+                      style: const TextStyle(color: AppColors.accentYellow),
+                    ),
+                  )
+                : _userDetails != null
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          children: [
+                            SizedBox(height: isCompact ? 6 : 8),
+                            Expanded(
+                              flex: isCompact ? 4 : 3,
+                              child: _buildNotificationsPanel(),
+                            ),
+                            SizedBox(height: isCompact ? 10 : 12),
+                            Expanded(
+                              flex: isCompact ? 6 : 7,
+                              child: _events.isNotEmpty
+                                  ? SingleChildScrollView(
+                                      child: UpcomingEvents(
+                                        events: _events,
+                                        isPathakAdmin: _isPathakAdmin,
+                                        onRefresh: _refreshEventsSection,
+                                      ),
+                                    )
+                                  : _buildMotivationalSayingsPanel(
+                                      isCompact: isCompact,
+                                    ),
+                            ),
+                          ],
                         ),
                       ),
+                    ],
+                  )
+                : _isLoading
+                ? const Center(
+                    child: CircularProgressIndicator(
+                      color: AppColors.accentYellow,
                     ),
-                  ),
-                  Expanded(
-                    child: Column(
-                      children: [
-                        const SizedBox(height: 12),
-                        Expanded(flex: 3, child: _buildNotificationsPanel()),
-                        const SizedBox(height: 12),
-                        Expanded(
-                          flex: 7,
-                          child: _events.isNotEmpty
-                              ? SingleChildScrollView(
-                                  child: UpcomingEvents(
-                                    events: _events,
-                                    isPathakAdmin: _isPathakAdmin,
-                                    onRefresh: _refreshEventsSection,
-                                  ),
-                                )
-                              : _buildMotivationalSayingsPanel(),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              )
-            : _isLoading
-            ? const Center(
-                child: CircularProgressIndicator(color: AppColors.accentYellow),
-              )
-            : Container(), // show empty container if none of above
+                  )
+                : Container(),
+          ),
+        ],
       ),
       floatingActionButton: _hasFabActions
           ? SizedBox(
-              width: 150,
-              height: 150,
+              width: isCompact ? 210 : 230,
+              height: isCompact ? 195 : 220,
               child: Stack(
                 alignment: Alignment.bottomRight,
                 children: [
                   if (_canOpenMirvunkForm)
                     Positioned(
-                      bottom: 80,
+                      bottom: isCompact ? 130 : 148,
                       right: 0,
-                      child: ScaleTransition(
-                        scale: _fabAnimation,
-                        child: FloatingActionButton(
+                      child: IgnorePointer(
+                        ignoring: !_isFabOpen,
+                        child: _buildLabeledFabAction(
+                          label: 'Add Mirvnuk',
+                          icon: Icons.event,
                           heroTag: 'add_mirvnuk',
-                          mini: true,
-                          backgroundColor: AppColors.accentYellow,
+                          isCompact: isCompact,
                           onPressed: () async {
                             _toggleFabMenu();
                             await MirvunkForm.open(context);
@@ -794,25 +859,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                               _loadUserDetails(token);
                             }
                           },
-                          child: const Icon(Icons.event),
                         ),
                       ),
                     ),
                   if (_canSendNotification)
                     Positioned(
-                      bottom: 0,
-                      right: 80,
-                      child: ScaleTransition(
-                        scale: _fabAnimation,
-                        child: FloatingActionButton(
+                      bottom: isCompact ? 64 : 74,
+                      right: 0,
+                      child: IgnorePointer(
+                        ignoring: !_isFabOpen,
+                        child: _buildLabeledFabAction(
+                          label: 'Send Notice',
+                          icon: Icons.notifications,
                           heroTag: 'add_notification',
-                          mini: true,
-                          backgroundColor: AppColors.accentYellow,
+                          isCompact: isCompact,
                           onPressed: () async {
                             _toggleFabMenu();
                             await NotificationForm.open(context);
                           },
-                          child: const Icon(Icons.notifications),
                         ),
                       ),
                     ),
