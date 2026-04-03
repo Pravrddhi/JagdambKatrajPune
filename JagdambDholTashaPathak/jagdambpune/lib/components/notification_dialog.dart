@@ -6,21 +6,35 @@ import '../theme/app_colors.dart';
 import '../widgets/input_box.dart';
 
 class NotificationForm {
-  static Future<void> open(BuildContext context) async {
+  static Future<void> open(
+    BuildContext context, {
+    int? targetGatId,
+    String? targetGatName,
+  }) async {
     if (!context.mounted) return;
 
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => _NotificationDialog(parentContext: context),
+      builder: (dialogContext) => _NotificationDialog(
+        parentContext: context,
+        targetGatId: targetGatId,
+        targetGatName: targetGatName,
+      ),
     );
   }
 }
 
 class _NotificationDialog extends StatefulWidget {
   final BuildContext parentContext;
+  final int? targetGatId;
+  final String? targetGatName;
 
-  const _NotificationDialog({required this.parentContext});
+  const _NotificationDialog({
+    required this.parentContext,
+    this.targetGatId,
+    this.targetGatName,
+  });
 
   @override
   State<_NotificationDialog> createState() => _NotificationDialogState();
@@ -57,6 +71,8 @@ class _NotificationDialogState extends State<_NotificationDialog> {
       await ApiService.sendBroadcastNotification(
         title: title,
         message: message,
+        targetType: widget.targetGatId != null ? 'gat' : null,
+        targetGat: widget.targetGatId,
       );
 
       if (!mounted) return;
@@ -173,12 +189,33 @@ class _NotificationDialogState extends State<_NotificationDialog> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'This message will be delivered to all targeted users.',
+                  'This message will be delivered to targeted users.',
                   style: TextStyle(
                     color: AppColors.primaryMaroon,
                     fontSize: 13,
                   ),
                 ),
+                if (widget.targetGatId != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.accentYellow.withAlpha(60),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'Target: ${widget.targetGatName ?? 'Selected Gat'}',
+                      style: const TextStyle(
+                        color: AppColors.primaryMaroon,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 PremiumInputBox(
                   controller: _titleController,
