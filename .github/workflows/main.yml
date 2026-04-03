@@ -1,0 +1,72 @@
+name: Branch Promotion
+
+on:
+  push:
+    branches:
+      - develop
+      - release
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: Source branch to promote from
+        required: true
+        default: develop
+      target_branch:
+        description: Target branch to promote into
+        required: true
+        default: release
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  promote-develop-to-pre-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create/Update PR develop -> release
+        uses: repo-sync/pull-request@v2
+        with:
+          source_branch: develop
+          destination_branch: release
+          github_token: ${{ secrets.GITHUBTOKEN }}
+          pr_title: "Promote develop to release"
+          pr_body: |
+            Automated promotion PR from `develop` to `release`.
+            Triggered by push to `develop`.
+          pr_label: automation,branch-promotion
+
+  promote-pre-release-to-master:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create/Update PR release -> master
+        uses: repo-sync/pull-request@v2
+        with:
+          source_branch: pre-release
+          destination_branch: master
+          github_token: ${{ secrets.GITHUBTOKEN }}
+          pr_title: "Promote pre-release to master"
+          pr_body: |
+            Automated promotion PR from `pre-release` to `master`.
+            Triggered by push to `pre-release`.
+            Merge is still controlled by branch protections / required approvals.
+          pr_label: automation,branch-promotion
+
+  manual-promotion:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create/Update PR from workflow_dispatch input
+        uses: repo-sync/pull-request@v2
+        with:
+          source_branch: ${{ github.event.inputs.source_branch }}
+          destination_branch: ${{ github.event.inputs.target_branch }}
+          github_token: ${{ secrets.GITHUBTOKEN }}
+          pr_title: "Promote ${{ github.event.inputs.source_branch }} to ${{ github.event.inputs.target_branch }}"
+          pr_body: |
+            Manual promotion PR created via workflow_dispatch.
+            Source: `${{ github.event.inputs.source_branch }}`
+            Target: `${{ github.event.inputs.target_branch }}`
+          pr_label: automation,branch-promotion
