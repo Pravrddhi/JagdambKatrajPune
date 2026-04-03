@@ -6,6 +6,7 @@ import '../config/api_endpoints.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'bug_report_service.dart';
 import 'refresh_token_service.dart'; // Import your AuthService that handles token refresh
+import 'authorized_api_service.dart';
 
 class ApiService {
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
@@ -281,11 +282,17 @@ class ApiService {
   static Future<void> sendBroadcastNotification({
     required String title,
     required String message,
+    String? type,
+    String? targetType,
+    int? targetRole,
+    int? targetUser,
   }) async {
     final normalizedTitle = title.trim();
     final normalizedMessage = message.trim();
+    final normalizedType = type?.trim();
+    final normalizedTargetType = targetType?.trim();
     final fingerprint =
-        '${normalizedTitle.toLowerCase()}::${normalizedMessage.toLowerCase()}';
+        '${normalizedTitle.toLowerCase()}::${normalizedMessage.toLowerCase()}::${normalizedType ?? ''}::${normalizedTargetType ?? ''}::${targetRole ?? ''}::${targetUser ?? ''}';
 
     final existingRequest = _inFlightNotificationRequests[fingerprint];
     if (existingRequest != null) {
@@ -304,6 +311,10 @@ class ApiService {
     final request = _createNotification(
       title: normalizedTitle,
       message: normalizedMessage,
+      type: normalizedType,
+      targetType: normalizedTargetType,
+      targetRole: targetRole,
+      targetUser: targetUser,
     );
     _inFlightNotificationRequests[fingerprint] = request;
 
@@ -319,42 +330,76 @@ class ApiService {
   static Future<void> _createNotification({
     required String title,
     required String message,
+    String? type,
+    String? targetType,
+    int? targetRole,
+    int? targetUser,
   }) async {
     try {
-      String? storedAccessToken = await _storage.read(
-        key: ApiEndpoints.accessTokenKey,
-      );
+      final uri = Uri.parse(ApiEndpoints.createNotification);
+      final payload = <String, dynamic>{'title': title, 'message': message};
 
-      if (storedAccessToken == null) {
-        throw Exception('No access token found. Please login again.');
+      if (type != null && type.isNotEmpty) {
+        payload['type'] = type;
+      }
+      if (targetType != null && targetType.isNotEmpty) {
+        payload['target_type'] = targetType;
+      }
+      if (targetRole != null) {
+        payload['target_role'] = targetRole;
+      }
+      if (targetUser != null) {
+        payload['target_user'] = targetUser;
       }
 
-      final uri = Uri.parse(ApiEndpoints.createNotification);
-
-      final response = await http.post(
-        uri,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $storedAccessToken',
-        },
-        body: jsonEncode({'title': title, 'message': message}),
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) => http.post(
+          uri,
+          headers: ApiEndpoints.authorizedHeaders(token),
+          body: jsonEncode(payload),
+        ),
       );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final decoded = jsonDecode(response.body);
         if (decoded is Map<String, dynamic> && decoded['status'] == true) {
           return;
         }
+
+        if (decoded is Map<String, dynamic>) {
+          final detail = decoded['detail']?.toString();
+          if (detail != null && detail.isNotEmpty) {
+            throw Exception(detail);
+          }
+        }
+
         throw Exception('Failed to send notification');
-      } else if (response.statusCode == 401) {
-        // Avoid duplicate notification-create attempts on web by not retrying
-        // this mutating endpoint automatically.
-        throw Exception('Session expired. Please login again.');
-      } else {
-        throw Exception(
-          'Failed to send notification (status code ${response.statusCode})',
-        );
       }
+
+      if (response.statusCode == 401) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      try {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          final detail = decoded['detail']?.toString();
+          if (detail != null && detail.isNotEmpty) {
+            throw Exception(detail);
+          }
+        }
+      } catch (_) {
+        // Use generic error if response is not JSON.
+      }
+
+      throw Exception(
+        'Failed to send notification (status code ${response.statusCode})',
+      );
     } catch (e, st) {
       await BugReportService.reportApiFailure(
         title: 'Create notification API failure',

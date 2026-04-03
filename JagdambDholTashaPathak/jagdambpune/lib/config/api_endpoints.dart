@@ -20,6 +20,30 @@ class ApiEndpoints {
         : normalized;
   }
 
+  /// API root without trailing /api, used for non-REST endpoints.
+  static String get apiRootUrl {
+    final base = baseUrl;
+    if (base.endsWith('/api')) {
+      return base.substring(0, base.length - 4);
+    }
+    return base;
+  }
+
+  /// Build websocket URI for live notifications.
+  static Uri notificationsWebSocketUri(String accessToken) {
+    final rootUri = Uri.parse(apiRootUrl);
+    final secure = rootUri.scheme == 'https';
+    final wsScheme = secure ? 'wss' : 'ws';
+
+    return Uri(
+      scheme: wsScheme,
+      host: rootUri.host,
+      port: rootUri.hasPort ? rootUri.port : null,
+      path: '/ws/notifications/',
+      queryParameters: {'token': accessToken},
+    );
+  }
+
   static const String pathakId = "1";
 
   // -------------------
@@ -82,6 +106,16 @@ class ApiEndpoints {
 
   /// Create a new notification
   static final String createNotification = '$baseUrl/notifications/create/';
+
+  /// Fetch user's notification list
+  static final String listNotifications = '$baseUrl/notifications/list/';
+
+  /// Mark a notification as read
+  static final String markNotificationReadBase = '$baseUrl/notifications';
+
+  /// Build endpoint to mark a notification as read
+  static String markNotificationRead(int id) =>
+      '$markNotificationReadBase/$id/read/';
 
   /// Submit a new bug report
   static final String createBugReport =

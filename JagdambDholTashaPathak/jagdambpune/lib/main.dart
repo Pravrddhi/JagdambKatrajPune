@@ -16,8 +16,6 @@ import 'screens/registration_screen.dart';
 import 'screens/reset_pin.dart';
 import 'screens/splash_screen.dart';
 import 'theme/app_colors.dart';
-import 'web/fcm_web_bridge_stub.dart'
-    if (dart.library.html) 'web/fcm_web_bridge_web.dart';
 import 'web/screens/registration_web_screen.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
@@ -109,7 +107,7 @@ Future<void> main() async {
     _firebaseReady = false;
   }
 
-  if (_firebaseReady) {
+  if (_firebaseReady && !kIsWeb) {
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   }
 
@@ -201,17 +199,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
-    if (kIsWeb) {
-      initializeWebFcmBridge((title, body) async {
-        if (!mounted) return;
-        await context.read<NotificationProvider>().addNotification(
-          title: title,
-          message: body,
-        );
-      });
-    }
-
-    if (_firebaseReady) {
+    if (_firebaseReady && !kIsWeb) {
       FirebaseMessaging.onMessage.listen((message) {
         _handleIncomingMessage(message);
       });
@@ -236,7 +224,10 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       context.read<FeatureFlagsProvider>().fetchFeatureFlags(force: true);
-      context.read<NotificationProvider>().refreshFromStorage();
+      context.read<NotificationProvider>().fetchFromBackend(
+        page: 1,
+        pageSize: 20,
+      );
     }
   }
 

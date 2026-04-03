@@ -5,7 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:jagdhambtrustpune/config/api_endpoints.dart';
 import 'package:jagdhambtrustpune/services/bug_report_service.dart';
 import 'package:jagdhambtrustpune/theme/app_colors.dart';
-import '../widgets/common_button.dart';
+import 'package:jagdhambtrustpune/services/authorized_api_service.dart';
 import '../widgets/input_box.dart'; // import your custom input box
 import '../widgets/drop_down.dart';
 
@@ -50,9 +50,35 @@ class EmergencyContactDialog {
               padding: EdgeInsets.only(bottom: bottomInset),
               child: AlertDialog(
                 backgroundColor: Colors.white,
-                title: const Text(
-                  "Emergency Details",
-                  style: TextStyle(color: AppColors.primaryMaroon),
+                titlePadding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+                contentPadding: const EdgeInsets.fromLTRB(18, 6, 18, 10),
+                actionsPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                title: Row(
+                  children: [
+                    Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: AppColors.accentYellow.withAlpha(70),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(
+                        Icons.health_and_safety_rounded,
+                        color: AppColors.primaryMaroon,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Text(
+                        "Emergency Details",
+                        style: TextStyle(
+                          color: AppColors.primaryMaroon,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 content: ConstrainedBox(
                   constraints: BoxConstraints(maxHeight: availableHeight),
@@ -63,7 +89,16 @@ class EmergencyContactDialog {
                           ScrollViewKeyboardDismissBehavior.onDrag,
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          const Text(
+                            "Keep these details up to date for emergencies.",
+                            style: TextStyle(
+                              color: AppColors.primaryMaroon,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
                           // Custom input box for name
                           PremiumInputBox(
                             controller: nameController,
@@ -121,51 +156,76 @@ class EmergencyContactDialog {
                   ),
                 ),
                 actions: [
-                  PremiumButton(
-                    text: "Update",
-                    isEnabled: !isLoading,
-                    backgroundColor: AppColors.accentYellow,
-                    textColor: AppColors.primaryMaroon,
-                    isLoading: isLoading,
-                    onPressed: () async {
-                      if (formKey.currentState!.validate()) {
-                        setState(() {
-                          isLoading = true;
-                        });
+                  TextButton(
+                    onPressed: isLoading
+                        ? null
+                        : () => Navigator.of(context).pop(),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(color: AppColors.primaryMaroon),
+                    ),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: isLoading
+                        ? null
+                        : () async {
+                            if (formKey.currentState!.validate()) {
+                              setState(() {
+                                isLoading = true;
+                              });
 
-                        bool success = await _submitEmergencyContact(
-                          nameController.text.trim(),
-                          phoneController.text.trim(),
-                          selectedBloodGroup!,
-                          token,
-                        );
+                              bool success = await _submitEmergencyContact(
+                                nameController.text.trim(),
+                                phoneController.text.trim(),
+                                selectedBloodGroup!,
+                                token,
+                              );
 
-                        setState(() {
-                          isLoading = false;
-                        });
+                              setState(() {
+                                isLoading = false;
+                              });
 
-                        if (success) {
-                          Navigator.pop(context);
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                "Emergency contact updated successfully",
-                                selectionColor: AppColors.accentYellow,
-                              ),
-                            ),
-                          );
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                ApiEndpoints.genericApiFailureMessage,
-                                selectionColor: AppColors.accentYellow,
-                              ),
-                            ),
-                          );
-                        }
-                      }
-                    },
+                              if (success) {
+                                Navigator.pop(context);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      "Emergency contact updated successfully",
+                                      selectionColor: AppColors.accentYellow,
+                                    ),
+                                  ),
+                                );
+                              } else {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      ApiEndpoints.genericApiFailureMessage,
+                                      selectionColor: AppColors.accentYellow,
+                                    ),
+                                  ),
+                                );
+                              }
+                            }
+                          },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.accentYellow,
+                      foregroundColor: AppColors.primaryMaroon,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                    ),
+                    icon: isLoading
+                        ? const SizedBox(
+                            height: 14,
+                            width: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.check_circle_outline, size: 16),
+                    label: Text(isLoading ? 'Updating...' : 'Update'),
                   ),
                 ],
               ),
@@ -186,18 +246,22 @@ class EmergencyContactDialog {
     final url = Uri.parse(ApiEndpoints.getEmergencyContacts);
 
     try {
-      final response = await http.put(
-        url,
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer $token",
-        },
-        body: jsonEncode({
-          "emergency_contact_name": name,
-          "emergency_contact_phone": phone,
-          "blood_group": bloodGroup,
-        }),
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        token,
+        (accessToken) => http.put(
+          url,
+          headers: ApiEndpoints.authorizedHeaders(accessToken),
+          body: jsonEncode({
+            "emergency_contact_name": name,
+            "emergency_contact_phone": phone,
+            "blood_group": bloodGroup,
+          }),
+        ),
       );
+
+      if (response == null) {
+        return false;
+      }
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
