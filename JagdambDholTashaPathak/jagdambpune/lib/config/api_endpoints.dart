@@ -127,6 +127,25 @@ class ApiEndpoints {
   /// Get all gats
   static final String getGats = '$baseUrl/gats';
 
+  /// Upload user document (multipart/form-data)
+  static final String uploadDocument = '$baseUrl/documents/';
+
+  /// Review uploaded user document (pathak_admin only)
+  static final String reviewPathakDocumentBase = '$baseUrl/documents/pathak';
+
+  /// List uploaded documents for the logged-in pathak_admin's pathak
+  static final String listPathakDocuments = '$baseUrl/documents/pathak/';
+
+  /// Get only logged-in user's gat details and members
+  static final String myGatWithMembers = '$baseUrl/gats/my-gat/';
+
+  /// Get all gats with optional members payload (admin)
+  static final String listGatsWithMembers = '$baseUrl/gats/list-with-members/';
+
+  /// Auto assign members to gats for a year (pathak_admin only)
+  static final String autoAssignMembersToGats =
+      '$baseUrl/gats/auto-assign-members/';
+
   /// Get users (admin only)
   static final String fetchAllUsers = '$baseUrl/users/';
 
@@ -190,4 +209,8 @@ class ApiEndpoints {
 
   /// Build endpoint to approve/reject user by id
   static String getUserApproval(int id) => '$userApprovalBase/$id/approval/';
+
+  /// Build endpoint to review a document by id
+  static String reviewPathakDocument(int id) =>
+      '$reviewPathakDocumentBase/$id/review/';
 }

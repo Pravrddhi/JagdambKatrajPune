@@ -1,5 +1,8 @@
 import 'dart:convert';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import '../models/feature_flags.dart';
 import '../models/user.dart';
 import '../config/api_endpoints.dart';
@@ -10,6 +13,11 @@ import 'authorized_api_service.dart';
 
 class ApiService {
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
+  static const Set<String> _allowedDocumentTypes = {
+    'adhaar_card',
+    'pan_card',
+    'agreement_document',
+  };
   static final Map<String, Future<void>> _inFlightNotificationRequests =
       <String, Future<void>>{};
   static String? _lastNotificationFingerprint;
@@ -83,6 +91,590 @@ class ApiService {
         stackTrace: st.toString(),
         pageUrl: '/gats',
         endpoint: ApiEndpoints.getGats,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>> fetchMyGat({
+    bool includeMembers = false,
+    int? membersLimit,
+  }) async {
+    try {
+      if (membersLimit != null && membersLimit <= 0) {
+        throw Exception('members_limit must be greater than 0');
+      }
+
+      final uri = ApiEndpoints.buildUri(ApiEndpoints.myGatWithMembers, {
+        'include_members': includeMembers,
+        if (membersLimit != null) 'members_limit': membersLimit,
+      });
+
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) =>
+            http.get(uri, headers: ApiEndpoints.authorizedHeaders(token)),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200) {
+        if (decoded is Map<String, dynamic>) {
+          final data = decoded['data'];
+          if (data is Map<String, dynamic>) {
+            return data;
+          }
+        }
+        throw Exception('Invalid response format for my gat.');
+      }
+
+      if (decoded is Map<String, dynamic>) {
+        final detail = decoded['detail']?.toString();
+        if (detail != null && detail.isNotEmpty) {
+          throw Exception(detail);
+        }
+        final message = decoded['message']?.toString();
+        if (message != null && message.isNotEmpty) {
+          throw Exception(message);
+        }
+      }
+
+      throw Exception(
+        'Failed to load my gat (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'My gat API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/gats/my-gat',
+        endpoint: ApiEndpoints.myGatWithMembers,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchGatsWithMembers({
+    bool includeMembers = false,
+    int? membersLimit,
+  }) async {
+    try {
+      if (membersLimit != null && membersLimit <= 0) {
+        throw Exception('members_limit must be greater than 0');
+      }
+
+      final uri = ApiEndpoints.buildUri(ApiEndpoints.listGatsWithMembers, {
+        'include_members': includeMembers,
+        if (membersLimit != null) 'members_limit': membersLimit,
+      });
+
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) =>
+            http.get(uri, headers: ApiEndpoints.authorizedHeaders(token)),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200) {
+        if (decoded is Map<String, dynamic>) {
+          final data = decoded['data'];
+          if (data is List) {
+            return data
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList();
+          }
+          if (data is Map<String, dynamic> && data['gats'] is List) {
+            return (data['gats'] as List)
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList();
+          }
+          if (decoded['gats'] is List) {
+            return (decoded['gats'] as List)
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList();
+          }
+        }
+        throw Exception('Invalid response format for gats with members.');
+      }
+
+      if (decoded is Map<String, dynamic>) {
+        final detail = decoded['detail']?.toString();
+        if (detail != null && detail.isNotEmpty) {
+          throw Exception(detail);
+        }
+        final message = decoded['message']?.toString();
+        if (message != null && message.isNotEmpty) {
+          throw Exception(message);
+        }
+      }
+
+      throw Exception(
+        'Failed to load gats with members (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Gats with members API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/gats/list-with-members',
+        endpoint: ApiEndpoints.listGatsWithMembers,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>> autoAssignMembersToGats({
+    required int year,
+    bool reassign = false,
+    bool dryRun = false,
+    int? seed,
+  }) async {
+    try {
+      final payload = <String, dynamic>{
+        'year': year,
+        'reassign': reassign,
+        'dry_run': dryRun,
+      };
+      if (seed != null) {
+        payload['seed'] = seed;
+      }
+
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) => http.post(
+          Uri.parse(ApiEndpoints.autoAssignMembersToGats),
+          headers: ApiEndpoints.authorizedHeaders(token),
+          body: jsonEncode(payload),
+        ),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+        throw Exception('Invalid response format');
+      }
+
+      if (decoded is Map<String, dynamic>) {
+        final detail = decoded['detail']?.toString();
+        if (detail != null && detail.isNotEmpty) {
+          throw Exception(detail);
+        }
+
+        final message = decoded['message']?.toString();
+        if (message != null && message.isNotEmpty) {
+          throw Exception(message);
+        }
+      }
+
+      throw Exception(
+        'Failed to auto-assign members (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Auto assign members API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/gats/auto-assign-members',
+        endpoint: ApiEndpoints.autoAssignMembersToGats,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>> uploadDocument({
+    required String documentType,
+    required Uint8List fileBytes,
+    required String fileName,
+  }) async {
+    try {
+      final normalizedType = documentType.trim();
+      final normalizedFileName = fileName.trim();
+      final lowerFileName = normalizedFileName.toLowerCase();
+
+      debugPrint(
+        '[uploadDocument] START — type=$normalizedType file=$normalizedFileName size=${fileBytes.length}B',
+      );
+
+      if (!_allowedDocumentTypes.contains(normalizedType)) {
+        debugPrint(
+          '[uploadDocument] ERROR — invalid document type: $normalizedType',
+        );
+        throw Exception('Invalid document type.');
+      }
+      if (!(lowerFileName.endsWith('.jpg') ||
+          lowerFileName.endsWith('.jpeg'))) {
+        debugPrint(
+          '[uploadDocument] ERROR — disallowed file extension: $normalizedFileName',
+        );
+        throw Exception('Only .jpg and .jpeg files are allowed.');
+      }
+
+      final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
+      if (token == null || token.trim().isEmpty) {
+        debugPrint('[uploadDocument] ERROR — no access token in storage');
+        throw Exception('Session expired. Please login again.');
+      }
+      debugPrint('[uploadDocument] token present (${token.length} chars)');
+
+      Future<http.Response> sendRequest(String accessToken) async {
+        final url = ApiEndpoints.uploadDocument;
+        debugPrint('[uploadDocument] POST $url');
+        final request = http.MultipartRequest('POST', Uri.parse(url))
+          ..headers['Authorization'] = 'Bearer $accessToken'
+          ..fields['document_type'] = normalizedType
+          ..files.add(
+            http.MultipartFile.fromBytes(
+              'document_file',
+              fileBytes,
+              filename: normalizedFileName,
+              contentType: MediaType('image', 'jpeg'),
+            ),
+          );
+
+        final streamed = await request.send();
+        return http.Response.fromStream(streamed);
+      }
+
+      var response = await sendRequest(token);
+      debugPrint('[uploadDocument] response status=${response.statusCode}');
+      debugPrint('[uploadDocument] response body=${response.body}');
+
+      if (response.statusCode == 401) {
+        debugPrint('[uploadDocument] 401 — attempting token refresh');
+        final refreshed = await AuthService.refreshAccessToken();
+        if (refreshed) {
+          final refreshedToken = await _storage.read(
+            key: ApiEndpoints.accessTokenKey,
+          );
+          if (refreshedToken != null && refreshedToken.trim().isNotEmpty) {
+            debugPrint('[uploadDocument] retrying with refreshed token');
+            response = await sendRequest(refreshedToken);
+            debugPrint('[uploadDocument] retry status=${response.statusCode}');
+            debugPrint('[uploadDocument] retry body=${response.body}');
+          }
+        } else {
+          debugPrint('[uploadDocument] token refresh failed');
+        }
+      }
+
+      Map<String, dynamic> decoded;
+      if (response.body.isNotEmpty) {
+        try {
+          final raw = jsonDecode(response.body);
+          decoded = raw is Map<String, dynamic> ? raw : <String, dynamic>{};
+        } catch (jsonError) {
+          debugPrint('[uploadDocument] JSON parse error: $jsonError');
+          debugPrint('[uploadDocument] raw body was: ${response.body}');
+          throw Exception(
+            'Server returned an unexpected response (status ${response.statusCode}). '
+            'Raw: ${response.body.length > 300 ? response.body.substring(0, 300) : response.body}',
+          );
+        }
+      } else {
+        decoded = <String, dynamic>{};
+      }
+
+      debugPrint('[uploadDocument] decoded=$decoded');
+
+      if (response.statusCode == 201) {
+        debugPrint('[uploadDocument] SUCCESS');
+        return decoded;
+      }
+
+      if (decoded['detail'] != null) {
+        throw Exception(decoded['detail'].toString());
+      }
+
+      final documentTypeErrors = decoded['document_type'];
+      if (documentTypeErrors is List && documentTypeErrors.isNotEmpty) {
+        throw Exception(documentTypeErrors.first.toString());
+      }
+
+      final fileErrors = decoded['document_file'];
+      if (fileErrors is List && fileErrors.isNotEmpty) {
+        throw Exception(fileErrors.first.toString());
+      }
+
+      final message = decoded['message']?.toString();
+      if (message != null && message.isNotEmpty) {
+        throw Exception(message);
+      }
+
+      throw Exception(
+        'Failed to upload document (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      debugPrint('[uploadDocument] EXCEPTION: $e');
+      debugPrint('[uploadDocument] STACKTRACE: $st');
+      await BugReportService.reportApiFailure(
+        title: 'Upload document API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/documents',
+        endpoint: ApiEndpoints.uploadDocument,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>> fetchPathakDocuments({
+    String? status,
+    String? documentType,
+    int? uploadedById,
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    try {
+      if (page <= 0) {
+        throw Exception('Page must be greater than 0.');
+      }
+      if (pageSize <= 0) {
+        throw Exception('Page size must be greater than 0.');
+      }
+
+      final normalizedStatus = status?.trim().toLowerCase();
+      final normalizedDocumentType = documentType?.trim();
+
+      if (normalizedStatus != null &&
+          normalizedStatus.isNotEmpty &&
+          !{'pending', 'approved', 'rejected'}.contains(normalizedStatus)) {
+        throw Exception('Invalid document status filter.');
+      }
+
+      if (normalizedDocumentType != null &&
+          normalizedDocumentType.isNotEmpty &&
+          !_allowedDocumentTypes.contains(normalizedDocumentType)) {
+        throw Exception('Invalid document type filter.');
+      }
+
+      if (uploadedById != null && uploadedById <= 0) {
+        throw Exception('uploaded_by_id must be greater than 0.');
+      }
+
+      final uri = ApiEndpoints.buildUri(ApiEndpoints.listPathakDocuments, {
+        if (normalizedStatus != null && normalizedStatus.isNotEmpty)
+          'status': normalizedStatus,
+        if (normalizedDocumentType != null && normalizedDocumentType.isNotEmpty)
+          'document_type': normalizedDocumentType,
+        if (uploadedById != null) 'uploaded_by_id': uploadedById,
+        'page': page,
+        'page_size': pageSize,
+      });
+
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) =>
+            http.get(uri, headers: ApiEndpoints.authorizedHeaders(token)),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200) {
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+        throw Exception('Invalid response format from document list API.');
+      }
+
+      if (decoded is Map<String, dynamic>) {
+        final detail = decoded['detail']?.toString();
+        if (detail != null && detail.isNotEmpty) {
+          throw Exception(detail);
+        }
+
+        final message = decoded['message']?.toString();
+        if (message != null && message.isNotEmpty) {
+          throw Exception(message);
+        }
+      }
+
+      throw Exception(
+        'Failed to load documents (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Pathak documents API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/documents/pathak',
+        endpoint: ApiEndpoints.listPathakDocuments,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>> reviewDocument({
+    required int documentId,
+    required String status,
+    String? reason,
+  }) async {
+    try {
+      if (documentId <= 0) {
+        throw Exception('Invalid document id.');
+      }
+
+      final normalizedStatus = status.trim().toLowerCase();
+      final normalizedReason = reason?.trim();
+
+      if (normalizedStatus != 'approved' && normalizedStatus != 'rejected') {
+        throw Exception('Status must be either approved or rejected.');
+      }
+
+      if (normalizedStatus == 'rejected' &&
+          (normalizedReason == null || normalizedReason.isEmpty)) {
+        throw Exception(
+          'Rejection reason is required when status is rejected.',
+        );
+      }
+
+      final uri = Uri.parse(ApiEndpoints.reviewPathakDocument(documentId));
+      final body = <String, dynamic>{
+        'status': normalizedStatus,
+        if (normalizedStatus == 'rejected') 'reason': normalizedReason,
+      };
+
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) => http.patch(
+          uri,
+          headers: ApiEndpoints.authorizedHeaders(token),
+          body: jsonEncode(body),
+        ),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200) {
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+        throw Exception('Invalid response format from review API.');
+      }
+
+      if (decoded is Map<String, dynamic>) {
+        final reasonErrors = decoded['reason'];
+        if (reasonErrors is List && reasonErrors.isNotEmpty) {
+          throw Exception(reasonErrors.first.toString());
+        }
+
+        final detail = decoded['detail']?.toString();
+        if (detail != null && detail.isNotEmpty) {
+          throw Exception(detail);
+        }
+
+        final message = decoded['message']?.toString();
+        if (message != null && message.isNotEmpty) {
+          throw Exception(message);
+        }
+      }
+
+      throw Exception(
+        'Failed to review document (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Review document API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/documents/pathak/$documentId/review',
+        endpoint: ApiEndpoints.reviewPathakDocument(documentId),
+      );
+      rethrow;
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>> fetchMyDocuments() async {
+    try {
+      final uri = Uri.parse(ApiEndpoints.uploadDocument);
+
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) =>
+            http.get(uri, headers: ApiEndpoints.authorizedHeaders(token)),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200) {
+        if (decoded is List) {
+          return decoded
+              .whereType<Map>()
+              .map((item) => Map<String, dynamic>.from(item))
+              .toList();
+        }
+        if (decoded is Map<String, dynamic>) {
+          final data = decoded['data'] ?? decoded['results'];
+          if (data is List) {
+            return data
+                .whereType<Map>()
+                .map((item) => Map<String, dynamic>.from(item))
+                .toList();
+          }
+          return [];
+        }
+        throw Exception('Invalid response format from my documents API.');
+      }
+
+      if (decoded is Map<String, dynamic>) {
+        final detail = decoded['detail']?.toString();
+        if (detail != null && detail.isNotEmpty) {
+          throw Exception(detail);
+        }
+      }
+
+      throw Exception(
+        'Failed to load your documents (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'My documents API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/documents',
+        endpoint: ApiEndpoints.uploadDocument,
       );
       rethrow;
     }
@@ -286,13 +878,14 @@ class ApiService {
     String? targetType,
     int? targetRole,
     int? targetUser,
+    int? targetGat,
   }) async {
     final normalizedTitle = title.trim();
     final normalizedMessage = message.trim();
     final normalizedType = type?.trim();
     final normalizedTargetType = targetType?.trim();
     final fingerprint =
-        '${normalizedTitle.toLowerCase()}::${normalizedMessage.toLowerCase()}::${normalizedType ?? ''}::${normalizedTargetType ?? ''}::${targetRole ?? ''}::${targetUser ?? ''}';
+        '${normalizedTitle.toLowerCase()}::${normalizedMessage.toLowerCase()}::${normalizedType ?? ''}::${normalizedTargetType ?? ''}::${targetRole ?? ''}::${targetUser ?? ''}::${targetGat ?? ''}';
 
     final existingRequest = _inFlightNotificationRequests[fingerprint];
     if (existingRequest != null) {
@@ -315,6 +908,7 @@ class ApiService {
       targetType: normalizedTargetType,
       targetRole: targetRole,
       targetUser: targetUser,
+      targetGat: targetGat,
     );
     _inFlightNotificationRequests[fingerprint] = request;
 
@@ -334,6 +928,7 @@ class ApiService {
     String? targetType,
     int? targetRole,
     int? targetUser,
+    int? targetGat,
   }) async {
     try {
       final uri = Uri.parse(ApiEndpoints.createNotification);
@@ -350,6 +945,9 @@ class ApiService {
       }
       if (targetUser != null) {
         payload['target_user'] = targetUser;
+      }
+      if (targetGat != null) {
+        payload['target_gat'] = targetGat;
       }
 
       final response = await AuthorizedApiService.sendWithAutoRefresh(

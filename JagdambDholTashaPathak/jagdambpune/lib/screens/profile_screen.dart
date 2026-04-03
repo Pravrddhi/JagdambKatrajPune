@@ -23,6 +23,8 @@ class ProfileScreen extends StatelessWidget {
           if (entry.key == 'events' ||
               entry.key == 'role' ||
               entry.key == 'is_gat_pramukh' ||
+              entry.key == 'has_fcm_token' ||
+              entry.key == 'hasFcmToken' ||
               entry.key == 'approval_status' ||
               entry.key == 'approval_comment' ||
               entry.key == 'approvalComment') {
