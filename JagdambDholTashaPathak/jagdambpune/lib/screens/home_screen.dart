@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../widgets/setpin_dialog.dart';
 import '../theme/app_colors.dart';
+import '../config/app_config.dart';
 import '../components/app_drawer.dart';
 import '../components/upcoming_events.dart';
 import '../components/mirvnuk_dialog.dart';
@@ -741,7 +742,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text(
-          'Jagdhamb Dhol Tasha Pathak Pune',
+          AppConfig.appDisplayName,
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
         elevation: 0,
