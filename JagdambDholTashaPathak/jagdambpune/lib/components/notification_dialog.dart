@@ -71,7 +71,7 @@ class _NotificationDialogState extends State<_NotificationDialog> {
       await ApiService.sendBroadcastNotification(
         title: title,
         message: message,
-        targetType: widget.targetGatId != null ? 'gat' : null,
+        targetType: widget.targetGatId != null ? 'user' : null,
         targetGat: widget.targetGatId,
       );
 
@@ -123,8 +123,13 @@ class _NotificationDialogState extends State<_NotificationDialog> {
         return;
       }
 
+      final message = e.toString().replaceFirst('Exception: ', '').trim();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text(ApiEndpoints.genericApiFailureMessage)),
+        SnackBar(
+          content: Text(
+            message.isEmpty ? ApiEndpoints.genericApiFailureMessage : message,
+          ),
+        ),
       );
     } finally {
       if (mounted) {

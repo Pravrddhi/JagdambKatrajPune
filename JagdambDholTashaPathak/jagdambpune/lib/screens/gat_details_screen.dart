@@ -9,6 +9,7 @@ class GatDetailsScreen extends StatefulWidget {
   final int? selectedGatId;
   final String? selectedGatName;
   final bool showAutoAssignAction;
+  final bool isPathakAdmin;
   final bool useMyGatEndpoint;
 
   const GatDetailsScreen({
@@ -16,6 +17,7 @@ class GatDetailsScreen extends StatefulWidget {
     this.selectedGatId,
     this.selectedGatName,
     this.showAutoAssignAction = true,
+    this.isPathakAdmin = false,
     this.useMyGatEndpoint = false,
   });
 
@@ -28,6 +30,33 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
   bool _isLoading = true;
   bool _isAssigning = false;
   String? _errorMessage;
+
+  String _gatNameFrom(Map<String, dynamic> gat) {
+    final directName = gat['name']?.toString().trim();
+    if (directName != null && directName.isNotEmpty) {
+      return directName;
+    }
+
+    final gatName = gat['gat_name']?.toString().trim();
+    if (gatName != null && gatName.isNotEmpty) {
+      return gatName;
+    }
+
+    final nested = gat['gat'];
+    if (nested is Map) {
+      final nestedMap = Map<String, dynamic>.from(nested);
+      final nestedName = nestedMap['name']?.toString().trim();
+      if (nestedName != null && nestedName.isNotEmpty) {
+        return nestedName;
+      }
+      final nestedGatName = nestedMap['gat_name']?.toString().trim();
+      if (nestedGatName != null && nestedGatName.isNotEmpty) {
+        return nestedGatName;
+      }
+    }
+
+    return '-';
+  }
 
   @override
   void initState() {
@@ -60,7 +89,7 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
           return true;
         }
         if (selectedName != null && selectedName.isNotEmpty) {
-          final gatName = gat['name']?.toString().trim().toLowerCase() ?? '';
+          final gatName = _gatNameFrom(gat).trim().toLowerCase();
           return gatName == selectedName;
         }
         return selectedId == null &&
@@ -293,8 +322,7 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
     final members = _extractMembers(gat);
     final membersCount =
         (gat['members_count'] as num?)?.toInt() ?? members.length;
-    final gatName =
-        gat['name']?.toString() ?? gat['gat_name']?.toString() ?? 'Gat';
+    final gatName = _gatNameFrom(gat) == '-' ? 'Gat' : _gatNameFrom(gat);
     final gatId = int.tryParse((gat['id'] ?? gat['gat_id'] ?? '').toString());
 
     if (!mounted) return;
@@ -368,7 +396,7 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                   ),
           ),
           actions: [
-            if (widget.showAutoAssignAction && gatId != null)
+            if (widget.isPathakAdmin && gatId != null)
               ElevatedButton.icon(
                 onPressed: () async {
                   Navigator.of(dialogContext).pop();
@@ -496,7 +524,7 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                         ),
                       ),
                       title: Text(
-                        gat['name'] ?? '-',
+                        _gatNameFrom(gat),
                         style: const TextStyle(
                           color: AppColors.primaryMaroon,
                           fontWeight: FontWeight.w700,

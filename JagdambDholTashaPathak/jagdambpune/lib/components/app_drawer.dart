@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../providers/feature_flags_provider.dart';
 import '../theme/app_colors.dart';
 import '../utils/animated_navigation.dart'; // ✅ Reusable animation
 import '../screens/all_users_screen.dart';
@@ -63,13 +66,17 @@ class AppDrawer extends StatelessWidget {
         userDetails?['gatName']?.toString() ??
         userDetails?['gat']?.toString();
 
+    final showAutoAssignGat =
+        context.read<FeatureFlagsProvider>().flags?.showAutoAssignGat ?? false;
+
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => GatDetailsScreen(
           selectedGatId: _isPathakAdmin ? null : selectedGatId,
           selectedGatName: _isPathakAdmin ? null : selectedGatName,
-          showAutoAssignAction: _isPathakAdmin,
+          showAutoAssignAction: _isPathakAdmin && showAutoAssignGat,
+          isPathakAdmin: _isPathakAdmin,
           useMyGatEndpoint: !_isPathakAdmin,
         ),
       ),
@@ -209,14 +216,16 @@ class AppDrawer extends StatelessWidget {
             ),
             onTap: () => _navigateToComingSoon(context, 'Maintance'),
           ),
-          ListTile(
-            leading: const Icon(Icons.badge, color: AppColors.primaryMaroon),
-            title: const Text(
-              'Id Card',
-              style: TextStyle(color: AppColors.primaryMaroon),
+          if (context.read<FeatureFlagsProvider>().flags?.showIdCardSection ??
+              false)
+            ListTile(
+              leading: const Icon(Icons.badge, color: AppColors.primaryMaroon),
+              title: const Text(
+                'Id Card',
+                style: TextStyle(color: AppColors.primaryMaroon),
+              ),
+              onTap: () => _navigateToDocuments(context),
             ),
-            onTap: () => _navigateToDocuments(context),
-          ),
           if (_isPathakAdmin)
             ListTile(
               leading: const Icon(
