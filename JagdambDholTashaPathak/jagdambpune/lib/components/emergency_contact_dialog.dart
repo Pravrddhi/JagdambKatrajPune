@@ -7,7 +7,7 @@ import 'package:jagdhambtrustpune/services/bug_report_service.dart';
 import 'package:jagdhambtrustpune/theme/app_colors.dart';
 import 'package:jagdhambtrustpune/services/authorized_api_service.dart';
 import '../widgets/input_box.dart'; // import your custom input box
-import '../widgets/drop_down.dart';
+import '../widgets/dropdown.dart';
 
 class EmergencyContactDialog {
   static Future<void> show(BuildContext context, String token) async {
@@ -136,7 +136,7 @@ class EmergencyContactDialog {
                           ),
                           const SizedBox(height: 10),
                           // Dropdown for blood group
-                          PremiumDropDown(
+                          PremiumDropdown(
                             value: selectedBloodGroup,
                             label: "Select Blood Group",
                             options: bloodGroups,

@@ -169,7 +169,7 @@ class _UserDetailsCard extends StatelessWidget {
                   ),
                 ),
                 onPressed: () {
-                  // TODO: Navigate to Update Profile screen
+                  // Placeholder until the update-profile flow is implemented.
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('Update profile clicked!')),
                   );
@@ -201,7 +201,7 @@ class _LogoutButton extends StatelessWidget {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
       onPressed: () {
-        // TODO: Clear session/token if required
+        // Current logout flow only redirects to login.
 
         // Navigate to login screen and replace current screen
         Navigator.pushReplacementNamed(context, '/login');

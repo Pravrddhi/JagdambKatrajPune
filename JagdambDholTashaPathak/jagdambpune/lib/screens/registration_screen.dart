@@ -7,7 +7,7 @@ import 'package:local_auth/local_auth.dart';
 import '../theme/app_colors.dart';
 import '../widgets/input_box.dart';
 import '../widgets/common_button.dart';
-import '../widgets/drop_down.dart';
+import '../widgets/dropdown.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:android_id/android_id.dart';
 import 'home_screen.dart';
@@ -572,7 +572,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               const SizedBox(height: 16),
 
               // Gender dropdown
-              PremiumDropDown(
+              PremiumDropdown(
                 label: "Gender",
                 value: selectedSex,
                 options: const ["Male", "Female", "Other"],
@@ -670,7 +670,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               const SizedBox(height: 16),
 
               // Joining Year dropdown
-              PremiumDropDown(
+              PremiumDropdown(
                 label: "Joining Year",
                 value: selectedJoiningYear?.toString(),
                 options: List.generate(
@@ -687,7 +687,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               const SizedBox(height: 16),
 
               // Instrument dropdown
-              PremiumDropDown(
+              PremiumDropdown(
                 label: "Instrument",
                 value: selectedInstrument,
                 options: _instruments,

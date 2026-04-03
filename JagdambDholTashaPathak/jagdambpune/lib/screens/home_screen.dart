@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:provider/provider.dart';
 
-import '../widgets/setpin_dialog.dart';
+import '../widgets/set_pin_dialog.dart';
 import '../theme/app_colors.dart';
 import '../config/app_config.dart';
 import '../components/app_drawer.dart';
@@ -12,7 +12,7 @@ import '../components/upcoming_events.dart';
 import '../components/mirvnuk_dialog.dart';
 import '../components/notification_dialog.dart';
 import '../services/user_service.dart';
-import '../components/get_emergency_details.dart';
+import '../components/emergency_contact_dialog.dart';
 import '../providers/notification_provider.dart';
 import '../config/api_endpoints.dart';
 import '../services/notification_socket_service.dart';
@@ -145,7 +145,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         accessToken = await showSetPinDialog(
           context,
           widget.phoneNumber,
-          false,
+          isResetFlow: false,
         );
 
         if (!mounted) return;
@@ -419,7 +419,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _parseBool(userDetails['isGatPramukh']);
   }
 
-  bool get _canOpenMirvunkForm {
+  bool get _canOpenMirvnukForm {
     final role = _userDetails?['role']?.toString().trim().toLowerCase();
     return _userDetails != null && role != 'vadak';
   }
@@ -429,7 +429,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   bool get _hasFabActions {
-    return _canOpenMirvunkForm || _canSendNotification;
+    return _canOpenMirvnukForm || _canSendNotification;
   }
 
   void _handleLogout() {
@@ -839,7 +839,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               child: Stack(
                 alignment: Alignment.bottomRight,
                 children: [
-                  if (_canOpenMirvunkForm)
+                  if (_canOpenMirvnukForm)
                     Positioned(
                       bottom: isCompact ? 130 : 148,
                       right: 0,
@@ -852,7 +852,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           isCompact: isCompact,
                           onPressed: () async {
                             _toggleFabMenu();
-                            await MirvunkForm.open(context);
+                            await MirvnukForm.open(context);
                             String? token = await storage.read(
                               key: 'access_token',
                             );
