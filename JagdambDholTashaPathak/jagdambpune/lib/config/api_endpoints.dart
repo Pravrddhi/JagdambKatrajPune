@@ -1,11 +1,13 @@
 // lib/config/api_endpoints.dart
 
+import 'app_config.dart';
+
 /// Centralized class for managing API endpoints and related utilities.
 class ApiEndpoints {
   // Base URL for API requests.
   // Override with: --dart-define=API_BASE_URL=https://your-domain/api
   // This allows separate dev/prod builds without code edits.
-  static const String _defaultBaseUrl = 'https://api.jagdamb.co.in/api';
+  static const String _defaultBaseUrl = AppConfig.defaultApiBaseUrl;
   static const String baseUrlFromDefine = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: _defaultBaseUrl,
@@ -44,7 +46,7 @@ class ApiEndpoints {
     );
   }
 
-  static const String pathakId = "1";
+  static const String pathakId = AppConfig.pathakId;
 
   // -------------------
   // Storage Keys
