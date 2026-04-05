@@ -743,7 +743,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       appBar: AppBar(
         title: const Text(
           AppConfig.appDisplayName,
-          style: TextStyle(fontWeight: FontWeight.w700),
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
         ),
         elevation: 0,
         backgroundColor: AppColors.primaryMaroon,

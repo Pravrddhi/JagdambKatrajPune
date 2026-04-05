@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -16,6 +17,7 @@ class ApiService {
   static const Set<String> _allowedDocumentTypes = {
     'adhaar_card',
     'pan_card',
+    'personal_photo',
     'agreement_document',
   };
   static final Map<String, Future<void>> _inFlightNotificationRequests =
@@ -23,6 +25,14 @@ class ApiService {
   static String? _lastNotificationFingerprint;
   static DateTime? _lastNotificationAt;
   static const Duration _notificationDedupeWindow = Duration(seconds: 10);
+
+  static bool _isJpegBytes(Uint8List bytes) {
+    // JPEG files begin with FF D8 FF.
+    return bytes.length >= 3 &&
+        bytes[0] == 0xFF &&
+        bytes[1] == 0xD8 &&
+        bytes[2] == 0xFF;
+  }
 
   static Future<FeatureFlags> fetchFeatureFlags() async {
     try {
@@ -333,6 +343,12 @@ class ApiService {
         );
         throw Exception('Only .jpg and .jpeg files are allowed.');
       }
+      if (!_isJpegBytes(fileBytes)) {
+        debugPrint('[uploadDocument] ERROR — file bytes are not JPEG');
+        throw Exception(
+          'Selected image is not a valid JPEG. Please capture/select a JPG/JPEG image.',
+        );
+      }
 
       final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
       if (token == null || token.trim().isEmpty) {
@@ -356,7 +372,9 @@ class ApiService {
             ),
           );
 
-        final streamed = await request.send();
+        final streamed = await request.send().timeout(
+          const Duration(seconds: 90),
+        );
         return http.Response.fromStream(streamed);
       }
 
@@ -427,6 +445,18 @@ class ApiService {
 
       throw Exception(
         'Failed to upload document (status code ${response.statusCode})',
+      );
+    } on TimeoutException catch (e, st) {
+      debugPrint('[uploadDocument] TIMEOUT: $e');
+      await BugReportService.reportApiFailure(
+        title: 'Upload document API timeout',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/documents',
+        endpoint: ApiEndpoints.uploadDocument,
+      );
+      throw Exception(
+        'Upload timed out. Please try again with a smaller JPG image.',
       );
     } catch (e, st) {
       debugPrint('[uploadDocument] EXCEPTION: $e');
