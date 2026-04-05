@@ -103,7 +103,7 @@ class ApiEndpoints {
   /// Create a new event
   static final String createEvent = '$baseUrl/events/create/';
 
-  /// Update status of a Mirvnuk event (0=not started, 1=live, 2=ended, 3=cancelled)
+  /// Update status of a Mirvnuk event (0=not started, 1=started, 3=canceled, 4=completed)
   static final String updateMirvnukStatus = '$baseUrl/mirvnuk-status/';
 
   /// Create a new notification

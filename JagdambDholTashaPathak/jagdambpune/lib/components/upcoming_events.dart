@@ -27,7 +27,7 @@ class _UpcomingEventsState extends State<UpcomingEvents>
   late List<Map<String, dynamic>> _events;
   final Map<int, bool> _loading = {};
   bool _isRefreshing = false;
-  // null = All, 0 = Not Started, 1 = Live, 3 = Cancelled, 4 = Completed
+  // null = All, 0 = Not Started, 1 = Started, 3 = Canceled, 4 = Completed
   int? _activeFilter;
   late final AnimationController _pulseController;
   late final Animation<double> _pulseAnim;
@@ -75,9 +75,9 @@ class _UpcomingEventsState extends State<UpcomingEvents>
     const filters = [
       (label: 'All', value: null),
       (label: 'Not Started', value: 0),
-      (label: 'Live', value: 1),
+      (label: 'Started', value: 1),
       (label: 'Completed', value: 4),
-      (label: 'Cancelled', value: 3),
+      (label: 'Canceled', value: 3),
     ];
 
     return Wrap(
@@ -112,9 +112,9 @@ class _UpcomingEventsState extends State<UpcomingEvents>
   static ({String label, Color bg, Color fg}) _statusConfig(int? status) {
     switch (status) {
       case 1:
-        return (label: 'Live', bg: Colors.green.shade600, fg: Colors.white);
+        return (label: 'Started', bg: Colors.green.shade600, fg: Colors.white);
       case 3:
-        return (label: 'Cancelled', bg: Colors.red.shade600, fg: Colors.white);
+        return (label: 'Canceled', bg: Colors.red.shade600, fg: Colors.white);
       case 4:
         return (label: 'Completed', bg: Colors.grey.shade500, fg: Colors.white);
       default: // 0 or null
@@ -171,7 +171,7 @@ class _UpcomingEventsState extends State<UpcomingEvents>
 
     if (!isLive) return label;
 
-    // Outer pulsing ring for Live
+    // Outer pulsing ring for Started
     return AnimatedBuilder(
       animation: _pulseAnim,
       builder: (_, child) => Stack(
@@ -520,7 +520,8 @@ class _UpcomingEventsState extends State<UpcomingEvents>
           children: [
             const Expanded(
               child: Text(
-                'Upcoming Mirvnuk:',
+                'Upcoming Mirvnuk',
+                textAlign: TextAlign.center,
                 style: TextStyle(
                   color: AppColors.primaryMaroon,
                   fontSize: 22,

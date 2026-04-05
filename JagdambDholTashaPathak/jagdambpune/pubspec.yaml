@@ -1,5 +1,5 @@
 name: jagdhambtrustpune
-description: "A new Flutter project."
+description: "jagdambpune app"
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -48,6 +48,7 @@ dependencies:
   pin_code_fields: ^8.0.1
   web_socket_channel: ^3.0.3
   image_picker: ^1.1.2
+  image: ^4.5.4
 
 dev_dependencies:
   flutter_test:
