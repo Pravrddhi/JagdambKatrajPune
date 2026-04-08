@@ -49,6 +49,10 @@ dependencies:
   web_socket_channel: ^3.0.3
   image_picker: ^1.1.2
   image: ^4.5.4
+  geolocator: ^13.0.2
+  qr_flutter: ^4.1.0
+  mobile_scanner: ^6.0.2
+  table_calendar: ^3.1.2
 
 dev_dependencies:
   flutter_test:

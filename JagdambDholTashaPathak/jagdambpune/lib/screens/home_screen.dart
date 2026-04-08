@@ -16,6 +16,7 @@ import '../components/emergency_contact_dialog.dart';
 import '../providers/notification_provider.dart';
 import '../config/api_endpoints.dart';
 import '../services/notification_socket_service.dart';
+import 'attendance_module_screen.dart';
 
 const storage = FlutterSecureStorage();
 
@@ -400,9 +401,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return normalized == 'true' || normalized == '1' || normalized == 'yes';
   }
 
-  bool get _isPathakAdmin {
+  bool get _isPathakAdminOnly {
     final role = _userDetails?['role']?.toString().trim().toLowerCase();
     return role == 'pathak_admin' || role == 'pathak-admin';
+  }
+
+  bool get _isPathakAdmin {
+    return _isPathakAdminOnly || _isManagement;
   }
 
   bool get _isGatPramukh {
@@ -428,8 +433,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return _isPathakAdmin || _isGatPramukh;
   }
 
+  bool get _isManagement {
+    final role = _userDetails?['role']?.toString().trim().toLowerCase();
+    return role == 'management';
+  }
+
+  bool get _isSuperuser {
+    final role = _userDetails?['role']?.toString().trim().toLowerCase();
+    return role == 'superuser';
+  }
+
+  bool get _canGenerateAttendanceQr {
+    return _isPathakAdmin || _isManagement;
+  }
+
+  bool get _canSetAttendanceLocation {
+    return _isPathakAdminOnly;
+  }
+
+  bool get _canViewAttendanceByUser {
+    return _isPathakAdmin || _isManagement || _isSuperuser || _isGatPramukh;
+  }
+
+  bool get _canAccessAttendance {
+    return _userDetails != null;
+  }
+
   bool get _hasFabActions {
-    return _canOpenMirvnukForm || _canSendNotification;
+    return _canOpenMirvnukForm || _canSendNotification || _canAccessAttendance;
+  }
+
+  bool get _isNormalAttendanceOnlyUser {
+    return _canAccessAttendance &&
+        !_canOpenMirvnukForm &&
+        !_canSendNotification &&
+        !_canGenerateAttendanceQr &&
+        !_canSetAttendanceLocation &&
+        !_canViewAttendanceByUser;
   }
 
   void _handleLogout() {
@@ -833,67 +873,116 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         ],
       ),
       floatingActionButton: _hasFabActions
-          ? SizedBox(
-              width: isCompact ? 210 : 230,
-              height: isCompact ? 195 : 220,
-              child: Stack(
-                alignment: Alignment.bottomRight,
-                children: [
-                  if (_canOpenMirvnukForm)
-                    Positioned(
-                      bottom: isCompact ? 130 : 148,
-                      right: 0,
-                      child: IgnorePointer(
-                        ignoring: !_isFabOpen,
-                        child: _buildLabeledFabAction(
-                          label: 'Add Mirvnuk',
-                          icon: Icons.event,
-                          heroTag: 'add_mirvnuk',
-                          isCompact: isCompact,
-                          onPressed: () async {
-                            _toggleFabMenu();
-                            await MirvnukForm.open(context);
-                            String? token = await storage.read(
-                              key: 'access_token',
-                            );
-                            if (token != null && token.isNotEmpty) {
-                              _loadUserDetails(token);
-                            }
-                          },
-                        ),
-                      ),
-                    ),
-                  if (_canSendNotification)
-                    Positioned(
-                      bottom: isCompact ? 64 : 74,
-                      right: 0,
-                      child: IgnorePointer(
-                        ignoring: !_isFabOpen,
-                        child: _buildLabeledFabAction(
-                          label: 'Send Notice',
-                          icon: Icons.notifications,
-                          heroTag: 'add_notification',
-                          isCompact: isCompact,
-                          onPressed: () async {
-                            _toggleFabMenu();
-                            await NotificationForm.open(context);
-                          },
-                        ),
-                      ),
-                    ),
-                  FloatingActionButton(
-                    heroTag: 'main',
+          ? (_isNormalAttendanceOnlyUser
+                ? FloatingActionButton(
+                    heroTag: 'attendance_scan_direct',
                     backgroundColor: AppColors.accentYellow,
-                    onPressed: _toggleFabMenu,
-                    child: AnimatedRotation(
-                      turns: _isFabOpen ? 0.125 : 0,
-                      duration: const Duration(milliseconds: 250),
-                      child: const Icon(Icons.add),
+                    onPressed: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => AttendanceModuleScreen(
+                            canGenerateQr: _canGenerateAttendanceQr,
+                            canSetAttendanceLocation: _canSetAttendanceLocation,
+                            canViewByUserAttendance: _canViewAttendanceByUser,
+                            scanOnly: true,
+                          ),
+                        ),
+                      );
+                    },
+                    child: const Icon(
+                      Icons.qr_code_scanner,
+                      color: AppColors.primaryMaroon,
                     ),
-                  ),
-                ],
-              ),
-            )
+                  )
+                : SizedBox(
+                    width: isCompact ? 210 : 230,
+                    height: isCompact ? 255 : 285,
+                    child: Stack(
+                      alignment: Alignment.bottomRight,
+                      children: [
+                        if (_canAccessAttendance)
+                          Positioned(
+                            bottom: isCompact ? 196 : 222,
+                            right: 0,
+                            child: IgnorePointer(
+                              ignoring: !_isFabOpen,
+                              child: _buildLabeledFabAction(
+                                label: 'Attendance',
+                                icon: Icons.qr_code_scanner,
+                                heroTag: 'attendance_module',
+                                isCompact: isCompact,
+                                onPressed: () async {
+                                  _toggleFabMenu();
+                                  await Navigator.of(context).push(
+                                    MaterialPageRoute<void>(
+                                      builder: (_) => AttendanceModuleScreen(
+                                        canGenerateQr: _canGenerateAttendanceQr,
+                                        canSetAttendanceLocation:
+                                            _canSetAttendanceLocation,
+                                        canViewByUserAttendance:
+                                            _canViewAttendanceByUser,
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                        if (_canOpenMirvnukForm)
+                          Positioned(
+                            bottom: isCompact ? 130 : 148,
+                            right: 0,
+                            child: IgnorePointer(
+                              ignoring: !_isFabOpen,
+                              child: _buildLabeledFabAction(
+                                label: 'Add Mirvnuk',
+                                icon: Icons.event,
+                                heroTag: 'add_mirvnuk',
+                                isCompact: isCompact,
+                                onPressed: () async {
+                                  _toggleFabMenu();
+                                  await MirvnukForm.open(context);
+                                  String? token = await storage.read(
+                                    key: 'access_token',
+                                  );
+                                  if (token != null && token.isNotEmpty) {
+                                    _loadUserDetails(token);
+                                  }
+                                },
+                              ),
+                            ),
+                          ),
+                        if (_canSendNotification)
+                          Positioned(
+                            bottom: isCompact ? 64 : 74,
+                            right: 0,
+                            child: IgnorePointer(
+                              ignoring: !_isFabOpen,
+                              child: _buildLabeledFabAction(
+                                label: 'Send Notice',
+                                icon: Icons.notifications,
+                                heroTag: 'add_notification',
+                                isCompact: isCompact,
+                                onPressed: () async {
+                                  _toggleFabMenu();
+                                  await NotificationForm.open(context);
+                                },
+                              ),
+                            ),
+                          ),
+                        FloatingActionButton(
+                          heroTag: 'main',
+                          backgroundColor: AppColors.accentYellow,
+                          onPressed: _toggleFabMenu,
+                          child: AnimatedRotation(
+                            turns: _isFabOpen ? 0.125 : 0,
+                            duration: const Duration(milliseconds: 250),
+                            child: const Icon(Icons.add),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ))
           : null,
     );
   }

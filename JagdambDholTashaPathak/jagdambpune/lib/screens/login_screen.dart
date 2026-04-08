@@ -369,6 +369,13 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       }
 
+      // Re-fetch feature flags now that the auth token is stored so the
+      // drawer correctly reflects this user's configuration.
+      if (mounted) {
+        context.read<FeatureFlagsProvider>().fetchFeatureFlags(force: true);
+      }
+
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
