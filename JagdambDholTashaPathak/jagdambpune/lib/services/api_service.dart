@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -16,6 +17,7 @@ class ApiService {
   static const Set<String> _allowedDocumentTypes = {
     'adhaar_card',
     'pan_card',
+    'personal_photo',
     'agreement_document',
   };
   static final Map<String, Future<void>> _inFlightNotificationRequests =
@@ -23,6 +25,14 @@ class ApiService {
   static String? _lastNotificationFingerprint;
   static DateTime? _lastNotificationAt;
   static const Duration _notificationDedupeWindow = Duration(seconds: 10);
+
+  static bool _isJpegBytes(Uint8List bytes) {
+    // JPEG files begin with FF D8 FF.
+    return bytes.length >= 3 &&
+        bytes[0] == 0xFF &&
+        bytes[1] == 0xD8 &&
+        bytes[2] == 0xFF;
+  }
 
   static Future<FeatureFlags> fetchFeatureFlags() async {
     try {
@@ -155,6 +165,75 @@ class ApiService {
         stackTrace: st.toString(),
         pageUrl: '/gats/my-gat',
         endpoint: ApiEndpoints.myGatWithMembers,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>> createGat({
+    required String name,
+    int? gatPramukhId,
+  }) async {
+    try {
+      final trimmedName = name.trim();
+      if (trimmedName.isEmpty) {
+        throw Exception('Gat name is required.');
+      }
+
+      final payload = <String, dynamic>{
+        'name': trimmedName,
+        if (gatPramukhId != null) 'gat_pramukh_id': gatPramukhId,
+      };
+
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) => http.post(
+          Uri.parse(ApiEndpoints.createGat),
+          headers: ApiEndpoints.authorizedHeaders(token),
+          body: jsonEncode(payload),
+        ),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+        return <String, dynamic>{
+          'success': true,
+          'message': 'Gat created successfully.',
+        };
+      }
+
+      if (decoded is Map<String, dynamic>) {
+        final detail = decoded['detail']?.toString();
+        if (detail != null && detail.isNotEmpty) {
+          throw Exception(detail);
+        }
+
+        final message = decoded['message']?.toString();
+        if (message != null && message.isNotEmpty) {
+          throw Exception(message);
+        }
+      }
+
+      throw Exception(
+        'Failed to create gat (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Create gat API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/gats/',
+        endpoint: ApiEndpoints.createGat,
       );
       rethrow;
     }
@@ -333,6 +412,12 @@ class ApiService {
         );
         throw Exception('Only .jpg and .jpeg files are allowed.');
       }
+      if (!_isJpegBytes(fileBytes)) {
+        debugPrint('[uploadDocument] ERROR — file bytes are not JPEG');
+        throw Exception(
+          'Selected image is not a valid JPEG. Please capture/select a JPG/JPEG image.',
+        );
+      }
 
       final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
       if (token == null || token.trim().isEmpty) {
@@ -356,7 +441,9 @@ class ApiService {
             ),
           );
 
-        final streamed = await request.send();
+        final streamed = await request.send().timeout(
+          const Duration(seconds: 90),
+        );
         return http.Response.fromStream(streamed);
       }
 
@@ -427,6 +514,18 @@ class ApiService {
 
       throw Exception(
         'Failed to upload document (status code ${response.statusCode})',
+      );
+    } on TimeoutException catch (e, st) {
+      debugPrint('[uploadDocument] TIMEOUT: $e');
+      await BugReportService.reportApiFailure(
+        title: 'Upload document API timeout',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/documents',
+        endpoint: ApiEndpoints.uploadDocument,
+      );
+      throw Exception(
+        'Upload timed out. Please try again with a smaller JPG image.',
       );
     } catch (e, st) {
       debugPrint('[uploadDocument] EXCEPTION: $e');
@@ -883,7 +982,15 @@ class ApiService {
     final normalizedTitle = title.trim();
     final normalizedMessage = message.trim();
     final normalizedType = type?.trim();
-    final normalizedTargetType = targetType?.trim();
+    var normalizedTargetType = targetType?.trim();
+    // Backend contract: gat-targeted notifications use target_type='user'
+    // with target_gat=<id>.
+    if (targetGat != null &&
+        (normalizedTargetType == null ||
+            normalizedTargetType.isEmpty ||
+            normalizedTargetType == 'gat')) {
+      normalizedTargetType = 'user';
+    }
     final fingerprint =
         '${normalizedTitle.toLowerCase()}::${normalizedMessage.toLowerCase()}::${normalizedType ?? ''}::${normalizedTargetType ?? ''}::${targetRole ?? ''}::${targetUser ?? ''}::${targetGat ?? ''}';
 
@@ -932,72 +1039,117 @@ class ApiService {
   }) async {
     try {
       final uri = Uri.parse(ApiEndpoints.createNotification);
-      final payload = <String, dynamic>{'title': title, 'message': message};
+      String extractErrorMessage(Map<String, dynamic> decoded) {
+        final detail = decoded['detail']?.toString();
+        if (detail != null && detail.isNotEmpty) {
+          return detail;
+        }
 
-      if (type != null && type.isNotEmpty) {
-        payload['type'] = type;
-      }
-      if (targetType != null && targetType.isNotEmpty) {
-        payload['target_type'] = targetType;
-      }
-      if (targetRole != null) {
-        payload['target_role'] = targetRole;
-      }
-      if (targetUser != null) {
-        payload['target_user'] = targetUser;
-      }
-      if (targetGat != null) {
-        payload['target_gat'] = targetGat;
-      }
+        final message = decoded['message']?.toString();
+        if (message != null && message.isNotEmpty) {
+          return message;
+        }
 
-      final response = await AuthorizedApiService.sendWithAutoRefresh(
-        null,
-        (token) => http.post(
-          uri,
-          headers: ApiEndpoints.authorizedHeaders(token),
-          body: jsonEncode(payload),
-        ),
-      );
-
-      if (response == null) {
-        throw Exception('Session expired. Please login again.');
+        for (final entry in decoded.entries) {
+          final value = entry.value;
+          if (value is List && value.isNotEmpty) {
+            return '${entry.key}: ${value.first}';
+          }
+          if (value is String && value.trim().isNotEmpty) {
+            return '${entry.key}: $value';
+          }
+        }
+        return 'Bad request';
       }
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        final decoded = jsonDecode(response.body);
-        if (decoded is Map<String, dynamic> && decoded['status'] == true) {
+      Future<http.Response?> sendPayload(Map<String, dynamic> payload) async {
+        debugPrint('[createNotification] POST $uri payload=$payload');
+        return AuthorizedApiService.sendWithAutoRefresh(
+          null,
+          (token) => http.post(
+            uri,
+            headers: ApiEndpoints.authorizedHeaders(token),
+            body: jsonEncode(payload),
+          ),
+        );
+      }
+
+      Map<String, dynamic> buildPayload({String? overrideTargetType}) {
+        final payload = <String, dynamic>{'title': title, 'message': message};
+        if (type != null && type.isNotEmpty) {
+          payload['type'] = type;
+        }
+        final effectiveTargetType = overrideTargetType ?? targetType;
+        if (effectiveTargetType != null && effectiveTargetType.isNotEmpty) {
+          payload['target_type'] = effectiveTargetType;
+        }
+        if (targetRole != null) {
+          payload['target_role'] = targetRole;
+        }
+        if (targetUser != null) {
+          payload['target_user'] = targetUser;
+        }
+        if (targetGat != null) {
+          payload['target_gat'] = targetGat;
+        }
+        return payload;
+      }
+
+      final payloadAttempts = <Map<String, dynamic>>[buildPayload()];
+
+      String? lastError;
+
+      for (final payload in payloadAttempts) {
+        final response = await sendPayload(payload);
+
+        if (response == null) {
+          throw Exception('Session expired. Please login again.');
+        }
+
+        debugPrint(
+          '[createNotification] status=${response.statusCode}, body=${response.body}',
+        );
+
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          if (response.body.trim().isEmpty) {
+            return;
+          }
+
+          final decoded = jsonDecode(response.body);
+          if (decoded is Map<String, dynamic>) {
+            final status = decoded['status'];
+            if (status == null || status == true || status == 'success') {
+              return;
+            }
+            final err = extractErrorMessage(decoded);
+            throw Exception(err);
+          }
           return;
         }
 
-        if (decoded is Map<String, dynamic>) {
-          final detail = decoded['detail']?.toString();
-          if (detail != null && detail.isNotEmpty) {
-            throw Exception(detail);
-          }
+        if (response.statusCode == 401) {
+          throw Exception('Session expired. Please login again.');
         }
 
-        throw Exception('Failed to send notification');
-      }
-
-      if (response.statusCode == 401) {
-        throw Exception('Session expired. Please login again.');
-      }
-
-      try {
-        final decoded = jsonDecode(response.body);
-        if (decoded is Map<String, dynamic>) {
-          final detail = decoded['detail']?.toString();
-          if (detail != null && detail.isNotEmpty) {
-            throw Exception(detail);
+        if (response.statusCode == 400) {
+          try {
+            final decoded = jsonDecode(response.body);
+            if (decoded is Map<String, dynamic>) {
+              lastError = extractErrorMessage(decoded);
+            }
+          } catch (_) {
+            lastError = 'Bad request';
           }
+          // Try next payload variant if available.
+          continue;
         }
-      } catch (_) {
-        // Use generic error if response is not JSON.
+
+        throw Exception(
+          'Failed to send notification (status code ${response.statusCode})',
+        );
       }
 
-      throw Exception(
-        'Failed to send notification (status code ${response.statusCode})',
-      );
+      throw Exception(lastError ?? 'Failed to send notification (Bad Request)');
     } catch (e, st) {
       await BugReportService.reportApiFailure(
         title: 'Create notification API failure',
@@ -1043,9 +1195,13 @@ class ApiService {
   }
 
   static Future<http.Response> _fetchFeatureFlags() {
-    return http.get(
-      Uri.parse(ApiEndpoints.featureFlags),
-      headers: {'Content-Type': 'application/json'},
-    );
+    return _storage.read(key: ApiEndpoints.accessTokenKey).then((token) {
+      final normalizedToken = token?.trim();
+      final headers = (normalizedToken != null && normalizedToken.isNotEmpty)
+          ? ApiEndpoints.authorizedHeaders(normalizedToken)
+          : ApiEndpoints.jsonHeaders();
+
+      return http.get(Uri.parse(ApiEndpoints.featureFlags), headers: headers);
+    });
   }
 }

@@ -7,7 +7,7 @@ import 'package:jagdhambtrustpune/services/bug_report_service.dart';
 import 'package:jagdhambtrustpune/theme/app_colors.dart';
 import 'package:jagdhambtrustpune/services/authorized_api_service.dart';
 import '../widgets/input_box.dart'; // import your custom input box
-import '../widgets/drop_down.dart';
+import '../widgets/dropdown.dart';
 
 class EmergencyContactDialog {
   static Future<void> show(BuildContext context, String token) async {
@@ -32,22 +32,13 @@ class EmergencyContactDialog {
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
-        final mediaQuery = MediaQuery.of(context);
-        final screenHeight = mediaQuery.size.height;
-        final bottomInset = mediaQuery.viewInsets.bottom;
-        const verticalInset = 20.0;
-        final availableHeight =
-            (screenHeight - bottomInset - (verticalInset * 2)).clamp(
-              220.0,
-              screenHeight,
-            );
-
         return StatefulBuilder(
           builder: (context, setState) {
-            return AnimatedPadding(
-              duration: const Duration(milliseconds: 180),
-              curve: Curves.easeOut,
-              padding: EdgeInsets.only(bottom: bottomInset),
+            // Remove viewInsets so the keyboard never pushes the dialog.
+            // The dialog is scrollable internally so content stays reachable.
+            return MediaQuery.removeViewInsets(
+              context: context,
+              removeBottom: true,
               child: AlertDialog(
                 backgroundColor: Colors.white,
                 titlePadding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
@@ -81,7 +72,7 @@ class EmergencyContactDialog {
                   ],
                 ),
                 content: ConstrainedBox(
-                  constraints: BoxConstraints(maxHeight: availableHeight),
+                  constraints: const BoxConstraints(maxHeight: 400),
                   child: Form(
                     key: formKey,
                     child: SingleChildScrollView(
@@ -136,7 +127,7 @@ class EmergencyContactDialog {
                           ),
                           const SizedBox(height: 10),
                           // Dropdown for blood group
-                          PremiumDropDown(
+                          PremiumDropdown(
                             value: selectedBloodGroup,
                             label: "Select Blood Group",
                             options: bloodGroups,

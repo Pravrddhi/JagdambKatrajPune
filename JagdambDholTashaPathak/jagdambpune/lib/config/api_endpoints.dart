@@ -1,11 +1,13 @@
 // lib/config/api_endpoints.dart
 
+import 'app_config.dart';
+
 /// Centralized class for managing API endpoints and related utilities.
 class ApiEndpoints {
   // Base URL for API requests.
   // Override with: --dart-define=API_BASE_URL=https://your-domain/api
   // This allows separate dev/prod builds without code edits.
-  static const String _defaultBaseUrl = 'https://api.jagdamb.co.in/api';
+  static const String _defaultBaseUrl = AppConfig.defaultApiBaseUrl;
   static const String baseUrlFromDefine = String.fromEnvironment(
     'API_BASE_URL',
     defaultValue: _defaultBaseUrl,
@@ -44,7 +46,7 @@ class ApiEndpoints {
     );
   }
 
-  static const String pathakId = "1";
+  static const String pathakId = AppConfig.pathakId;
 
   // -------------------
   // Storage Keys
@@ -101,8 +103,27 @@ class ApiEndpoints {
   /// Create a new event
   static final String createEvent = '$baseUrl/events/create/';
 
-  /// Update status of a Mirvnuk event (0=not started, 1=live, 2=ended, 3=cancelled)
+  /// Update status of a Mirvnuk event (0=not started, 1=started, 3=canceled, 4=completed)
   static final String updateMirvnukStatus = '$baseUrl/mirvnuk-status/';
+
+  /// Generate attendance QR at a specific location (management/pathak_admin)
+  static final String generateAttendanceQr = '$baseUrl/attendance/qr/generate/';
+
+  /// Mark attendance by scanning QR (all users)
+  static final String markAttendance = '$baseUrl/attendance/mark/';
+
+  /// Set attendance QR generation location (pathak_admin only)
+  static final String setAttendanceLocation =
+      '$baseUrl/attendance/location/set/';
+
+  /// Get configured attendance QR generation location
+  static final String getAttendanceLocation = '$baseUrl/attendance/location/';
+
+  /// List my attendance entries (calendar view)
+  static final String myAttendance = '$baseUrl/attendance/my/';
+
+  /// List attendance grouped by user (admin/management)
+  static final String attendanceByUser = '$baseUrl/attendance/by-user/';
 
   /// Create a new notification
   static final String createNotification = '$baseUrl/notifications/create/';
@@ -122,10 +143,14 @@ class ApiEndpoints {
       '$baseUrl/notifications/bug-report/create/';
 
   /// Fetch feature flags for the client app
-  static final String featureFlags = '$baseUrl/feature-flags/';
+  static final String featureFlags =
+      '$baseUrl/feature-flags/?pathak_id=$pathakId';
 
   /// Get all gats
   static final String getGats = '$baseUrl/gats';
+
+  /// Create a gat (pathak_admin only)
+  static final String createGat = '$baseUrl/gats/';
 
   /// Upload user document (multipart/form-data)
   static final String uploadDocument = '$baseUrl/documents/';

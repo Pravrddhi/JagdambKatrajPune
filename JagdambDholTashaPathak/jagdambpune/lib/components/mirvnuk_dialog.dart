@@ -7,10 +7,8 @@ import '../services/authorized_api_service.dart';
 import '../theme/app_colors.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-class MirvunkForm {
+class MirvnukForm {
   static Future<void> open(BuildContext context) async {
-    final formKey = GlobalKey<FormState>();
-
     final TextEditingController nameController = TextEditingController();
     final TextEditingController dateController = TextEditingController();
     final TextEditingController timeFromController = TextEditingController();
@@ -20,38 +18,77 @@ class MirvunkForm {
     final TextEditingController descriptionController = TextEditingController();
 
     const storage = FlutterSecureStorage();
-
-    DateTime? selectedDate;
-    TimeOfDay? timeFrom;
-    TimeOfDay? timeTo;
-
+    int currentStep = 0;
     bool isSubmitting = false;
+
+    bool isValidMapLink(String value) {
+      final parsed = Uri.tryParse(value.trim());
+      return parsed != null && parsed.hasScheme && parsed.host.isNotEmpty;
+    }
+
+    bool isEndAfterStart() {
+      if (timeFromController.text.isEmpty || timeToController.text.isEmpty) {
+        return false;
+      }
+      final startParts = timeFromController.text.split(':');
+      final endParts = timeToController.text.split(':');
+      if (startParts.length != 2 || endParts.length != 2) {
+        return false;
+      }
+      final startMinutes =
+          int.parse(startParts[0]) * 60 + int.parse(startParts[1]);
+      final endMinutes = int.parse(endParts[0]) * 60 + int.parse(endParts[1]);
+      return endMinutes > startMinutes;
+    }
+
+    bool isStepValid(int step) {
+      switch (step) {
+        case 0:
+          return nameController.text.trim().isNotEmpty &&
+              dateController.text.trim().isNotEmpty &&
+              timeFromController.text.trim().isNotEmpty &&
+              timeToController.text.trim().isNotEmpty &&
+              isEndAfterStart();
+        case 1:
+          return locationController.text.trim().isNotEmpty &&
+              mapLinkController.text.trim().isNotEmpty &&
+              isValidMapLink(mapLinkController.text);
+        case 2:
+          return descriptionController.text.trim().isNotEmpty;
+        default:
+          return false;
+      }
+    }
 
     await showDialog(
       context: context,
-      builder: (context) {
-        final mediaQuery = MediaQuery.of(context);
+      builder: (dialogContext) {
+        final mediaQuery = MediaQuery.of(dialogContext);
         final screenHeight = mediaQuery.size.height;
         final bottomInset = mediaQuery.viewInsets.bottom;
         const verticalInset = 10.0;
         final availableHeight =
             (screenHeight - bottomInset - (verticalInset * 2)).clamp(
-              240.0,
+              260.0,
               screenHeight,
             );
 
         return StatefulBuilder(
-          builder: (context, setState) {
-            bool isFormValid() {
-              return nameController.text.isNotEmpty &&
-                  dateController.text.isNotEmpty &&
-                  timeFromController.text.isNotEmpty &&
-                  timeToController.text.isNotEmpty &&
-                  locationController.text.isNotEmpty &&
-                  mapLinkController.text.isNotEmpty &&
-                  Uri.tryParse(mapLinkController.text)?.hasAbsolutePath ==
-                      true &&
-                  descriptionController.text.isNotEmpty;
+          builder: (dialogContext, setState) {
+            String stepTitle;
+            String stepSubtitle;
+            switch (currentStep) {
+              case 0:
+                stepTitle = 'Basic Details';
+                stepSubtitle = 'Name, date and timing';
+                break;
+              case 1:
+                stepTitle = 'Location';
+                stepSubtitle = 'Address and map link';
+                break;
+              default:
+                stepTitle = 'Description';
+                stepSubtitle = 'Final details and submit';
             }
 
             return AlertDialog(
@@ -75,14 +112,28 @@ class MirvunkForm {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      "Add Mirvnuk",
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.primaryMaroon,
-                      ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          'Add Mirvnuk',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.primaryMaroon,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Step ${currentStep + 1} of 3 - $stepSubtitle',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.primaryMaroon,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
@@ -92,199 +143,222 @@ class MirvunkForm {
                 child: SingleChildScrollView(
                   keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.onDrag,
-                  child: Form(
-                    key: formKey,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Text(
-                          'Fill all details to publish the Mirvnuk event.',
-                          style: TextStyle(
-                            color: AppColors.primaryMaroon,
-                            fontSize: 13,
-                          ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        stepTitle,
+                        style: const TextStyle(
+                          color: AppColors.primaryMaroon,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
                         ),
-                        const SizedBox(height: 12),
+                      ),
+                      const SizedBox(height: 8),
+                      if (currentStep == 0) ...[
                         TextFormField(
                           controller: nameController,
                           decoration: const InputDecoration(
-                            labelText: "Mirvnuk Name",
+                            labelText: 'Mirvnuk Name',
                             prefixIcon: Icon(
                               Icons.event,
                               color: AppColors.primaryMaroon,
                             ),
                             border: OutlineInputBorder(),
                           ),
-                          validator: (val) =>
-                              val == null || val.isEmpty ? 'Required' : null,
                           onChanged: (_) => setState(() {}),
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 12),
                         TextFormField(
                           controller: dateController,
                           readOnly: true,
                           decoration: const InputDecoration(
-                            labelText: "Date",
+                            labelText: 'Date',
                             prefixIcon: Icon(
                               Icons.calendar_today,
                               color: AppColors.primaryMaroon,
                             ),
                             border: OutlineInputBorder(),
                           ),
-                          validator: (val) =>
-                              val == null || val.isEmpty ? 'Required' : null,
                           onTap: () async {
-                            DateTime now = DateTime.now();
-                            selectedDate = await showDatePicker(
-                              context: context,
+                            final now = DateTime.now();
+                            final selectedDate = await showDatePicker(
+                              context: dialogContext,
                               initialDate: now,
                               firstDate: now,
                               lastDate: DateTime(2100),
                             );
                             if (selectedDate != null) {
                               dateController.text =
-                                  "${selectedDate!.year}-${selectedDate!.month.toString().padLeft(2, '0')}-${selectedDate!.day.toString().padLeft(2, '0')}";
+                                  '${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}';
                               setState(() {});
                             }
                           },
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 12),
                         TextFormField(
                           controller: timeFromController,
                           readOnly: true,
                           decoration: const InputDecoration(
-                            labelText: "Start Time",
+                            labelText: 'Start Time',
                             prefixIcon: Icon(
                               Icons.access_time,
                               color: AppColors.primaryMaroon,
                             ),
                             border: OutlineInputBorder(),
                           ),
-                          validator: (val) =>
-                              val == null || val.isEmpty ? 'Required' : null,
                           onTap: () async {
-                            timeFrom = await showTimePicker(
-                              context: context,
+                            final timeFrom = await showTimePicker(
+                              context: dialogContext,
                               initialTime: TimeOfDay.now(),
                             );
                             if (timeFrom != null) {
                               timeFromController.text =
-                                  "${timeFrom!.hour.toString().padLeft(2, '0')}:${timeFrom!.minute.toString().padLeft(2, '0')}";
+                                  '${timeFrom.hour.toString().padLeft(2, '0')}:${timeFrom.minute.toString().padLeft(2, '0')}';
                               setState(() {});
                             }
                           },
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 12),
                         TextFormField(
                           controller: timeToController,
                           readOnly: true,
                           decoration: const InputDecoration(
-                            labelText: "End Time",
+                            labelText: 'End Time',
                             prefixIcon: Icon(
                               Icons.access_time,
                               color: AppColors.primaryMaroon,
                             ),
                             border: OutlineInputBorder(),
                           ),
-                          validator: (val) {
-                            if (val == null || val.isEmpty) return 'Required';
-                            if (timeFromController.text.isNotEmpty) {
-                              final startParts = timeFromController.text.split(
-                                ":",
-                              );
-                              final endParts = val.split(":");
-                              final startMinutes =
-                                  int.parse(startParts[0]) * 60 +
-                                  int.parse(startParts[1]);
-                              final endMinutes =
-                                  int.parse(endParts[0]) * 60 +
-                                  int.parse(endParts[1]);
-                              if (endMinutes <= startMinutes) {
-                                return 'End must be after start';
-                              }
-                            }
-                            return null;
-                          },
                           onTap: () async {
-                            timeTo = await showTimePicker(
-                              context: context,
+                            final timeTo = await showTimePicker(
+                              context: dialogContext,
                               initialTime: TimeOfDay.now(),
                             );
                             if (timeTo != null) {
                               timeToController.text =
-                                  "${timeTo!.hour.toString().padLeft(2, '0')}:${timeTo!.minute.toString().padLeft(2, '0')}";
+                                  '${timeTo.hour.toString().padLeft(2, '0')}:${timeTo.minute.toString().padLeft(2, '0')}';
                               setState(() {});
                             }
                           },
                         ),
-                        const SizedBox(height: 10),
+                        if (timeToController.text.isNotEmpty &&
+                            timeFromController.text.isNotEmpty &&
+                            !isEndAfterStart()) ...[
+                          const SizedBox(height: 8),
+                          const Text(
+                            'End time must be after start time.',
+                            style: TextStyle(color: Colors.red, fontSize: 12),
+                          ),
+                        ],
+                      ],
+                      if (currentStep == 1) ...[
                         TextFormField(
                           controller: locationController,
                           decoration: const InputDecoration(
-                            labelText: "Location",
+                            labelText: 'Location',
                             prefixIcon: Icon(
                               Icons.location_on,
                               color: AppColors.primaryMaroon,
                             ),
                             border: OutlineInputBorder(),
                           ),
-                          validator: (val) =>
-                              val == null || val.isEmpty ? 'Required' : null,
                           onChanged: (_) => setState(() {}),
                         ),
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 12),
                         TextFormField(
                           controller: mapLinkController,
                           decoration: const InputDecoration(
-                            labelText: "Map Link",
+                            labelText: 'Map Link',
                             prefixIcon: Icon(
                               Icons.map,
                               color: AppColors.primaryMaroon,
                             ),
                             border: OutlineInputBorder(),
                           ),
-                          validator: (val) {
-                            if (val == null || val.isEmpty) return 'Required';
-                            if (Uri.tryParse(val)?.hasAbsolutePath != true) {
-                              return 'Invalid URL';
-                            }
-                            return null;
-                          },
                           onChanged: (_) => setState(() {}),
                         ),
-                        const SizedBox(height: 10),
+                        if (mapLinkController.text.isNotEmpty &&
+                            !isValidMapLink(mapLinkController.text)) ...[
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Please enter a valid map URL.',
+                            style: TextStyle(color: Colors.red, fontSize: 12),
+                          ),
+                        ],
+                      ],
+                      if (currentStep == 2) ...[
                         TextFormField(
                           controller: descriptionController,
                           decoration: const InputDecoration(
-                            labelText: "Description",
+                            labelText: 'Description',
                             prefixIcon: Icon(
                               Icons.description,
                               color: AppColors.primaryMaroon,
                             ),
                             border: OutlineInputBorder(),
                           ),
-                          maxLines: 3,
-                          validator: (val) =>
-                              val == null || val.isEmpty ? 'Required' : null,
+                          minLines: 3,
+                          maxLines: 5,
                           onChanged: (_) => setState(() {}),
                         ),
+                        const SizedBox(height: 12),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: AppColors.accentYellow.withAlpha(35),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Review',
+                                style: TextStyle(
+                                  color: AppColors.primaryMaroon,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text('Name: ${nameController.text.trim()}'),
+                              Text('Date: ${dateController.text.trim()}'),
+                              Text(
+                                'Time: ${timeFromController.text.trim()} - ${timeToController.text.trim()}',
+                              ),
+                              Text(
+                                'Location: ${locationController.text.trim()}',
+                              ),
+                            ],
+                          ),
+                        ),
                       ],
-                    ),
+                    ],
                   ),
                 ),
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
+                  onPressed: () => Navigator.of(dialogContext).pop(),
                   child: const Text(
                     'Cancel',
                     style: TextStyle(color: AppColors.primaryMaroon),
                   ),
                 ),
+                if (currentStep > 0)
+                  OutlinedButton(
+                    onPressed: isSubmitting
+                        ? null
+                        : () {
+                            setState(() => currentStep = currentStep - 1);
+                          },
+                    child: const Text('Back'),
+                  ),
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: isFormValid()
+                    backgroundColor: isStepValid(currentStep)
                         ? AppColors.primaryMaroon
                         : Colors.grey,
                     foregroundColor: AppColors.accentYellow,
@@ -296,20 +370,26 @@ class MirvunkForm {
                       vertical: 10,
                     ),
                   ),
-                  onPressed: isFormValid() && !isSubmitting
+                  onPressed: isStepValid(currentStep) && !isSubmitting
                       ? () async {
-                          if (!formKey.currentState!.validate()) {
+                          if (!isStepValid(currentStep)) {
                             return;
                           }
+
+                          if (currentStep < 2) {
+                            setState(() => currentStep = currentStep + 1);
+                            return;
+                          }
+
                           setState(() => isSubmitting = true);
 
-                          String? accessToken = await storage.read(
+                          final accessToken = await storage.read(
                             key: ApiEndpoints.accessTokenKey,
                           );
                           if (accessToken == null ||
                               accessToken.trim().isEmpty) {
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
+                            if (dialogContext.mounted) {
+                              ScaffoldMessenger.of(dialogContext).showSnackBar(
                                 const SnackBar(
                                   content: Text(
                                     'Session expired. Please login again.',
@@ -322,14 +402,14 @@ class MirvunkForm {
                           }
 
                           final body = jsonEncode({
-                            "pathak_id": ApiEndpoints.pathakId,
-                            "name": nameController.text,
-                            "date": dateController.text,
-                            "time_from": timeFromController.text,
-                            "time_to": timeToController.text,
-                            "location": locationController.text,
-                            "map_link": mapLinkController.text,
-                            "description": descriptionController.text,
+                            'pathak_id': ApiEndpoints.pathakId,
+                            'name': nameController.text.trim(),
+                            'date': dateController.text.trim(),
+                            'time_from': timeFromController.text.trim(),
+                            'time_to': timeToController.text.trim(),
+                            'location': locationController.text.trim(),
+                            'map_link': mapLinkController.text.trim(),
+                            'description': descriptionController.text.trim(),
                           });
 
                           try {
@@ -350,7 +430,7 @@ class MirvunkForm {
                                 );
 
                             if (response == null) {
-                              ScaffoldMessenger.of(context).showSnackBar(
+                              ScaffoldMessenger.of(dialogContext).showSnackBar(
                                 const SnackBar(
                                   content: Text(
                                     'Session expired. Please login again.',
@@ -362,14 +442,14 @@ class MirvunkForm {
 
                             if (response.statusCode == 200 ||
                                 response.statusCode == 201) {
-                              Navigator.of(context).pop();
+                              Navigator.of(dialogContext).pop();
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
                                   content: Text('Mirvnuk added successfully'),
                                 ),
                               );
                             } else if (response.statusCode == 401) {
-                              ScaffoldMessenger.of(context).showSnackBar(
+                              ScaffoldMessenger.of(dialogContext).showSnackBar(
                                 const SnackBar(
                                   content: Text(
                                     'Session expired. Please login again.',
@@ -384,7 +464,7 @@ class MirvunkForm {
                                 statusCode: response.statusCode,
                                 endpoint: ApiEndpoints.createEvent,
                               );
-                              ScaffoldMessenger.of(context).showSnackBar(
+                              ScaffoldMessenger.of(dialogContext).showSnackBar(
                                 const SnackBar(
                                   content: Text(
                                     ApiEndpoints.genericApiFailureMessage,
@@ -399,7 +479,7 @@ class MirvunkForm {
                               pageUrl: '/events/create',
                               endpoint: ApiEndpoints.createEvent,
                             );
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
                               const SnackBar(
                                 content: Text(
                                   ApiEndpoints.genericApiFailureMessage,
@@ -407,7 +487,9 @@ class MirvunkForm {
                               ),
                             );
                           } finally {
-                            setState(() => isSubmitting = false);
+                            if (dialogContext.mounted) {
+                              setState(() => isSubmitting = false);
+                            }
                           }
                         }
                       : null,
@@ -417,8 +499,19 @@ class MirvunkForm {
                           width: 14,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.send_rounded, size: 16),
-                  label: Text(isSubmitting ? 'Submitting...' : 'Submit'),
+                      : Icon(
+                          currentStep < 2
+                              ? Icons.arrow_forward_rounded
+                              : Icons.send_rounded,
+                          size: 16,
+                        ),
+                  label: Text(
+                    isSubmitting
+                        ? 'Submitting...'
+                        : currentStep < 2
+                        ? 'Next'
+                        : 'Submit',
+                  ),
                 ),
               ],
             );
@@ -426,5 +519,13 @@ class MirvunkForm {
         );
       },
     );
+
+    nameController.dispose();
+    dateController.dispose();
+    timeFromController.dispose();
+    timeToController.dispose();
+    locationController.dispose();
+    mapLinkController.dispose();
+    descriptionController.dispose();
   }
 }

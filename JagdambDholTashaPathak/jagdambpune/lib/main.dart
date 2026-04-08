@@ -15,6 +15,7 @@ import 'screens/login_screen.dart';
 import 'screens/registration_screen.dart';
 import 'screens/reset_pin.dart';
 import 'screens/splash_screen.dart';
+import 'config/app_config.dart';
 import 'theme/app_colors.dart';
 import 'web/screens/registration_web_screen.dart';
 
@@ -236,7 +237,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     return MaterialApp(
       navigatorKey: _navigatorKey,
       navigatorObservers: [_featureFlagNavigationObserver],
-      title: 'jagdambkatrajpune',
+      title: AppConfig.appTitle,
       theme: ThemeData(
         primaryColor: AppColors.primaryMaroon,
         scaffoldBackgroundColor: AppColors.primaryMaroon,

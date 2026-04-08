@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
 
 /// A styled dropdown form field widget with consistent design
-class PremiumDropDown extends StatelessWidget {
+class PremiumDropdown extends StatelessWidget {
   final String? value; // Currently selected option value
   final List<String> options; // List of available options
   final String label; // Label displayed for the dropdown
@@ -12,7 +12,7 @@ class PremiumDropDown extends StatelessWidget {
   final Color? textColor;
   final Color? dropdownMenuColor;
 
-  const PremiumDropDown({
+  const PremiumDropdown({
     super.key,
     required this.value,
     required this.options,

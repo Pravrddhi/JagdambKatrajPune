@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../theme/app_colors.dart';
+import '../config/app_config.dart';
 import 'login_screen.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -131,7 +132,7 @@ class _SplashScreenState extends State<SplashScreen>
         },
         // Logo image passed once, reused in animation builder to improve performance
         child: Image.asset(
-          'assets/logos/splash_logo.png',
+          AppConfig.logoAsset,
           width: MediaQuery.of(context).size.width * 0.55,
           fit: BoxFit.contain,
         ),

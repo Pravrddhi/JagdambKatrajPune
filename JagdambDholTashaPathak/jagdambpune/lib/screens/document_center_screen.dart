@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:image/image.dart' as img;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/api_service.dart';
@@ -19,9 +20,13 @@ class DocumentCenterScreen extends StatefulWidget {
 }
 
 class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
+  static const int _maxLongestEdge = 1600;
+  static const int _targetMaxUploadBytes = 1500 * 1024;
+
   static const Map<String, String> _documentTypeLabels = {
     'adhaar_card': 'Aadhaar Card',
     'pan_card': 'PAN Card',
+    'personal_photo': 'Personal Photo',
     'agreement_document': 'Agreement Document',
   };
 
@@ -101,6 +106,71 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
     return lowerFileName.endsWith('.jpg') || lowerFileName.endsWith('.jpeg');
   }
 
+  bool _isJpegBytes(Uint8List bytes) {
+    // JPEG files begin with FF D8 FF.
+    return bytes.length >= 3 &&
+        bytes[0] == 0xFF &&
+        bytes[1] == 0xD8 &&
+        bytes[2] == 0xFF;
+  }
+
+  String _ensureJpegFileName(String fileName, {required String fallback}) {
+    final trimmed = fileName.trim();
+    final base = trimmed.isEmpty ? fallback : trimmed;
+    if (_isAllowedJpegFileName(base)) {
+      return base;
+    }
+    final dotIndex = base.lastIndexOf('.');
+    final nameWithoutExt = dotIndex > 0 ? base.substring(0, dotIndex) : base;
+    return '$nameWithoutExt.jpg';
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes < 1024) {
+      return '$bytes B';
+    }
+    final kb = bytes / 1024;
+    if (kb < 1024) {
+      return '${kb.toStringAsFixed(1)} KB';
+    }
+    final mb = kb / 1024;
+    return '${mb.toStringAsFixed(2)} MB';
+  }
+
+  Uint8List? _toOptimizedJpegBytes(Uint8List bytes) {
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) {
+      return _isJpegBytes(bytes) ? bytes : null;
+    }
+
+    final oriented = img.bakeOrientation(decoded);
+    img.Image processed = oriented;
+
+    final longestEdge = oriented.width >= oriented.height
+        ? oriented.width
+        : oriented.height;
+    if (longestEdge > _maxLongestEdge) {
+      final scale = _maxLongestEdge / longestEdge;
+      processed = img.copyResize(
+        oriented,
+        width: (oriented.width * scale).round(),
+        height: (oriented.height * scale).round(),
+        interpolation: img.Interpolation.linear,
+      );
+    }
+
+    const qualitySteps = <int>[82, 74, 68, 62];
+    List<int> encoded = img.encodeJpg(processed, quality: qualitySteps.first);
+    for (final quality in qualitySteps.skip(1)) {
+      if (encoded.length <= _targetMaxUploadBytes) {
+        break;
+      }
+      encoded = img.encodeJpg(processed, quality: quality);
+    }
+
+    return Uint8List.fromList(encoded);
+  }
+
   String _normalizePickedFileName(XFile pickedFile, ImageSource source) {
     final rawName = pickedFile.name.trim();
     if (rawName.isEmpty) {
@@ -142,18 +212,18 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
           return;
         }
         final rawName = result.value.trim();
-        final normalizedName = rawName.isEmpty
-            ? 'selected_document.jpg'
-            : !rawName.contains('.')
-            ? '$rawName.jpg'
-            : rawName;
-        if (!_isAllowedJpegFileName(normalizedName)) {
+        final convertedBytes = _toOptimizedJpegBytes(result.key);
+        if (convertedBytes == null) {
           _showSnackBar('Only JPG and JPEG images are supported.');
           return;
         }
+        final normalizedName = _ensureJpegFileName(
+          rawName,
+          fallback: 'selected_document.jpg',
+        );
         if (!mounted) return;
         setState(() {
-          _selectedBytes = result.key;
+          _selectedBytes = convertedBytes;
           _selectedFileName = normalizedName;
         });
         return;
@@ -168,19 +238,24 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
         return;
       }
 
-      final normalizedFileName = _normalizePickedFileName(pickedFile, source);
-      if (!_isAllowedJpegFileName(normalizedFileName)) {
+      final bytes = await pickedFile.readAsBytes();
+      final convertedBytes = _toOptimizedJpegBytes(bytes);
+      if (convertedBytes == null) {
         _showSnackBar('Only JPG and JPEG images are supported.');
         return;
       }
-
-      final bytes = await pickedFile.readAsBytes();
+      final normalizedFileName = _ensureJpegFileName(
+        _normalizePickedFileName(pickedFile, source),
+        fallback: source == ImageSource.camera
+            ? 'captured_document.jpg'
+            : 'selected_document.jpg',
+      );
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _selectedBytes = bytes;
+        _selectedBytes = convertedBytes;
         _selectedFileName = normalizedFileName;
       });
     } catch (error) {
@@ -561,6 +636,10 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
                 child: Text('Aadhaar Card'),
               ),
               DropdownMenuItem(value: 'pan_card', child: Text('PAN Card')),
+              DropdownMenuItem(
+                value: 'personal_photo',
+                child: Text('Personal Photo'),
+              ),
               DropdownMenuItem(
                 value: 'agreement_document',
                 child: Text('Agreement Document'),
@@ -966,7 +1045,8 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
                               _selectedDocumentType = docType;
                               _selectedCategory =
                                   (docType == 'adhaar_card' ||
-                                      docType == 'pan_card')
+                                      docType == 'pan_card' ||
+                                      docType == 'personal_photo')
                                   ? 'pii'
                                   : 'agreement';
                             }
@@ -1077,8 +1157,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
               _SectionCard(
                 key: _uploadSectionKey,
                 title: 'Upload Document',
-                subtitle:
-                    'Upload a JPG or JPEG image for verification. You can use the camera or gallery. New uploads are submitted with pending status.',
+                subtitle: 'Upload photo as JPG.',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -1130,6 +1209,10 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
                             value: 'pan_card',
                             child: Text('PAN Card'),
                           ),
+                          DropdownMenuItem(
+                            value: 'personal_photo',
+                            child: Text('Personal Photo'),
+                          ),
                         ],
                         onChanged: _isUploading
                             ? null
@@ -1177,7 +1260,9 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
                             )
                           : const Icon(Icons.upload_file),
                       label: Text(
-                        _selectedFileName == null
+                        _isPicking
+                            ? 'Loading Photo...'
+                            : _selectedFileName == null
                             ? 'Add JPG Image'
                             : 'Replace Image',
                       ),
@@ -1189,7 +1274,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
                     ),
                     const SizedBox(height: 10),
                     const Text(
-                      'Camera capture and gallery selection are supported. PNG files are not accepted by the backend.',
+                      'Upload photo as JPG.',
                       style: TextStyle(
                         color: AppColors.primaryMaroon,
                         fontSize: 13,
@@ -1205,6 +1290,19 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
+                      if (_selectedBytes != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Optimized size: ${_formatBytes(_selectedBytes!.length)}',
+                          style: TextStyle(
+                            color: AppColors.primaryMaroon.withValues(
+                              alpha: 0.8,
+                            ),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
                     ],
                     if (_selectedBytes != null) ...[
                       const SizedBox(height: 16),
@@ -1219,7 +1317,13 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
                     ],
                     const SizedBox(height: 16),
                     ElevatedButton(
-                      onPressed: _isUploading ? null : _uploadDocument,
+                      onPressed:
+                          (_isUploading ||
+                              _isPicking ||
+                              _selectedBytes == null ||
+                              _selectedFileName == null)
+                          ? null
+                          : _uploadDocument,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.primaryMaroon,
                         foregroundColor: AppColors.textLight,
