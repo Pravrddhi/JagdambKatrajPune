@@ -170,6 +170,75 @@ class ApiService {
     }
   }
 
+  static Future<Map<String, dynamic>> createGat({
+    required String name,
+    int? gatPramukhId,
+  }) async {
+    try {
+      final trimmedName = name.trim();
+      if (trimmedName.isEmpty) {
+        throw Exception('Gat name is required.');
+      }
+
+      final payload = <String, dynamic>{
+        'name': trimmedName,
+        if (gatPramukhId != null) 'gat_pramukh_id': gatPramukhId,
+      };
+
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) => http.post(
+          Uri.parse(ApiEndpoints.createGat),
+          headers: ApiEndpoints.authorizedHeaders(token),
+          body: jsonEncode(payload),
+        ),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (decoded is Map<String, dynamic>) {
+          return decoded;
+        }
+        return <String, dynamic>{
+          'success': true,
+          'message': 'Gat created successfully.',
+        };
+      }
+
+      if (decoded is Map<String, dynamic>) {
+        final detail = decoded['detail']?.toString();
+        if (detail != null && detail.isNotEmpty) {
+          throw Exception(detail);
+        }
+
+        final message = decoded['message']?.toString();
+        if (message != null && message.isNotEmpty) {
+          throw Exception(message);
+        }
+      }
+
+      throw Exception(
+        'Failed to create gat (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Create gat API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/gats/',
+        endpoint: ApiEndpoints.createGat,
+      );
+      rethrow;
+    }
+  }
+
   static Future<List<Map<String, dynamic>>> fetchGatsWithMembers({
     bool includeMembers = false,
     int? membersLimit,
@@ -1126,9 +1195,13 @@ class ApiService {
   }
 
   static Future<http.Response> _fetchFeatureFlags() {
-    return http.get(
-      Uri.parse(ApiEndpoints.featureFlags),
-      headers: {'Content-Type': 'application/json'},
-    );
+    return _storage.read(key: ApiEndpoints.accessTokenKey).then((token) {
+      final normalizedToken = token?.trim();
+      final headers = (normalizedToken != null && normalizedToken.isNotEmpty)
+          ? ApiEndpoints.authorizedHeaders(normalizedToken)
+          : ApiEndpoints.jsonHeaders();
+
+      return http.get(Uri.parse(ApiEndpoints.featureFlags), headers: headers);
+    });
   }
 }

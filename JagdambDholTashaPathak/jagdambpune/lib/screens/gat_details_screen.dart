@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../components/notification_dialog.dart';
 import '../config/api_endpoints.dart';
+import '../models/user.dart';
 import '../services/api_service.dart';
 import '../theme/app_colors.dart';
 
@@ -10,6 +11,7 @@ class GatDetailsScreen extends StatefulWidget {
   final String? selectedGatName;
   final bool showAutoAssignAction;
   final bool isPathakAdmin;
+  final bool canCreateGat;
   final bool useMyGatEndpoint;
 
   const GatDetailsScreen({
@@ -18,6 +20,7 @@ class GatDetailsScreen extends StatefulWidget {
     this.selectedGatName,
     this.showAutoAssignAction = true,
     this.isPathakAdmin = false,
+    this.canCreateGat = false,
     this.useMyGatEndpoint = false,
   });
 
@@ -29,7 +32,19 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
   List<Map<String, dynamic>> _gats = [];
   bool _isLoading = true;
   bool _isAssigning = false;
+  bool _isCreating = false;
   String? _errorMessage;
+
+  String _userDisplayName(User user) {
+    final first = user.firstName?.trim() ?? '';
+    final last = user.lastName?.trim() ?? '';
+    final full = '$first $last'.trim();
+    if (full.isNotEmpty) return full;
+    if ((user.phoneNumber ?? '').trim().isNotEmpty) {
+      return user.phoneNumber!.trim();
+    }
+    return 'User #${user.id ?? '-'}';
+  }
 
   String _gatNameFrom(Map<String, dynamic> gat) {
     final directName = gat['name']?.toString().trim();
@@ -84,17 +99,20 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
       final selectedId = widget.selectedGatId;
       final selectedName = widget.selectedGatName?.trim().toLowerCase();
 
-      final filtered = gats.where((gat) {
-        if (selectedId != null && gat['id']?.toString() == '$selectedId') {
-          return true;
-        }
-        if (selectedName != null && selectedName.isNotEmpty) {
-          final gatName = _gatNameFrom(gat).trim().toLowerCase();
-          return gatName == selectedName;
-        }
-        return selectedId == null &&
-            (selectedName == null || selectedName.isEmpty);
-      }).toList();
+      final filtered = widget.useMyGatEndpoint
+          ? gats
+          : gats.where((gat) {
+              if (selectedId != null &&
+                  gat['id']?.toString() == '$selectedId') {
+                return true;
+              }
+              if (selectedName != null && selectedName.isNotEmpty) {
+                final gatName = _gatNameFrom(gat).trim().toLowerCase();
+                return gatName == selectedName;
+              }
+              return selectedId == null &&
+                  (selectedName == null || selectedName.isEmpty);
+            }).toList();
 
       setState(() {
         _gats = filtered;
@@ -318,6 +336,232 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
     }
   }
 
+  Future<void> _openCreateGatDialog() async {
+    if (!widget.canCreateGat) return;
+
+    List<User> pathakUsers = <User>[];
+    try {
+      pathakUsers = await ApiService.fetchAllUsers();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+      return;
+    }
+
+    final formKey = GlobalKey<FormState>();
+    final nameController = TextEditingController();
+    User? selectedGatPramukh;
+    var userSearchQuery = '';
+
+    final shouldSubmit = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final filteredUsers = pathakUsers.where((user) {
+              final q = userSearchQuery.trim().toLowerCase();
+              if (q.isEmpty) return true;
+              final name = _userDisplayName(user).toLowerCase();
+              final phone = (user.phoneNumber ?? '').toLowerCase();
+              return name.contains(q) || phone.contains(q);
+            }).toList();
+
+            return AlertDialog(
+              title: const Text('Create Gat'),
+              content: SizedBox(
+                width: 460,
+                child: Form(
+                  key: formKey,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        TextFormField(
+                          controller: nameController,
+                          decoration: const InputDecoration(
+                            labelText: 'Gat Name',
+                            border: OutlineInputBorder(),
+                          ),
+                          validator: (value) {
+                            if ((value ?? '').trim().isEmpty) {
+                              return 'Gat name is required';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'Select Gat Pramukh (optional)',
+                          style: TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          onChanged: (value) {
+                            setDialogState(() {
+                              userSearchQuery = value;
+                            });
+                          },
+                          decoration: InputDecoration(
+                            hintText: 'Search by name',
+                            prefixIcon: const Icon(Icons.search),
+                            filled: true,
+                            fillColor: Colors.white,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 8,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Container(
+                          constraints: const BoxConstraints(maxHeight: 220),
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                              color: AppColors.primaryMaroon.withValues(
+                                alpha: 0.2,
+                              ),
+                            ),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: filteredUsers.isEmpty
+                              ? const Center(
+                                  child: Padding(
+                                    padding: EdgeInsets.all(12),
+                                    child: Text('No users found'),
+                                  ),
+                                )
+                              : ListView.separated(
+                                  shrinkWrap: true,
+                                  itemCount: filteredUsers.length,
+                                  separatorBuilder: (_, __) =>
+                                      const Divider(height: 1),
+                                  itemBuilder: (_, index) {
+                                    final user = filteredUsers[index];
+                                    final isSelected =
+                                        selectedGatPramukh?.id == user.id;
+                                    return ListTile(
+                                      dense: true,
+                                      selected: isSelected,
+                                      title: Text(_userDisplayName(user)),
+                                      subtitle: Text(
+                                        'ID: ${user.id ?? '-'}${(user.phoneNumber ?? '').isNotEmpty ? ' • ${user.phoneNumber}' : ''}',
+                                      ),
+                                      trailing: isSelected
+                                          ? const Icon(
+                                              Icons.check_circle,
+                                              color: Colors.green,
+                                            )
+                                          : null,
+                                      onTap: () {
+                                        setDialogState(() {
+                                          selectedGatPramukh = user;
+                                        });
+                                      },
+                                    );
+                                  },
+                                ),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          children: [
+                            if (selectedGatPramukh != null)
+                              Chip(
+                                label: Text(
+                                  'Selected: ${_userDisplayName(selectedGatPramukh!)}',
+                                ),
+                                deleteIcon: const Icon(Icons.close),
+                                onDeleted: () {
+                                  setDialogState(() {
+                                    selectedGatPramukh = null;
+                                  });
+                                },
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Showing users available to your pathak scope.',
+                          style: TextStyle(
+                            color: AppColors.primaryMaroon.withValues(
+                              alpha: 0.75,
+                            ),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    if (formKey.currentState?.validate() ?? false) {
+                      Navigator.of(dialogContext).pop(true);
+                    }
+                  },
+                  child: const Text('Create'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (shouldSubmit != true || !mounted) {
+      return;
+    }
+
+    final gatName = nameController.text.trim();
+    final gatPramukhId = selectedGatPramukh?.id;
+
+    setState(() {
+      _isCreating = true;
+    });
+
+    try {
+      final result = await ApiService.createGat(
+        name: gatName,
+        gatPramukhId: gatPramukhId,
+      );
+
+      if (!mounted) return;
+
+      final message =
+          result['message']?.toString() ?? 'Gat created successfully.';
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+      await _loadGats();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCreating = false;
+        });
+      }
+    }
+  }
+
   Future<void> _openGatMembersPopup(Map<String, dynamic> gat) async {
     final members = _extractMembers(gat);
     final membersCount =
@@ -432,6 +676,18 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
         backgroundColor: AppColors.primaryMaroon,
         foregroundColor: AppColors.textLight,
         actions: [
+          if (widget.canCreateGat)
+            IconButton(
+              tooltip: 'Create Gat',
+              onPressed: _isCreating ? null : _openCreateGatDialog,
+              icon: _isCreating
+                  ? const SizedBox(
+                      height: 16,
+                      width: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.add_circle_outline),
+            ),
           if (widget.showAutoAssignAction)
             Padding(
               padding: const EdgeInsets.only(right: 12),
