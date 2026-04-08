@@ -106,6 +106,25 @@ class ApiEndpoints {
   /// Update status of a Mirvnuk event (0=not started, 1=started, 3=canceled, 4=completed)
   static final String updateMirvnukStatus = '$baseUrl/mirvnuk-status/';
 
+  /// Generate attendance QR at a specific location (management/pathak_admin)
+  static final String generateAttendanceQr = '$baseUrl/attendance/qr/generate/';
+
+  /// Mark attendance by scanning QR (all users)
+  static final String markAttendance = '$baseUrl/attendance/mark/';
+
+  /// Set attendance QR generation location (pathak_admin only)
+  static final String setAttendanceLocation =
+      '$baseUrl/attendance/location/set/';
+
+  /// Get configured attendance QR generation location
+  static final String getAttendanceLocation = '$baseUrl/attendance/location/';
+
+  /// List my attendance entries (calendar view)
+  static final String myAttendance = '$baseUrl/attendance/my/';
+
+  /// List attendance grouped by user (admin/management)
+  static final String attendanceByUser = '$baseUrl/attendance/by-user/';
+
   /// Create a new notification
   static final String createNotification = '$baseUrl/notifications/create/';
 
@@ -124,10 +143,14 @@ class ApiEndpoints {
       '$baseUrl/notifications/bug-report/create/';
 
   /// Fetch feature flags for the client app
-  static final String featureFlags = '$baseUrl/feature-flags/';
+  static final String featureFlags =
+      '$baseUrl/feature-flags/?pathak_id=$pathakId';
 
   /// Get all gats
   static final String getGats = '$baseUrl/gats';
+
+  /// Create a gat (pathak_admin only)
+  static final String createGat = '$baseUrl/gats/';
 
   /// Upload user document (multipart/form-data)
   static final String uploadDocument = '$baseUrl/documents/';
