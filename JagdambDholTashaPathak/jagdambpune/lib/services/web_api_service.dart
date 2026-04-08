@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
 import '../config/api_endpoints.dart';
@@ -7,6 +8,8 @@ import '../models/feature_flags.dart';
 import 'bug_report_service.dart';
 
 class WebApiService {
+  static const FlutterSecureStorage _storage = FlutterSecureStorage();
+
   static bool _toBool(dynamic value) {
     if (value is bool) return value;
     if (value is num) return value != 0;
@@ -69,11 +72,14 @@ class WebApiService {
 
   static Future<FeatureFlags> fetchFeatureFlags() async {
     try {
+      final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
+      final normalizedToken = token?.trim();
+      final headers = (normalizedToken != null && normalizedToken.isNotEmpty)
+          ? ApiEndpoints.authorizedHeaders(normalizedToken)
+          : ApiEndpoints.jsonHeaders();
+
       final response = await http
-          .get(
-            Uri.parse(ApiEndpoints.featureFlags),
-            headers: ApiEndpoints.jsonHeaders(),
-          )
+          .get(Uri.parse(ApiEndpoints.featureFlags), headers: headers)
           .timeout(const Duration(seconds: 15));
 
       final decoded = jsonDecode(response.body);

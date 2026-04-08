@@ -7,5 +7,9 @@
     "theme_color": "#0175C2",
     "description": "jagdambpune",
     "orientation": "portrait-primary",
-    "prefer_related_applications": false
+    "prefer_related_applications": false,
+    "permissions": [
+        "camera",
+        "microphone"
+    ]
 }
