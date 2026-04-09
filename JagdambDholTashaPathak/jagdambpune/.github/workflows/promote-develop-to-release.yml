@@ -1,0 +1,69 @@
+name: Promote Develop To Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [develop]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: promote-develop-to-release
+  cancel-in-progress: false
+
+jobs:
+  merge-develop-into-release:
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'feature/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge develop into release
+        run: |
+          set -e
+          git fetch origin develop release
+          git checkout release
+          git merge --no-ff origin/develop -m "ci: auto-merge develop into release after PR #${{ github.event.pull_request.number }}"
+          git push origin release
+
+  delete-feature-branch:
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'feature/')
+    needs: merge-develop-into-release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Delete merged feature branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = context.payload.pull_request.head.ref;
+            const protectedBranches = new Set(['develop', 'release', 'master']);
+
+            if (protectedBranches.has(branch)) {
+              core.info(`Skipping protected branch: ${branch}`);
+              return;
+            }
+
+            if (!branch.startsWith('feature/')) {
+              core.info(`Skipping non-feature branch: ${branch}`);
+              return;
+            }
+
+            await github.rest.git.deleteRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `heads/${branch}`,
+            });
+
+            core.info(`Deleted branch: ${branch}`);
