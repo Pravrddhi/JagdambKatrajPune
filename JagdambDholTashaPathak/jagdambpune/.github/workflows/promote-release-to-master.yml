@@ -1,0 +1,35 @@
+name: Promote Release To Master
+
+on:
+  push:
+    branches: [release]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-release-to-master
+  cancel-in-progress: false
+
+jobs:
+  merge-release-into-master:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge release into master
+        run: |
+          set -e
+          git fetch origin release master
+          git checkout master
+          git merge --no-ff origin/release -m "ci: auto-merge release into master from ${GITHUB_SHA}"
+          git push origin master
