@@ -119,6 +119,10 @@ class ApiEndpoints {
   /// Get configured attendance QR generation location
   static final String getAttendanceLocation = '$baseUrl/attendance/location/';
 
+  /// Update attendance settings: in_time, out_time, full_day_threshold_minutes, radius_meters (pathak_admin only)
+  static final String updateAttendanceSettings =
+      '$baseUrl/attendance/location/set/';
+
   /// List my attendance entries (calendar view)
   static final String myAttendance = '$baseUrl/attendance/my/';
 

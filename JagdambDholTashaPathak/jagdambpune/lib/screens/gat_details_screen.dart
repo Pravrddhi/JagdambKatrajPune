@@ -79,23 +79,93 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
     _loadGats();
   }
 
+  Map<String, dynamic> _normalizeMyGatRecord(Map<String, dynamic> raw) {
+    final normalized = Map<String, dynamic>.from(raw);
+    final nested = raw['gat'] is Map
+        ? Map<String, dynamic>.from(raw['gat'] as Map)
+        : <String, dynamic>{};
+
+    List<Map<String, dynamic>> pickMembers(dynamic source) {
+      if (source is! List) return <Map<String, dynamic>>[];
+      return source
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    }
+
+    final members = pickMembers(raw['members']).isNotEmpty
+        ? pickMembers(raw['members'])
+        : pickMembers(raw['users']).isNotEmpty
+        ? pickMembers(raw['users'])
+        : pickMembers(raw['members_list']).isNotEmpty
+        ? pickMembers(raw['members_list'])
+        : pickMembers(raw['member_list']).isNotEmpty
+        ? pickMembers(raw['member_list'])
+        : pickMembers(nested['members']).isNotEmpty
+        ? pickMembers(nested['members'])
+        : pickMembers(nested['users']).isNotEmpty
+        ? pickMembers(nested['users'])
+        : pickMembers(nested['members_list']).isNotEmpty
+        ? pickMembers(nested['members_list'])
+        : pickMembers(nested['member_list']);
+
+    final nestedPramukh = nested['gat_pramukh'];
+    final nestedPramukhName = nestedPramukh is Map
+        ? (nestedPramukh['name']?.toString() ?? '').trim()
+        : '';
+
+    normalized['id'] =
+        raw['id'] ?? raw['gat_id'] ?? nested['id'] ?? nested['gat_id'];
+    normalized['gat_name'] =
+        raw['gat_name'] ?? raw['name'] ?? nested['gat_name'] ?? nested['name'];
+    normalized['gat_pramukh_name'] =
+        raw['gat_pramukh_name'] ??
+        raw['gatPramukhName'] ??
+        nested['gat_pramukh_name'] ??
+        nested['gatPramukhName'] ??
+        (nestedPramukhName.isEmpty ? null : nestedPramukhName);
+    normalized['members'] = members;
+    normalized['members_count'] =
+        raw['members_count'] ?? nested['members_count'] ?? members.length;
+
+    return normalized;
+  }
+
   Future<void> _loadGats() async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
+
     try {
       final gats = widget.useMyGatEndpoint
-          ? <Map<String, dynamic>>[
-              await ApiService.fetchMyGat(
-                includeMembers: true,
-                membersLimit: 50,
-              ),
-            ]
+          ? <Map<String, dynamic>>[]
           : await ApiService.fetchGatsWithMembers(
               includeMembers: true,
               membersLimit: 50,
             );
+
+      if (widget.useMyGatEndpoint) {
+        final myGatRaw = await ApiService.fetchMyGat(
+          includeMembers: true,
+          membersLimit: 50,
+        );
+        final myGat = _normalizeMyGatRecord(myGatRaw);
+        final hasAssignment =
+            _gatNameFrom(myGat) != '-' ||
+            _extractMembers(myGat).isNotEmpty ||
+            myGat['id'] != null;
+
+        setState(() {
+          _gats = hasAssignment
+              ? <Map<String, dynamic>>[myGat]
+              : <Map<String, dynamic>>[];
+          _errorMessage = hasAssignment ? null : 'Gat is not assigned yet';
+          _isLoading = false;
+        });
+        return;
+      }
+
       final selectedId = widget.selectedGatId;
       final selectedName = widget.selectedGatName?.trim().toLowerCase();
 
@@ -119,8 +189,18 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
         _isLoading = false;
       });
     } catch (e) {
+      final message = e
+          .toString()
+          .replaceFirst('Exception: ', '')
+          .toLowerCase();
       setState(() {
-        _errorMessage = ApiEndpoints.genericApiFailureMessage;
+        _errorMessage =
+            widget.useMyGatEndpoint &&
+                (message.contains('not assigned') ||
+                    message.contains('no gat') ||
+                    message.contains('not found'))
+            ? 'Gat is not assigned yet'
+            : ApiEndpoints.genericApiFailureMessage;
         _isLoading = false;
       });
     }
@@ -676,6 +756,17 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
         backgroundColor: AppColors.primaryMaroon,
         foregroundColor: AppColors.textLight,
         actions: [
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: _isLoading ? null : _loadGats,
+            icon: _isLoading
+                ? const SizedBox(
+                    height: 16,
+                    width: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.refresh),
+          ),
           if (widget.canCreateGat)
             IconButton(
               tooltip: 'Create Gat',
@@ -725,15 +816,17 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                       textAlign: TextAlign.center,
                       style: const TextStyle(color: AppColors.primaryMaroon),
                     ),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: _loadGats,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.accentYellow,
-                        foregroundColor: AppColors.primaryMaroon,
+                    if (widget.canCreateGat || widget.showAutoAssignAction) ...[
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: _loadGats,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.accentYellow,
+                          foregroundColor: AppColors.primaryMaroon,
+                        ),
+                        child: const Text('Retry'),
                       ),
-                      child: const Text('Retry'),
-                    ),
+                    ],
                   ],
                 ),
               ),

@@ -7,6 +7,21 @@ import '../config/api_endpoints.dart';
 import 'authorized_api_service.dart';
 import 'location_bridge.dart';
 
+class AttendanceApiException implements Exception {
+  final int statusCode;
+  final String message;
+  final Map<String, dynamic> data;
+
+  const AttendanceApiException({
+    required this.statusCode,
+    required this.message,
+    this.data = const <String, dynamic>{},
+  });
+
+  @override
+  String toString() => message;
+}
+
 class AttendanceService {
   static Future<Map<String, dynamic>> generateQr({
     required double locationLat,
@@ -52,11 +67,13 @@ class AttendanceService {
     required String qrData,
     required double latitude,
     required double longitude,
+    required String action,
   }) async {
     final payload = <String, dynamic>{
       'qr_data': qrData,
       'latitude': latitude,
       'longitude': longitude,
+      'action': action,
     };
 
     final response = await AuthorizedApiService.sendWithAutoRefresh(
@@ -80,8 +97,10 @@ class AttendanceService {
       return decoded;
     }
 
-    throw Exception(
-      decoded['message']?.toString() ?? 'Failed to mark attendance.',
+    throw AttendanceApiException(
+      statusCode: response.statusCode,
+      message: decoded['message']?.toString() ?? 'Failed to mark attendance.',
+      data: decoded,
     );
   }
 
@@ -187,12 +206,27 @@ class AttendanceService {
     required double latitude,
     required double longitude,
     int radiusMeters = 100,
+    String? checkInTime,
+    String? checkOutTime,
+    int? allowedBeforeMinutes,
+    int? allowedAfterMinutes,
+    double? minimumPresentHours,
   }) async {
     final payload = <String, dynamic>{
       'pathak_id': ApiEndpoints.pathakId,
       'location_lat': latitude,
       'location_lng': longitude,
       'radius_meters': radiusMeters,
+      if (checkInTime != null && checkInTime.trim().isNotEmpty)
+        'check_in_time': checkInTime.trim(),
+      if (checkOutTime != null && checkOutTime.trim().isNotEmpty)
+        'check_out_time': checkOutTime.trim(),
+      if (allowedBeforeMinutes != null)
+        'allowed_minutes_before_check_in': allowedBeforeMinutes,
+      if (allowedAfterMinutes != null)
+        'allowed_minutes_after_check_in': allowedAfterMinutes,
+      if (minimumPresentHours != null)
+        'minimum_present_hours': minimumPresentHours,
     };
 
     final response = await AuthorizedApiService.sendWithAutoRefresh(
