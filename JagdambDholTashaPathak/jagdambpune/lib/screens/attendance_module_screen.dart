@@ -1,14 +1,17 @@
-import 'dart:typed_data';
+import 'dart:async';
+import 'dart:convert';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:table_calendar/table_calendar.dart';
 
 import '../services/attendance_service.dart';
+import '../config/api_endpoints.dart';
 import '../theme/app_colors.dart';
 import '../utils/qr_download_helper.dart';
 import '../widgets/web_camera_qr_scanner.dart';
@@ -35,9 +38,18 @@ class AttendanceModuleScreen extends StatefulWidget {
 
 class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     with SingleTickerProviderStateMixin {
+  static const int _checkoutCooldownMinutes = 30;
+  static const FlutterSecureStorage _storage = FlutterSecureStorage();
+  static const String _checkoutCooldownUntilKeyBase =
+      'attendance_checkout_cooldown_until';
+  static const String _checkoutCooldownSourceKeyBase =
+      'attendance_checkout_cooldown_source';
+  static const String _checkoutCooldownServerOffsetKeyBase =
+      'attendance_checkout_cooldown_server_offset_seconds';
+
   late final TabController _tabController;
   final MobileScannerController _scannerController = MobileScannerController(
-    autoStart: !kIsWeb,
+    autoStart: false,
   );
 
   bool _isGenerating = false;
@@ -52,11 +64,30 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   double? _configuredLat;
   double? _configuredLng;
   int _configuredRadiusMeters = 100;
+  String? _configuredCheckInTime; // e.g. "09:00"
+  String? _configuredCheckOutTime; // e.g. "18:00"
+  int _configuredAllowedBeforeMinutes = 15;
+  int _configuredAllowedAfterMinutes = 15;
+  double _configuredMinimumPresentHours = 4.0;
+  bool _isSavingSettings = false;
 
   bool _isMarking = false;
   bool _hasMarkedFromCurrentScan = false;
   String? _scanInfo;
   VoidCallback? _stopWebCamera;
+  DateTime? _lastSuccessfulCheckInAt;
+  DateTime? _checkoutAllowedAtFromServer;
+  int _serverClockOffsetSeconds = 0;
+  Timer? _checkoutCooldownTimer;
+  bool _isCheckoutScannerUnlocked = false;
+  String _cooldownUserScope = 'anon';
+
+  String get _checkoutCooldownUntilKey =>
+      '${_checkoutCooldownUntilKeyBase}_$_cooldownUserScope';
+  String get _checkoutCooldownSourceKey =>
+      '${_checkoutCooldownSourceKeyBase}_$_cooldownUserScope';
+  String get _checkoutCooldownServerOffsetKey =>
+      '${_checkoutCooldownServerOffsetKeyBase}_$_cooldownUserScope';
 
   bool _isLoadingMyAttendance = false;
   DateTime _calendarFocusDate = DateTime.now();
@@ -79,8 +110,14 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   @override
   void initState() {
     super.initState();
+
+    // Scan flow also needs configured check-in settings for timing validation.
+    _loadConfiguredAttendanceLocation();
+    _initCooldownStorageScope();
+
     if (widget.scanOnly) {
       _tabController = TabController(length: 1, vsync: this, initialIndex: 0);
+      _syncScannerLifecycle();
       return;
     }
 
@@ -97,11 +134,10 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       vsync: this,
       initialIndex: initialTabIndex,
     );
+    _tabController.addListener(_handleTabControllerTick);
+    _syncScannerLifecycle();
 
     _loadMyAttendance();
-    if (widget.canGenerateQr || widget.canSetAttendanceLocation) {
-      _loadConfiguredAttendanceLocation();
-    }
     if (widget.canViewByUserAttendance) {
       _loadAttendanceByUser();
     }
@@ -109,10 +145,61 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
   @override
   void dispose() {
+    _checkoutCooldownTimer?.cancel();
+    if (!widget.scanOnly) {
+      _tabController.removeListener(_handleTabControllerTick);
+    }
+    _pauseAllScanners();
     _scannerController.dispose();
     _tabController.dispose();
     _nameSearchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _initCooldownStorageScope() async {
+    final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
+    if (!mounted) return;
+    _cooldownUserScope = _extractUserScopeFromToken(token) ?? 'anon';
+    await _cleanupLegacyGlobalCooldownKeys();
+    await _restoreCheckoutCooldown();
+  }
+
+  Future<void> _cleanupLegacyGlobalCooldownKeys() async {
+    // Migration cleanup: older builds used non-user-scoped keys.
+    await _storage.delete(key: _checkoutCooldownUntilKeyBase);
+    await _storage.delete(key: _checkoutCooldownSourceKeyBase);
+    await _storage.delete(key: _checkoutCooldownServerOffsetKeyBase);
+  }
+
+  String? _extractUserScopeFromToken(String? token) {
+    final raw = token?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    final parts = raw.split('.');
+    if (parts.length < 2) return null;
+
+    try {
+      final payload = utf8.decode(
+        base64Url.decode(base64Url.normalize(parts[1])),
+      );
+      final decoded = jsonDecode(payload);
+      if (decoded is! Map<String, dynamic>) return null;
+
+      final candidates = <dynamic>[
+        decoded['user_id'],
+        decoded['userId'],
+        decoded['id'],
+        decoded['sub'],
+      ];
+      for (final value in candidates) {
+        final id = value?.toString().trim();
+        if (id != null && id.isNotEmpty) {
+          return id;
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+    return null;
   }
 
   void _showSnack(String message) {
@@ -120,6 +207,480 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _pauseNativeScanner() {
+    if (kIsWeb) return;
+    unawaited(_scannerController.stop());
+  }
+
+  void _resumeNativeScanner() {
+    if (kIsWeb) return;
+    unawaited(_scannerController.start());
+  }
+
+  void _pauseAllScanners() {
+    _pauseNativeScanner();
+    _stopWebCamera?.call();
+    _stopWebCamera = null;
+  }
+
+  bool get _isScanTabActive {
+    if (widget.scanOnly) return true;
+    return _tabController.index == 0;
+  }
+
+  bool get _shouldDisableCamera {
+    if (!_isScanTabActive) return true;
+    if (_shouldBlockScannerForCheckoutCooldown) return true;
+    if (_shouldShowCheckoutScannerUnlockCard && !_isCheckoutScannerUnlocked) {
+      return true;
+    }
+    return false;
+  }
+
+  void _syncScannerLifecycle() {
+    if (_shouldDisableCamera) {
+      _pauseAllScanners();
+      return;
+    }
+
+    if (!kIsWeb) {
+      _resumeNativeScanner();
+    }
+  }
+
+  void _handleTabControllerTick() {
+    _syncScannerLifecycle();
+    if (!mounted) return;
+    setState(() {});
+  }
+
+  Future<void> _showScanResultPopupAndNavigateHome({
+    required String title,
+    required String message,
+    required bool isSuccess,
+  }) async {
+    // Stop camera before switching tab to avoid extra detections during popup.
+    _stopWebCamera?.call();
+
+    if (!mounted) return;
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: Colors.white,
+        contentPadding: const EdgeInsets.fromLTRB(24, 28, 24, 16),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: isSuccess
+                    ? const Color(0xFFE8F5E9)
+                    : const Color(0xFFFFEBEE),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                isSuccess ? Icons.check_circle_rounded : Icons.error_rounded,
+                color: isSuccess ? Colors.green : Colors.red,
+                size: 40,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              style: const TextStyle(
+                color: AppColors.primaryMaroon,
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: AppColors.primaryMaroon,
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryMaroon,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              child: const Text('OK'),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+
+    // Let the dialog route fully settle before mutating navigation state.
+    await Future<void>.delayed(Duration.zero);
+    if (!mounted) return;
+
+    // Return to Home screen after acknowledging popup.
+    if (Navigator.of(context).canPop()) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+      });
+      return;
+    }
+
+    // Fallback when route can't be popped.
+    if (!widget.scanOnly && _tabController.length > 1) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (_tabController.length > 1) {
+          _tabController.animateTo(1);
+        }
+      });
+    }
+  }
+
+  DateTime? _todayAtConfiguredTime(String? hhmm) {
+    final time = hhmm == null ? null : _parseTimeOfDay(hhmm);
+    if (time == null) return null;
+    final now = DateTime.now();
+    return DateTime(now.year, now.month, now.day, time.hour, time.minute);
+  }
+
+  bool _isSameDate(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  String _formatTimeLabel(DateTime dt) {
+    final hour = dt.hour.toString().padLeft(2, '0');
+    final minute = dt.minute.toString().padLeft(2, '0');
+    return '$hour:$minute';
+  }
+
+  DateTime? _parseServerDateTime(dynamic raw) {
+    final text = raw?.toString().trim() ?? '';
+    if (text.isEmpty) return null;
+    final parsed = DateTime.tryParse(text);
+    if (parsed == null) return null;
+    return parsed.isUtc ? parsed.toLocal() : parsed;
+  }
+
+  int _resolveServerOffsetSeconds(DateTime? serverNow) {
+    if (serverNow == null) {
+      return _serverClockOffsetSeconds;
+    }
+    return serverNow.difference(DateTime.now()).inSeconds;
+  }
+
+  DateTime? get _checkoutAllowedAt {
+    final serverAllowedAt = _checkoutAllowedAtFromServer;
+    if (serverAllowedAt != null) {
+      return serverAllowedAt;
+    }
+    final checkInAt = _lastSuccessfulCheckInAt;
+    if (checkInAt == null) return null;
+    return checkInAt.add(const Duration(minutes: _checkoutCooldownMinutes));
+  }
+
+  DateTime get _effectiveNowForCooldown {
+    return DateTime.now().add(Duration(seconds: _serverClockOffsetSeconds));
+  }
+
+  Duration? get _checkoutCooldownRemaining {
+    final allowedAt = _checkoutAllowedAt;
+    if (allowedAt == null) return null;
+    final remaining = allowedAt.difference(_effectiveNowForCooldown);
+    if (remaining.isNegative) return Duration.zero;
+    return remaining;
+  }
+
+  bool get _isCheckoutCooldownActive {
+    final remaining = _checkoutCooldownRemaining;
+    return remaining != null && remaining > Duration.zero;
+  }
+
+  bool get _shouldBlockScannerForCheckoutCooldown {
+    final checkInAt = _lastSuccessfulCheckInAt;
+    if (checkInAt == null) return false;
+    if (!_isSameDate(checkInAt, DateTime.now())) return false;
+    return _isCheckoutCooldownActive;
+  }
+
+  bool get _shouldShowCheckoutScannerUnlockCard {
+    final checkInAt = _lastSuccessfulCheckInAt;
+    if (checkInAt == null) return false;
+    if (!_isSameDate(checkInAt, DateTime.now())) return false;
+    return !_isCheckoutCooldownActive;
+  }
+
+  String get _checkoutCooldownRemainingLabel {
+    final remaining = _checkoutCooldownRemaining ?? Duration.zero;
+    final totalSeconds = remaining.inSeconds;
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
+    if (minutes <= 0) {
+      return '$seconds sec';
+    }
+    return '$minutes min ${seconds.toString().padLeft(2, '0')} sec';
+  }
+
+  double get _checkoutCooldownProgress {
+    final remaining = _checkoutCooldownRemaining ?? Duration.zero;
+    const totalSeconds = _checkoutCooldownMinutes * 60;
+    final remainingSeconds = remaining.inSeconds.clamp(0, totalSeconds);
+    return 1 - (remainingSeconds / totalSeconds);
+  }
+
+  Future<void> _persistCheckoutCooldown({
+    required DateTime checkInAt,
+    required DateTime allowedAt,
+    required String source,
+    required int serverClockOffsetSeconds,
+  }) async {
+    await _storage.write(
+      key: _checkoutCooldownUntilKey,
+      value: allowedAt.toIso8601String(),
+    );
+    await _storage.write(key: _checkoutCooldownSourceKey, value: source);
+    await _storage.write(
+      key: _checkoutCooldownServerOffsetKey,
+      value: serverClockOffsetSeconds.toString(),
+    );
+
+    _lastSuccessfulCheckInAt = checkInAt;
+    _checkoutAllowedAtFromServer = allowedAt;
+    _serverClockOffsetSeconds = serverClockOffsetSeconds;
+  }
+
+  Future<void> _clearCheckoutCooldown() async {
+    _checkoutCooldownTimer?.cancel();
+    _checkoutCooldownTimer = null;
+    _lastSuccessfulCheckInAt = null;
+    _checkoutAllowedAtFromServer = null;
+    _serverClockOffsetSeconds = 0;
+    _isCheckoutScannerUnlocked = false;
+    await _storage.delete(key: _checkoutCooldownUntilKey);
+    await _storage.delete(key: _checkoutCooldownSourceKey);
+    await _storage.delete(key: _checkoutCooldownServerOffsetKey);
+  }
+
+  Future<void> _restoreCheckoutCooldown() async {
+    final stored = await _storage.read(key: _checkoutCooldownUntilKey);
+    final source = await _storage.read(key: _checkoutCooldownSourceKey);
+    final storedOffset = await _storage.read(
+      key: _checkoutCooldownServerOffsetKey,
+    );
+    if (!mounted || stored == null || stored.trim().isEmpty) return;
+
+    // Ignore cooldown values from older builds that were not explicitly check-in based.
+    final normalizedSource = source?.trim().toLowerCase() ?? '';
+    if (normalizedSource != 'check_in' && normalizedSource != 'server') {
+      await _storage.delete(key: _checkoutCooldownUntilKey);
+      await _storage.delete(key: _checkoutCooldownSourceKey);
+      await _storage.delete(key: _checkoutCooldownServerOffsetKey);
+      return;
+    }
+
+    final allowedAt = DateTime.tryParse(stored.trim());
+    if (allowedAt == null) {
+      await _storage.delete(key: _checkoutCooldownUntilKey);
+      await _storage.delete(key: _checkoutCooldownSourceKey);
+      await _storage.delete(key: _checkoutCooldownServerOffsetKey);
+      return;
+    }
+
+    final restoredOffset = int.tryParse(storedOffset?.trim() ?? '') ?? 0;
+    _serverClockOffsetSeconds = restoredOffset;
+
+    final checkInAt = allowedAt.subtract(
+      const Duration(minutes: _checkoutCooldownMinutes),
+    );
+
+    if (allowedAt.isBefore(_effectiveNowForCooldown)) {
+      // Cooldown already expired. Clean up storage but if it's still the same
+      // calendar day keep the check-in marker so the next scan sends check_out.
+      await _storage.delete(key: _checkoutCooldownUntilKey);
+      await _storage.delete(key: _checkoutCooldownSourceKey);
+      await _storage.delete(key: _checkoutCooldownServerOffsetKey);
+      _checkoutAllowedAtFromServer = null;
+      if (_isSameDate(checkInAt, DateTime.now()) && mounted) {
+        setState(() {
+          _lastSuccessfulCheckInAt = checkInAt;
+        });
+      }
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _lastSuccessfulCheckInAt = checkInAt;
+      _checkoutAllowedAtFromServer = allowedAt;
+    });
+    _startCheckoutCooldownTicker();
+  }
+
+  void _startCheckoutCooldownTicker() {
+    _checkoutCooldownTimer?.cancel();
+    if (!_isCheckoutCooldownActive) return;
+    _checkoutCooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (!_isCheckoutCooldownActive) {
+        _checkoutCooldownTimer?.cancel();
+        _checkoutCooldownTimer = null;
+        // Cooldown timer expired: clear storage but keep _lastSuccessfulCheckInAt
+        // so the next scan correctly sends check_out instead of check_in.
+        _storage.delete(key: _checkoutCooldownUntilKey);
+        _storage.delete(key: _checkoutCooldownSourceKey);
+        _storage.delete(key: _checkoutCooldownServerOffsetKey);
+        _checkoutAllowedAtFromServer = null;
+        if (mounted) {
+          setState(() {});
+        }
+        return;
+      }
+      setState(() {});
+    });
+  }
+
+  Future<void> _showCheckoutCooldownPopup() async {
+    final allowedAt = _checkoutAllowedAt;
+    if (!mounted || allowedAt == null || !_isCheckoutCooldownActive) return;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: Colors.white,
+        title: const Text(
+          'Checkout Available Later',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: AppColors.primaryMaroon,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 60,
+              height: 60,
+              decoration: BoxDecoration(
+                color: AppColors.primaryMaroon.withValues(alpha: 0.08),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.hourglass_top_rounded,
+                color: AppColors.primaryMaroon,
+                size: 34,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.primaryMaroon.withValues(alpha: 0.06),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: [
+                  const Text(
+                    'Time Remaining',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _checkoutCooldownRemainingLabel,
+                    style: const TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(999),
+                    child: LinearProgressIndicator(
+                      value: _checkoutCooldownProgress,
+                      minHeight: 8,
+                      backgroundColor: AppColors.primaryMaroon.withValues(
+                        alpha: 0.12,
+                      ),
+                      valueColor: const AlwaysStoppedAnimation<Color>(
+                        AppColors.primaryMaroon,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Checkout can be marked after ${_formatTimeLabel(allowedAt)}.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: AppColors.primaryMaroon,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryMaroon,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('OK'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatHoursLabel(double hours) {
+    if (hours == hours.roundToDouble()) {
+      return hours.toInt().toString();
+    }
+    return hours.toStringAsFixed(1);
+  }
+
+  String get _minimumPresentHoursLabel {
+    final hours = _configuredMinimumPresentHours;
+    if (hours == hours.roundToDouble()) {
+      return hours.toInt().toString();
+    }
+    return hours.toStringAsFixed(1);
   }
 
   Future<void> _generateAttendanceQr() async {
@@ -157,7 +718,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         locationLat: targetLat,
         locationLng: targetLng,
         radiusMeters: allowedRadius,
-        permanent: widget.isPathakAdmin,
+        permanent: widget.canSetAttendanceLocation,
       );
 
       final payload =
@@ -201,12 +762,46 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       final lng = double.tryParse(response['location_lng']?.toString() ?? '');
       final radius =
           int.tryParse(response['radius_meters']?.toString() ?? '') ?? 100;
+      final checkIn = response['check_in_time']?.toString();
+      final checkOut = response['check_out_time']?.toString();
+      final allowedBefore =
+          int.tryParse(
+            response['allowed_minutes_before_check_in']?.toString() ?? '',
+          ) ??
+          int.tryParse(response['allowed_before_minutes']?.toString() ?? '') ??
+          int.tryParse(response['check_in_before_minutes']?.toString() ?? '');
+      final allowedAfter =
+          int.tryParse(
+            response['allowed_minutes_after_check_in']?.toString() ?? '',
+          ) ??
+          int.tryParse(response['allowed_after_minutes']?.toString() ?? '') ??
+          int.tryParse(response['check_in_after_minutes']?.toString() ?? '');
+      final minimumPresentHours =
+          double.tryParse(
+            response['minimum_present_hours']?.toString() ?? '',
+          ) ??
+          double.tryParse(response['present_hours_required']?.toString() ?? '');
 
       if (!mounted) return;
       setState(() {
         _configuredLat = lat;
         _configuredLng = lng;
         _configuredRadiusMeters = radius;
+        if (checkIn != null && checkIn.trim().isNotEmpty) {
+          _configuredCheckInTime = checkIn.trim();
+        }
+        if (checkOut != null && checkOut.trim().isNotEmpty) {
+          _configuredCheckOutTime = checkOut.trim();
+        }
+        if (allowedBefore != null) {
+          _configuredAllowedBeforeMinutes = allowedBefore;
+        }
+        if (allowedAfter != null) {
+          _configuredAllowedAfterMinutes = allowedAfter;
+        }
+        if (minimumPresentHours != null) {
+          _configuredMinimumPresentHours = minimumPresentHours;
+        }
       });
     } catch (_) {
       // Do not block UI if location is not configured yet.
@@ -280,6 +875,74 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       return;
     }
 
+    final now = DateTime.now();
+    final checkInToday = _todayAtConfiguredTime(_configuredCheckInTime);
+    final checkOutToday = _todayAtConfiguredTime(_configuredCheckOutTime);
+    var hadMissedCheckoutFromPreviousDay = false;
+
+    // Keep local state scoped to the current day only.
+    // This avoids forcing checkout because of yesterday's check-in state.
+    if (_lastSuccessfulCheckInAt != null &&
+        !_isSameDate(_lastSuccessfulCheckInAt!, now)) {
+      hadMissedCheckoutFromPreviousDay = true;
+      await _clearCheckoutCooldown();
+    }
+
+    final lastCheckInAt = _lastSuccessfulCheckInAt;
+    final hasActiveCheckIn = lastCheckInAt != null;
+    final checkoutModeRequestedByUser = _isCheckoutScannerUnlocked;
+    final checkoutAllowedAt = _checkoutAllowedAt;
+    if (checkoutAllowedAt != null && !checkoutModeRequestedByUser) {
+      if (_isCheckoutCooldownActive) {
+        await _showCheckoutCooldownPopup();
+        return;
+      }
+    }
+
+    if (_isLoadingConfiguredLocation) {
+      await _showScanResultPopupAndNavigateHome(
+        title: 'Attendance Not Marked',
+        message: 'Loading attendance settings. Please try again shortly.',
+        isSuccess: false,
+      );
+      return;
+    }
+    var isLateWindow = false;
+    if (checkInToday != null) {
+      final allowedBefore = _configuredAllowedBeforeMinutes;
+      final allowedAfter = _configuredAllowedAfterMinutes;
+      final windowStart = checkInToday.subtract(
+        Duration(minutes: allowedBefore),
+      );
+      final lateAfter = checkInToday.add(Duration(minutes: allowedAfter));
+
+      if (now.isBefore(windowStart)) {
+        await _showScanResultPopupAndNavigateHome(
+          title: 'Attendance Not Allowed Yet',
+          message:
+              'Attendance can be marked from ${_formatTimeLabel(windowStart)}. '
+              'Early check-in is not allowed.',
+          isSuccess: false,
+        );
+        return;
+      }
+
+      if (now.isAfter(lateAfter)) {
+        isLateWindow = true;
+      }
+    }
+
+    if (checkOutToday != null && now.isAfter(checkOutToday)) {
+      await _showScanResultPopupAndNavigateHome(
+        title: 'Attendance Window Closed',
+        message: hasActiveCheckIn
+            ? 'Checkout is allowed only until ${_formatTimeLabel(checkOutToday)}.'
+            : 'Check-in is allowed only until ${_formatTimeLabel(checkOutToday)}.',
+        isSuccess: false,
+      );
+      return;
+    }
+
     setState(() {
       _isMarking = true;
       _scanInfo = null;
@@ -287,99 +950,271 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
     try {
       final current = await AttendanceService.getCurrentPosition();
+      final checkoutModeRequestedByUser = _isCheckoutScannerUnlocked;
+      var requestedAction = (checkoutModeRequestedByUser || hasActiveCheckIn)
+          ? 'check_out'
+          : 'check_in';
 
-      final response = await AttendanceService.markAttendance(
-        qrData: qrData,
-        latitude: current.latitude,
-        longitude: current.longitude,
+      Map<String, dynamic> response;
+      try {
+        response = await AttendanceService.markAttendance(
+          qrData: qrData,
+          latitude: current.latitude,
+          longitude: current.longitude,
+          action: requestedAction,
+        );
+      } catch (e) {
+        final errorText = e.toString().replaceFirst('Exception: ', '');
+        final normalized = errorText.toLowerCase();
+        final apiError = e is AttendanceApiException ? e : null;
+        final errorPayload = apiError?.data ?? const <String, dynamic>{};
+        final serverAllowedAt = _parseServerDateTime(
+          errorPayload['checkout_allowed_at'],
+        );
+        final serverNow = _parseServerDateTime(errorPayload['server_now']);
+        final looksLikeAlreadyMarkedToday =
+            normalized.contains('attendance already marked for today') ||
+            normalized.contains('already marked for today');
+        final looksLikeNoCheckIn =
+            normalized.contains('check in not found') ||
+            normalized.contains('check-in not found') ||
+            normalized.contains('check_in not found') ||
+            normalized.contains('no active check') ||
+            normalized.contains('no check-in') ||
+            normalized.contains('no check in');
+
+        if (requestedAction == 'check_in' && looksLikeAlreadyMarkedToday) {
+          // Backend already has today's check-in. Move UI into checkout flow.
+          DateTime inferredCheckInAt;
+          DateTime effectiveAllowedAt;
+          var source = 'check_in';
+
+          if (serverAllowedAt != null) {
+            effectiveAllowedAt = serverAllowedAt;
+            inferredCheckInAt = serverAllowedAt.subtract(
+              const Duration(minutes: _checkoutCooldownMinutes),
+            );
+            source = 'server';
+          } else {
+            DateTime? checkInAt;
+            try {
+              checkInAt = await _resolveTodayCheckInFromHistory();
+            } catch (_) {
+              // Non-fatal: fallback below.
+            }
+
+            final nowTime = DateTime.now();
+            final configuredCheckInToday = _todayAtConfiguredTime(
+              _configuredCheckInTime,
+            );
+            final configuredFallback =
+                configuredCheckInToday != null &&
+                    nowTime.isAfter(configuredCheckInToday)
+                ? configuredCheckInToday
+                : null;
+            inferredCheckInAt = checkInAt ?? configuredFallback ?? nowTime;
+            effectiveAllowedAt = inferredCheckInAt.add(
+              const Duration(minutes: _checkoutCooldownMinutes),
+            );
+          }
+
+          _lastSuccessfulCheckInAt = inferredCheckInAt;
+          _checkoutAllowedAtFromServer = effectiveAllowedAt;
+          _serverClockOffsetSeconds = _resolveServerOffsetSeconds(serverNow);
+          _isCheckoutScannerUnlocked = !_isCheckoutCooldownActive;
+          _hasMarkedFromCurrentScan = false;
+          _scanInfo =
+              'Check-in already marked for today. Continue with checkout flow.';
+
+          if (_isCheckoutCooldownActive) {
+            await _persistCheckoutCooldown(
+              checkInAt: inferredCheckInAt,
+              allowedAt: effectiveAllowedAt,
+              source: source,
+              serverClockOffsetSeconds: _serverClockOffsetSeconds,
+            );
+            _startCheckoutCooldownTicker();
+          }
+
+          if (mounted) {
+            setState(() {});
+          }
+          return;
+        }
+
+        if (requestedAction == 'check_out' &&
+            looksLikeNoCheckIn &&
+            !checkoutModeRequestedByUser) {
+          // Backend has no check-in record; our local state was stale.
+          // Only retry as check_in if we're actually inside the valid check-in window.
+          final checkInNow = _todayAtConfiguredTime(_configuredCheckInTime);
+          final windowStart = checkInNow?.subtract(
+            Duration(minutes: _configuredAllowedBeforeMinutes),
+          );
+          final insideCheckInWindow =
+              windowStart == null || !DateTime.now().isBefore(windowStart);
+          if (!insideCheckInWindow) {
+            // Too early (or too late) to check in — clear stale state, show original error.
+            await _clearCheckoutCooldown();
+            rethrow;
+          }
+          await _clearCheckoutCooldown();
+          requestedAction = 'check_in';
+          response = await AttendanceService.markAttendance(
+            qrData: qrData,
+            latitude: current.latitude,
+            longitude: current.longitude,
+            action: requestedAction,
+          );
+        } else if (requestedAction == 'check_out' &&
+            (normalized.contains('30 minutes') || serverAllowedAt != null)) {
+          // Backend enforced the 30-min cooldown.
+          // Re-sync cooldown from backend authoritative timestamps when provided.
+          final nowTime = DateTime.now();
+          final effectiveAllowedAt =
+              serverAllowedAt ??
+              nowTime.add(
+                const Duration(minutes: _checkoutCooldownMinutes - 1),
+              );
+          final effectiveCheckInAt = effectiveAllowedAt.subtract(
+            const Duration(minutes: _checkoutCooldownMinutes),
+          );
+
+          _lastSuccessfulCheckInAt = effectiveCheckInAt;
+          _checkoutAllowedAtFromServer = effectiveAllowedAt;
+          _serverClockOffsetSeconds = _resolveServerOffsetSeconds(serverNow);
+          _isCheckoutScannerUnlocked = false;
+          _hasMarkedFromCurrentScan = false;
+          _scanInfo =
+              'Checkout is allowed only after 30 minutes from check-in.';
+
+          await _persistCheckoutCooldown(
+            checkInAt: effectiveCheckInAt,
+            allowedAt: effectiveAllowedAt,
+            source: serverAllowedAt != null ? 'server' : 'check_in',
+            serverClockOffsetSeconds: _serverClockOffsetSeconds,
+          );
+          _startCheckoutCooldownTicker();
+          if (mounted) {
+            setState(() {});
+          }
+          return;
+        } else {
+          rethrow;
+        }
+      }
+
+      final baseMessage =
+          response['message']?.toString() ?? 'Attendance marked successfully.';
+      final actionText =
+          (response['attendance_action'] ??
+                  response['attendance_type'] ??
+                  response['action'])
+              ?.toString()
+              .toLowerCase() ??
+          '';
+      final resolvedActionText = actionText.trim().isEmpty
+          ? requestedAction
+          : actionText;
+      final isCheckInAction =
+          resolvedActionText.contains('checkin') ||
+          resolvedActionText.contains('check_in') ||
+          resolvedActionText == 'in';
+      final isCheckoutAction =
+          resolvedActionText.contains('checkout') ||
+          resolvedActionText.contains('check_out') ||
+          resolvedActionText == 'out';
+      final statusText =
+          (response['attendance_status'] ?? response['status'])
+              ?.toString()
+              .toLowerCase()
+              .trim() ??
+          '';
+      final workedHours = double.tryParse(
+        response['worked_hours']?.toString() ?? '',
       );
 
-      final successMessage =
-          response['message']?.toString() ?? 'Attendance marked successfully.';
+      String popupTitle;
+      String successMessage;
+      if (isCheckoutAction) {
+        popupTitle = 'Checkout Marked!';
+        final finalStatusLine = switch (statusText) {
+          'present' || 'p' => '\nFinal status: Present.',
+          'late' || 'l' => '\nFinal status: Late.',
+          'absent' || 'a' => '\nFinal status: Absent.',
+          _ => '',
+        };
+        final workedHoursLine = workedHours != null
+            ? '\nWorked hours: ${_formatHoursLabel(workedHours)}.'
+            : '';
+        successMessage = '$baseMessage$workedHoursLine$finalStatusLine';
+      } else if (isCheckInAction) {
+        final isLateStatus =
+            statusText == 'late' || statusText == 'l' || isLateWindow;
+        final responseAllowedAt = _parseServerDateTime(
+          response['checkout_allowed_at'],
+        );
+        final responseServerNow = _parseServerDateTime(response['server_now']);
+        final checkInRecordedAt =
+            responseAllowedAt?.subtract(
+              const Duration(minutes: _checkoutCooldownMinutes),
+            ) ??
+            DateTime.now();
+        final checkoutAllowedAt =
+            responseAllowedAt ??
+            checkInRecordedAt.add(
+              const Duration(minutes: _checkoutCooldownMinutes),
+            );
+        popupTitle = isLateStatus
+            ? 'Late Check-in Marked!'
+            : 'Check-in Marked!';
+        final statusLine = isLateStatus
+            ? '\nStatus: Late check-in.'
+            : '\nStatus: Present.';
+        final checkoutLine =
+            '\nCheckout can be marked after ${_formatTimeLabel(checkoutAllowedAt)} '
+            '($_checkoutCooldownMinutes min cooldown).';
+        final missedCheckoutNote = hadMissedCheckoutFromPreviousDay
+            ? '\nNote: Previous day checkout was missed. Backend should mark that day as absent.'
+            : '';
+        successMessage =
+            '$baseMessage$statusLine$checkoutLine$missedCheckoutNote';
+        _serverClockOffsetSeconds = _resolveServerOffsetSeconds(
+          responseServerNow,
+        );
+        await _persistCheckoutCooldown(
+          checkInAt: checkInRecordedAt,
+          allowedAt: checkoutAllowedAt,
+          source: responseAllowedAt != null ? 'server' : 'check_in',
+          serverClockOffsetSeconds: _serverClockOffsetSeconds,
+        );
+        _isCheckoutScannerUnlocked = false;
+        _startCheckoutCooldownTicker();
+      } else {
+        popupTitle = 'Attendance Marked!';
+        successMessage = baseMessage;
+      }
+
+      if (isCheckoutAction) {
+        await _clearCheckoutCooldown();
+      }
 
       setState(() {
         _hasMarkedFromCurrentScan = true;
         _scanInfo = successMessage;
       });
       _loadMyAttendance();
-      // Stop camera before showing dialog
-      _stopWebCamera?.call();
-
-      // Show success popup then navigate to My Calendar
-      if (mounted) {
-        await showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            backgroundColor: Colors.white,
-            contentPadding: const EdgeInsets.fromLTRB(24, 28, 24, 16),
-            actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 64,
-                  height: 64,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFE8F5E9),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.check_circle_rounded,
-                    color: Colors.green,
-                    size: 40,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Attendance Marked!',
-                  style: TextStyle(
-                    color: AppColors.primaryMaroon,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  successMessage,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: AppColors.primaryMaroon,
-                    fontSize: 13,
-                    height: 1.4,
-                  ),
-                ),
-              ],
-            ),
-            actions: [
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryMaroon,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 12),
-                  ),
-                  child: const Text('OK'),
-                ),
-              ),
-            ],
-          ),
-        );
-      }
-
-      if (mounted && !widget.scanOnly && _tabController.length > 1) {
-        _tabController.animateTo(1);
-      }
+      await _showScanResultPopupAndNavigateHome(
+        title: popupTitle,
+        message: successMessage,
+        isSuccess: true,
+      );
     } catch (e) {
-      _showSnack(e.toString().replaceFirst('Exception: ', ''));
+      await _showScanResultPopupAndNavigateHome(
+        title: 'Attendance Failed',
+        message: e.toString().replaceFirst('Exception: ', ''),
+        isSuccess: false,
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -416,8 +1251,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         data: data,
         version: QrVersions.auto,
         errorCorrectionLevel: QrErrorCorrectLevel.M,
-        color: const Color(0xFF000000),
-        emptyColor: const Color(0xFFFFFFFF),
+        dataModuleStyle: const QrDataModuleStyle(color: Color(0xFF000000)),
+        eyeStyle: const QrEyeStyle(color: Color(0xFF000000)),
         gapless: false,
       );
 
@@ -538,6 +1373,58 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     if (raw == 'absent' || raw == 'a') return 'absent';
     if (raw == 'late' || raw == 'l') return 'late';
     return raw.isEmpty ? 'present' : raw;
+  }
+
+  DateTime? _parseCheckInDateTimeFromRow(Map<String, dynamic> row) {
+    final now = DateTime.now();
+    final date = _extractAttendanceDate(row) ?? _dateOnly(now);
+
+    DateTime? parseDateTimeCandidate(dynamic raw) {
+      final text = raw?.toString().trim() ?? '';
+      if (text.isEmpty) return null;
+      final dt = DateTime.tryParse(text);
+      if (dt != null) return dt;
+      final tod = _parseTimeOfDay(text);
+      if (tod == null) return null;
+      return DateTime(date.year, date.month, date.day, tod.hour, tod.minute);
+    }
+
+    final candidates = <dynamic>[
+      row['check_in_at'],
+      row['checkin_at'],
+      row['in_time'],
+      row['check_in_time'],
+      row['check_in'],
+      row['created_at'],
+    ];
+
+    for (final raw in candidates) {
+      final parsed = parseDateTimeCandidate(raw);
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  Future<DateTime?> _resolveTodayCheckInFromHistory() async {
+    final now = DateTime.now();
+    final month = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+    final rows = await AttendanceService.fetchMyAttendance(month: month);
+
+    DateTime? best;
+    for (final row in rows) {
+      final date = _extractAttendanceDate(row);
+      if (date == null || !_isSameDate(date, now)) {
+        continue;
+      }
+      final parsed = _parseCheckInDateTimeFromRow(row);
+      if (parsed == null) continue;
+      if (best == null || parsed.isAfter(best)) {
+        best = parsed;
+      }
+    }
+    return best;
   }
 
   Future<void> _loadMyAttendance() async {
@@ -1262,6 +2149,314 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     );
   }
 
+  Future<void> _openAttendanceSettingsDialog() async {
+    final radiusCtrl = TextEditingController(
+      text: _configuredRadiusMeters.toString(),
+    );
+    final allowedBeforeCtrl = TextEditingController(
+      text: _configuredAllowedBeforeMinutes.toString(),
+    );
+    final allowedAfterCtrl = TextEditingController(
+      text: _configuredAllowedAfterMinutes.toString(),
+    );
+    final minimumPresentHoursCtrl = TextEditingController(
+      text: _minimumPresentHoursLabel,
+    );
+    TimeOfDay? checkIn = _configuredCheckInTime != null
+        ? _parseTimeOfDay(_configuredCheckInTime!)
+        : null;
+    TimeOfDay? checkOut = _configuredCheckOutTime != null
+        ? _parseTimeOfDay(_configuredCheckOutTime!)
+        : null;
+
+    final settingsResult = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          return AlertDialog(
+            title: const Text(
+              'Attendance Settings',
+              style: TextStyle(color: AppColors.primaryMaroon),
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // --- Check-in Time ---
+                  const Text(
+                    'Check-in Time',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.primaryMaroon,
+                      side: BorderSide(
+                        color: AppColors.primaryMaroon.withValues(alpha: 0.35),
+                      ),
+                    ),
+                    onPressed: () async {
+                      final picked = await showTimePicker(
+                        context: ctx,
+                        initialTime:
+                            checkIn ?? const TimeOfDay(hour: 9, minute: 0),
+                      );
+                      if (picked != null) {
+                        setDialogState(() => checkIn = picked);
+                      }
+                    },
+                    icon: const Icon(Icons.access_time),
+                    label: Text(
+                      checkIn != null
+                          ? checkIn!.format(ctx)
+                          : 'Select check-in time',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  // --- Check-out Time ---
+                  const Text(
+                    'Check-out Time',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.primaryMaroon,
+                      side: BorderSide(
+                        color: AppColors.primaryMaroon.withValues(alpha: 0.35),
+                      ),
+                    ),
+                    onPressed: () async {
+                      final picked = await showTimePicker(
+                        context: ctx,
+                        initialTime:
+                            checkOut ?? const TimeOfDay(hour: 18, minute: 0),
+                      );
+                      if (picked != null) {
+                        setDialogState(() => checkOut = picked);
+                      }
+                    },
+                    icon: const Icon(Icons.access_time_filled),
+                    label: Text(
+                      checkOut != null
+                          ? checkOut!.format(ctx)
+                          : 'Select check-out time',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  // --- Allowed before check-in ---
+                  const Text(
+                    'Allowed Attendance Before Check-in (minutes)',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Before this, attendance cannot be marked.',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: allowedBeforeCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: 'e.g. 15',
+                      suffixText: 'min',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  // --- Allowed after check-in (late) ---
+                  const Text(
+                    'Allowed Attendance After Check-in (minutes)',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'After this, attendance will be marked as late.',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: allowedAfterCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: 'e.g. 15',
+                      suffixText: 'min',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Minimum Hours For Present',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'If user stays for less than this duration between check-in and check-out, mark absent.',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: minimumPresentHoursCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: 'e.g. 4',
+                      suffixText: 'hours',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  // --- Radius ---
+                  const Text(
+                    'Attendance Radius (meters)',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Members must be within this radius to scan QR.',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: radiusCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: 'e.g. 100',
+                      suffixText: 'm',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryMaroon,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: () {
+                  final radius =
+                      int.tryParse(radiusCtrl.text.trim()) ??
+                      _configuredRadiusMeters;
+                  final allowedBefore =
+                      int.tryParse(allowedBeforeCtrl.text.trim()) ??
+                      _configuredAllowedBeforeMinutes;
+                  final allowedAfter =
+                      int.tryParse(allowedAfterCtrl.text.trim()) ??
+                      _configuredAllowedAfterMinutes;
+                  final minimumPresentHours =
+                      double.tryParse(minimumPresentHoursCtrl.text.trim()) ??
+                      _configuredMinimumPresentHours;
+                  final checkInStr = checkIn != null
+                      ? '${checkIn!.hour.toString().padLeft(2, '0')}:${checkIn!.minute.toString().padLeft(2, '0')}'
+                      : null;
+                  final checkOutStr = checkOut != null
+                      ? '${checkOut!.hour.toString().padLeft(2, '0')}:${checkOut!.minute.toString().padLeft(2, '0')}'
+                      : null;
+
+                  Navigator.pop(ctx, <String, dynamic>{
+                    'radius': radius,
+                    'allowedBefore': allowedBefore,
+                    'allowedAfter': allowedAfter,
+                    'minimumPresentHours': minimumPresentHours,
+                    'checkInStr': checkInStr,
+                    'checkOutStr': checkOutStr,
+                  });
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    final lat = _configuredLat;
+    final lng = _configuredLng;
+    if (settingsResult != null && (lat == null || lng == null)) {
+      _showSnack('Set current location first before saving settings.');
+    } else if (settingsResult != null && lat != null && lng != null) {
+      final radius = settingsResult['radius'] as int;
+      final allowedBefore = settingsResult['allowedBefore'] as int;
+      final allowedAfter = settingsResult['allowedAfter'] as int;
+      final minimumPresentHours =
+          settingsResult['minimumPresentHours'] as double;
+      final checkInStr = settingsResult['checkInStr'] as String?;
+      final checkOutStr = settingsResult['checkOutStr'] as String?;
+
+      if (mounted) {
+        setState(() => _isSavingSettings = true);
+      }
+      try {
+        final response = await AttendanceService.setAttendanceLocation(
+          latitude: lat,
+          longitude: lng,
+          radiusMeters: radius,
+          checkInTime: checkInStr,
+          checkOutTime: checkOutStr,
+          allowedBeforeMinutes: allowedBefore,
+          allowedAfterMinutes: allowedAfter,
+          minimumPresentHours: minimumPresentHours,
+        );
+        if (mounted) {
+          setState(() {
+            _configuredRadiusMeters = radius;
+            _configuredAllowedBeforeMinutes = allowedBefore;
+            _configuredAllowedAfterMinutes = allowedAfter;
+            _configuredMinimumPresentHours = minimumPresentHours;
+            _configuredCheckInTime = checkInStr;
+            _configuredCheckOutTime = checkOutStr;
+          });
+        }
+        _showSnack(response['message']?.toString() ?? 'Settings saved.');
+      } catch (e) {
+        _showSnack(e.toString().replaceFirst('Exception: ', ''));
+      } finally {
+        if (mounted) setState(() => _isSavingSettings = false);
+      }
+    }
+
+    radiusCtrl.dispose();
+    allowedBeforeCtrl.dispose();
+    allowedAfterCtrl.dispose();
+    minimumPresentHoursCtrl.dispose();
+  }
+
+  TimeOfDay? _parseTimeOfDay(String hhmm) {
+    final parts = hhmm.split(':');
+    if (parts.length < 2) return null;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h == null || m == null) return null;
+    return TimeOfDay(hour: h, minute: m);
+  }
+
   Widget _buildGenerateTab() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
@@ -1270,8 +2465,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         children: [
           Text(
             widget.canSetAttendanceLocation
-                ? 'Only Pathak Admin can set the attendance location. Management can generate QR only from this configured location within 100m.'
-                : 'QR can be generated only at the location configured by Pathak Admin, within 100m radius.',
+                ? 'Only Pathak Admin can set the attendance location. Management can generate QR only from configured location.'
+                : 'QR can be generated only at the location configured by Pathak Admin, within the allowed radius.',
             style: const TextStyle(
               color: AppColors.primaryMaroon,
               fontSize: 13,
@@ -1279,6 +2474,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
             ),
           ),
           const SizedBox(height: 12),
+          // --- Configured location info card ---
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -1302,20 +2498,36 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Configured Location: ${_configuredLat!.toStringAsFixed(7)}, ${_configuredLng!.toStringAsFixed(7)}',
+                        'Location: ${_configuredLat!.toStringAsFixed(7)}, ${_configuredLng!.toStringAsFixed(7)}',
                         style: const TextStyle(
                           color: AppColors.primaryMaroon,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 4),
                       Text(
-                        'Allowed Radius: ${_configuredRadiusMeters}m',
+                        'Radius: ${_configuredRadiusMeters}m',
+                        style: const TextStyle(color: AppColors.primaryMaroon),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Check-in: ${_configuredCheckInTime ?? 'Not set'}  |  Check-out: ${_configuredCheckOutTime ?? 'Not set'}',
+                        style: const TextStyle(color: AppColors.primaryMaroon),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Allowed window: $_configuredAllowedBeforeMinutes min before check-in | Late after $_configuredAllowedAfterMinutes min',
+                        style: const TextStyle(color: AppColors.primaryMaroon),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Present if stayed at least: $_minimumPresentHoursLabel hour(s)',
                         style: const TextStyle(color: AppColors.primaryMaroon),
                       ),
                     ],
                   ),
           ),
+          // --- Admin-only: set location + settings ---
           if (widget.canSetAttendanceLocation) ...[
             const SizedBox(height: 12),
             ElevatedButton.icon(
@@ -1348,8 +2560,27 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
               ),
             ),
             const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _isSavingSettings
+                  ? null
+                  : _openAttendanceSettingsDialog,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+                side: const BorderSide(color: AppColors.primaryMaroon),
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+              icon: _isSavingSettings
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.settings),
+              label: const Text('Attendance Settings'),
+            ),
+            const SizedBox(height: 4),
             const Text(
-              'This uses your current GPS location and sets 100m allowed radius.',
+              'Set check-in time, attendance window, minimum present hours, and radius.',
               style: TextStyle(
                 color: AppColors.primaryMaroon,
                 fontSize: 12,
@@ -1468,9 +2699,212 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   Widget _buildScanTab() {
     final isSecureWeb = _isSecureWebContext;
 
+    if (_shouldBlockScannerForCheckoutCooldown) {
+      _pauseAllScanners();
+      final allowedAt = _checkoutAllowedAt;
+      final unlockMessage = allowedAt == null
+          ? 'Checkout is not available yet.'
+          : 'Checkout can be marked after ${_formatTimeLabel(allowedAt)}.';
+
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Center(
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: AppColors.primaryMaroon.withValues(alpha: 0.2),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryMaroon.withValues(alpha: 0.08),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.hourglass_top_rounded,
+                    color: AppColors.primaryMaroon,
+                    size: 38,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Checkout Not Allowed Yet',
+                  style: TextStyle(
+                    color: AppColors.primaryMaroon,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryMaroon.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Column(
+                    children: [
+                      const Text(
+                        'Time Remaining',
+                        style: TextStyle(
+                          color: AppColors.primaryMaroon,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _checkoutCooldownRemainingLabel,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: AppColors.primaryMaroon,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: LinearProgressIndicator(
+                          value: _checkoutCooldownProgress,
+                          minHeight: 8,
+                          backgroundColor: AppColors.primaryMaroon.withValues(
+                            alpha: 0.12,
+                          ),
+                          valueColor: const AlwaysStoppedAnimation<Color>(
+                            AppColors.primaryMaroon,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  unlockMessage,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: AppColors.primaryMaroon,
+                    fontSize: 13,
+                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'You can open checkout scanner after cooldown ends.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.grey,
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (_shouldShowCheckoutScannerUnlockCard && !_isCheckoutScannerUnlocked) {
+      _pauseAllScanners();
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Center(
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: AppColors.primaryMaroon.withValues(alpha: 0.2),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 68,
+                  height: 68,
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryMaroon.withValues(alpha: 0.08),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.qr_code_scanner_rounded,
+                    color: AppColors.primaryMaroon,
+                    size: 38,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Checkout Ready',
+                  style: TextStyle(
+                    color: AppColors.primaryMaroon,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Cooldown finished. Tap the button below to open scanner and mark checkout.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: AppColors.primaryMaroon,
+                    fontSize: 13,
+                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () {
+                      setState(() {
+                        _isCheckoutScannerUnlocked = true;
+                        // Allow first scan attempt in checkout mode.
+                        _hasMarkedFromCurrentScan = false;
+                      });
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryMaroon,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    label: const Text('Open Scanner For Checkout'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     // Scanner widget: custom web-native scanner on web, MobileScanner on native.
     Widget scannerWidget;
     if (kIsWeb && !isSecureWeb) {
+      _pauseAllScanners();
       scannerWidget = Container(
         color: Colors.black,
         alignment: Alignment.center,
@@ -1509,6 +2943,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       );
     } else {
       // Native (Android / iOS): use mobile_scanner.
+      _resumeNativeScanner();
       scannerWidget = MobileScanner(
         controller: _scannerController,
         onDetect: (capture) {
@@ -1594,6 +3029,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
   @override
   Widget build(BuildContext context) {
+    _syncScannerLifecycle();
+
     if (widget.scanOnly) {
       return Scaffold(
         backgroundColor: AppColors.background,
@@ -1614,7 +3051,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     ];
 
     final views = <Widget>[
-      _buildScanTab(),
+      _isScanTabActive ? _buildScanTab() : const SizedBox.shrink(),
       _buildMyAttendanceTab(),
       if (widget.canViewByUserAttendance) _buildAttendanceByUserTab(),
       if (widget.canGenerateQr) _buildGenerateTab(),
