@@ -1,0 +1,194 @@
+name: Branch Flow CI/CD
+
+on:
+  push:
+    branches:
+      - develop
+      - release
+  pull_request:
+    types:
+      - closed
+    branches:
+      - develop
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  develop_to_release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure branch flow token exists
+        run: |
+          if [ -z "${{ secrets.BRANCH_FLOW_TOKEN }}" ]; then
+            echo "Missing secret: BRANCH_FLOW_TOKEN"
+            echo "Create a PAT with repo permissions and add it as repository secret BRANCH_FLOW_TOKEN."
+            exit 1
+          fi
+
+      - name: Create or reuse PR (develop -> release)
+        uses: actions/github-script@v7
+        env:
+          BRANCH_FLOW_REVIEWER: ${{ vars.BRANCH_FLOW_REVIEWER }}
+        with:
+          github-token: ${{ secrets.BRANCH_FLOW_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const head = 'develop';
+            const base = 'release';
+            const reviewer = process.env.BRANCH_FLOW_REVIEWER;
+
+            const existing = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              head: `${owner}:${head}`,
+              base,
+              per_page: 100,
+            });
+
+            if (existing.data.length > 0) {
+              core.info(`Open PR already exists: #${existing.data[0].number}`);
+              return;
+            }
+
+            const pr = await github.rest.pulls.create({
+              owner,
+              repo,
+              title: 'Promote develop to release',
+              head,
+              base,
+              body: 'Automated PR created on push to develop.\n\nThis PR is intentionally NOT auto-merged. Manual approval is required.',
+            });
+
+            core.info(`Created PR #${pr.data.number}`);
+
+            if (reviewer) {
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner,
+                  repo,
+                  pull_number: pr.data.number,
+                  reviewers: [reviewer],
+                });
+                core.info(`Requested reviewer: ${reviewer}`);
+              } catch (error) {
+                core.warning(`Could not request reviewer '${reviewer}': ${error.message}`);
+              }
+            }
+
+  release_to_master:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure branch flow token exists
+        run: |
+          if [ -z "${{ secrets.BRANCH_FLOW_TOKEN }}" ]; then
+            echo "Missing secret: BRANCH_FLOW_TOKEN"
+            echo "Create a PAT with repo permissions and add it as repository secret BRANCH_FLOW_TOKEN."
+            exit 1
+          fi
+
+      - name: Create or reuse PR (release -> master)
+        uses: actions/github-script@v7
+        env:
+          BRANCH_FLOW_REVIEWER: ${{ vars.BRANCH_FLOW_REVIEWER }}
+        with:
+          github-token: ${{ secrets.BRANCH_FLOW_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const head = 'release';
+            const base = 'master';
+            const reviewer = process.env.BRANCH_FLOW_REVIEWER;
+
+            const existing = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              head: `${owner}:${head}`,
+              base,
+              per_page: 100,
+            });
+
+            if (existing.data.length > 0) {
+              core.info(`Open PR already exists: #${existing.data[0].number}`);
+              return;
+            }
+
+            const pr = await github.rest.pulls.create({
+              owner,
+              repo,
+              title: 'Promote release to master',
+              head,
+              base,
+              body: 'Automated PR created on push to release.\n\nThis PR is intentionally NOT auto-merged. Manual approval is required.',
+            });
+
+            core.info(`Created PR #${pr.data.number}`);
+
+            if (reviewer) {
+              try {
+                await github.rest.pulls.requestReviewers({
+                  owner,
+                  repo,
+                  pull_number: pr.data.number,
+                  reviewers: [reviewer],
+                });
+                core.info(`Requested reviewer: ${reviewer}`);
+              } catch (error) {
+                core.warning(`Could not request reviewer '${reviewer}': ${error.message}`);
+              }
+            }
+
+  delete_feature_branch:
+    if: |
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'develop' &&
+      startsWith(github.event.pull_request.head.ref, 'feature/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure branch flow token exists
+        run: |
+          if [ -z "${{ secrets.BRANCH_FLOW_TOKEN }}" ]; then
+            echo "Missing secret: BRANCH_FLOW_TOKEN"
+            echo "Create a PAT with repo permissions and add it as repository secret BRANCH_FLOW_TOKEN."
+            exit 1
+          fi
+
+      - name: Delete merged feature branch
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.BRANCH_FLOW_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = context.payload.pull_request.head.ref;
+            const sourceRepo = context.payload.pull_request.head.repo.full_name;
+            const currentRepo = `${owner}/${repo}`;
+            const protectedBranches = new Set(['develop', 'release', 'master']);
+
+            if (protectedBranches.has(branch)) {
+              core.info(`Skipping protected branch: ${branch}`);
+              return;
+            }
+
+            if (sourceRepo !== currentRepo) {
+              core.info(`Skipping branch deletion for fork PR: ${sourceRepo}`);
+              return;
+            }
+
+            try {
+              await github.rest.git.deleteRef({
+                owner,
+                repo,
+                ref: `heads/${branch}`,
+              });
+              core.info(`Deleted branch: ${branch}`);
+            } catch (error) {
+              core.warning(`Branch deletion failed: ${error.message}`);
+            }
