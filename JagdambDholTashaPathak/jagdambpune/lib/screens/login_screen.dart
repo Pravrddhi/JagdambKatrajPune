@@ -11,6 +11,7 @@ import '../config/api_endpoints.dart';
 import 'home_screen.dart';
 import '../services/bug_report_service.dart';
 import '../services/web_api_service.dart';
+import '../services/fcm_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../widgets/common_button.dart';
 import '../widgets/input_box.dart';
@@ -35,6 +36,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final FocusNode _pinFocusNode = FocusNode();
 
   final LocalAuthentication auth = LocalAuthentication();
+  final FCMService _fcmService = FCMService();
   final storage = const FlutterSecureStorage();
   bool _isLoggingIn = false;
   String _errorMessage = '';
@@ -94,6 +96,10 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
 
+    if (!kIsWeb) {
+      _refreshStoredBiometricState();
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<FeatureFlagsProvider>().fetchFeatureFlags(force: true);
@@ -106,46 +112,15 @@ class _LoginScreenState extends State<LoginScreen> {
         });
       }
     });
-
-    if (!kIsWeb) {
-      _checkDeviceRegistration();
-    }
   }
 
-  Future<void> _checkDeviceRegistration() async {
-    try {
-      String deviceId = await getDeviceId();
-      final response = await http.post(
-        Uri.parse(ApiEndpoints.checkDeviceRegistration),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'device_id': deviceId}),
-      );
+  Future<void> _refreshStoredBiometricState() async {
+    final storedPin = await storage.read(key: ApiEndpoints.pinKey);
+    if (!mounted) return;
 
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200 && data['status'] == true) {
-        setState(() => _isDeviceRegistered = true);
-        // Only auto-attempt biometric if device is registered
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _attemptBiometricLogin();
-        });
-      } else {
-        await BugReportService.reportApiFailure(
-          title: 'Check device registration failed',
-          errorMessage: response.body,
-          pageUrl: '/login',
-          statusCode: response.statusCode,
-          endpoint: ApiEndpoints.checkDeviceRegistration,
-        );
-      }
-    } catch (e) {
-      await BugReportService.reportApiFailure(
-        title: 'Check device registration exception',
-        errorMessage: e.toString(),
-        pageUrl: '/login',
-        endpoint: ApiEndpoints.checkDeviceRegistration,
-      );
-      // Network error — skip biometric silently
-    }
+    setState(() {
+      _isDeviceRegistered = storedPin != null && storedPin.length == 6;
+    });
   }
 
   Future<void> _attemptBiometricLogin() async {
@@ -393,6 +368,14 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       await storage.write(key: ApiEndpoints.accessTokenKey, value: accessToken);
+      if (!isWeb) {
+        await storage.write(key: ApiEndpoints.pinKey, value: pin);
+        if (mounted) {
+          setState(() {
+            _isDeviceRegistered = true;
+          });
+        }
+      }
       if (refreshToken.isNotEmpty) {
         await storage.write(
           key: ApiEndpoints.refreshTokenKey,
@@ -425,6 +408,16 @@ class _LoginScreenState extends State<LoginScreen> {
       // drawer correctly reflects this user's configuration.
       if (mounted) {
         context.read<FeatureFlagsProvider>().fetchFeatureFlags(force: true);
+      }
+
+      if (!isWeb) {
+        try {
+          // Always sync token after successful mobile login.
+          _fcmService.listenTokenRefresh();
+          await _fcmService.syncCurrentTokenToServer(isLogin: false);
+        } catch (_) {
+          // Non-blocking: login should continue even if FCM sync fails.
+        }
       }
 
       if (!mounted) return;
@@ -510,131 +503,158 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     }
 
+    final mediaQuery = MediaQuery.of(context);
+    final formBottomPadding =
+        24.0 + mediaQuery.padding.bottom + mediaQuery.viewInsets.bottom;
+
     return Scaffold(
       backgroundColor: AppColors.primaryMaroon,
       body: Stack(
         children: [
-          Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 520),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 12,
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Image.asset(
-                        'assets/logos/splash_logo.png',
-                        height: 120,
-                        fit: BoxFit.contain,
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.fromLTRB(32, 24, 32, formBottomPadding),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: constraints.maxHeight - 24,
+                        maxWidth: 520,
                       ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'Login',
-                        style: TextStyle(
-                          color: AppColors.textLight,
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 12,
                         ),
-                      ),
-                      const SizedBox(height: 32),
-                      PremiumInputBox(
-                        controller: _pinController,
-                        label: 'Enter 6-digit PIN',
-                        isPin: true,
-                        onChanged: (_) {
-                          if (_errorMessage.isNotEmpty) {
-                            setState(() {
-                              _errorMessage = '';
-                            });
-                          }
-                        },
-                      ),
-                      if (_errorMessage.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Text(
-                            _errorMessage,
-                            style: const TextStyle(
-                              color: AppColors.errorRed,
-                              fontSize: 14,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Image.asset(
+                              'assets/logos/splash_logo.png',
+                              height: 120,
+                              fit: BoxFit.contain,
                             ),
-                          ),
-                        ),
-                      const SizedBox(height: 24),
-                      PremiumButton(
-                        text: 'Login',
-                        onPressed: _login,
-                        isLoading: _isLoggingIn,
-                        isEnabled: !_isLoggingIn,
-                      ),
-                      if (_isDeviceRegistered) ...[
-                        const SizedBox(height: 12),
-                        GestureDetector(
-                          onTap: _attemptBiometricLogin,
-                          child: const Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.fingerprint,
-                                color: AppColors.accentYellow,
-                                size: 32,
+                            const SizedBox(height: 16),
+                            const Text(
+                              'Login',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: AppColors.textLight,
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
                               ),
-                              const SizedBox(width: 8),
-                              Text(
-                                'Login with Biometric',
-                                style: TextStyle(
-                                  color: AppColors.accentYellow,
-                                  fontSize: 14,
+                            ),
+                            const SizedBox(height: 32),
+                            PremiumInputBox(
+                              controller: _pinController,
+                              label: 'Enter 6-digit PIN',
+                              isPin: true,
+                              onChanged: (_) {
+                                if (_errorMessage.isNotEmpty) {
+                                  setState(() {
+                                    _errorMessage = '';
+                                  });
+                                }
+                              },
+                            ),
+                            if (_errorMessage.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8),
+                                child: Text(
+                                  _errorMessage,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    color: AppColors.errorRed,
+                                    fontSize: 14,
+                                  ),
+                                ),
+                              ),
+                            const SizedBox(height: 24),
+                            PremiumButton(
+                              text: 'Login',
+                              onPressed: _login,
+                              isLoading: _isLoggingIn,
+                              isEnabled: !_isLoggingIn,
+                            ),
+                            if (_isDeviceRegistered) ...[
+                              const SizedBox(height: 12),
+                              GestureDetector(
+                                onTap: _attemptBiometricLogin,
+                                child: const Center(
+                                  child: Wrap(
+                                    alignment: WrapAlignment.center,
+                                    crossAxisAlignment:
+                                        WrapCrossAlignment.center,
+                                    spacing: 8,
+                                    runSpacing: 4,
+                                    children: [
+                                      Icon(
+                                        Icons.fingerprint,
+                                        color: AppColors.accentYellow,
+                                        size: 32,
+                                      ),
+                                      Text(
+                                        'Login with Biometric',
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          color: AppColors.accentYellow,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ],
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 16),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          if (flags?.showRegistration ?? false) ...[
-                            GestureDetector(
-                              onTap: () {
-                                Navigator.pushNamed(context, '/register');
-                              },
-                              child: const Text(
-                                "Registration",
-                                style: TextStyle(
-                                  color: AppColors.accentYellow,
-                                  decoration: TextDecoration.underline,
-                                  fontSize: 14,
-                                ),
-                              ),
-                            ),
-                          ] else ...[
-                            GestureDetector(
-                              onTap: () {
-                                Navigator.pushNamed(context, '/resetPin');
-                              },
-                              child: const Text(
-                                "Reset PIN",
-                                style: TextStyle(
-                                  color: AppColors.accentYellow,
-                                  decoration: TextDecoration.underline,
-                                  fontSize: 14,
-                                ),
-                              ),
+                            const SizedBox(height: 16),
+                            Wrap(
+                              alignment: WrapAlignment.center,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              spacing: 8,
+                              runSpacing: 4,
+                              children: [
+                                if (flags?.showRegistration ?? false) ...[
+                                  GestureDetector(
+                                    onTap: () {
+                                      Navigator.pushNamed(context, '/register');
+                                    },
+                                    child: const Text(
+                                      'Registration',
+                                      style: TextStyle(
+                                        color: AppColors.accentYellow,
+                                        decoration: TextDecoration.underline,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                ] else ...[
+                                  GestureDetector(
+                                    onTap: () {
+                                      Navigator.pushNamed(context, '/resetPin');
+                                    },
+                                    child: const Text(
+                                      'Reset PIN',
+                                      style: TextStyle(
+                                        color: AppColors.accentYellow,
+                                        decoration: TextDecoration.underline,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
                           ],
-                        ],
+                        ),
                       ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
             ),
           ),
 

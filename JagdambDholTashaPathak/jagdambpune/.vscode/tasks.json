@@ -1,0 +1,17 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run iPhone Debug",
+			"type": "shell",
+			"command": "flutter",
+			"args": [
+				"run",
+				"-d",
+				"00008140-000809E81A0A801C"
+			],
+			"isBackground": false,
+			"group": "build"
+		}
+	]
+}

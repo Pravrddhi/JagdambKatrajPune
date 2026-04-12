@@ -1,15 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:android_id/android_id.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:local_auth/local_auth.dart';
 import '../theme/app_colors.dart';
 import '../widgets/input_box.dart';
 import '../widgets/common_button.dart';
 import '../widgets/dropdown.dart';
-import 'package:device_info_plus/device_info_plus.dart';
-import 'package:android_id/android_id.dart';
 import 'home_screen.dart';
 import '../config/api_endpoints.dart';
 import 'package:flutter/services.dart';
@@ -23,15 +22,15 @@ class RegistrationScreen extends StatefulWidget {
 }
 
 class _RegistrationScreenState extends State<RegistrationScreen> {
-  final LocalAuthentication _auth = LocalAuthentication();
-
   // Controllers for input fields
   final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _adhaarNumberController = TextEditingController();
   final TextEditingController _firstNameController = TextEditingController();
   final TextEditingController _lastNameController = TextEditingController();
 
   // Focus node to detect phone input losing focus
   final FocusNode _phoneFocusNode = FocusNode();
+  final FocusNode _adhaarFocusNode = FocusNode();
 
   // Error tracking
   Map<String, String?> errors = {};
@@ -46,6 +45,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   // Loading states
   bool _isCheckingPhone = false;
+  bool _isCheckingAdhaar = false;
   bool _isFormValid = false;
   bool isLoading = false;
 
@@ -54,6 +54,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
   // Debounce timer for phone input validation to reduce API calls
   Timer? _debounceTimer;
+  Timer? _adhaarDebounceTimer;
 
   @override
   void initState() {
@@ -63,6 +64,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     _firstNameController.addListener(_validateForm);
     _lastNameController.addListener(_validateForm);
     _phoneController.addListener(_validateForm);
+    _adhaarNumberController.addListener(_validateForm);
 
     // Load instrument options from API
     _loadInstruments();
@@ -71,9 +73,17 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     _phoneController.addListener(() {
       _onPhoneChanged(_phoneController.text.trim());
     });
+    _adhaarNumberController.addListener(() {
+      _onAdhaarChanged(_adhaarNumberController.text.trim());
+    });
     _phoneFocusNode.addListener(() {
       if (!_phoneFocusNode.hasFocus) {
         _checkPhoneNumberExists(_phoneController.text.trim());
+      }
+    });
+    _adhaarFocusNode.addListener(() {
+      if (!_adhaarFocusNode.hasFocus) {
+        _checkAdhaarNumberExists(_adhaarNumberController.text.trim());
       }
     });
   }
@@ -84,6 +94,17 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     _debounceTimer = Timer(const Duration(milliseconds: 500), () {
       if (value.length == 10) {
         _checkPhoneNumberExists(value);
+      }
+    });
+  }
+
+  void _onAdhaarChanged(String value) {
+    if (_adhaarDebounceTimer?.isActive ?? false) {
+      _adhaarDebounceTimer!.cancel();
+    }
+    _adhaarDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+      if (value.length == 4) {
+        _checkAdhaarNumberExists(value);
       }
     });
   }
@@ -203,9 +224,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         validateFirstName(_firstNameController.text) &&
         validateLastName(_lastNameController.text) &&
         validatePhone(_phoneController.text) &&
+        validateAdhaarNumber(_adhaarNumberController.text) &&
         selectedDob != null &&
         validateSelection(selectedSex) &&
         validateSelection(selectedInstrument) &&
+        selectedJoiningYear != null &&
         _fieldErrors.values.every((error) => error == null);
 
     setState(() {
@@ -217,9 +240,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   bool validateFirstName(String firstName) => firstName.trim().isNotEmpty;
   bool validateLastName(String lastName) => lastName.trim().isNotEmpty;
   bool validatePhone(String phone) => RegExp(r'^\d{10}$').hasMatch(phone);
+  bool validateAdhaarNumber(String value) => RegExp(r'^\d{4}$').hasMatch(value);
   bool validateSelection(String? value) => value != null;
 
-  bool _isAtLeast18(DateTime dob) {
+  bool _isAtLeast16(DateTime dob) {
     final now = DateTime.now();
     int age = now.year - dob.year;
     final hasNotHadBirthdayYet =
@@ -227,7 +251,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     if (hasNotHadBirthdayYet) {
       age -= 1;
     }
-    return age >= 18;
+    return age >= 16;
   }
 
   Future<void> _showUnderAgePopup() async {
@@ -237,7 +261,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       builder: (_) => AlertDialog(
         title: const Text('Access Denied'),
         content: const Text(
-          'below 18 are not allowed please ask your parents to login',
+          'below 16 are not allowed please ask your parents to login',
         ),
         actions: [
           TextButton(
@@ -305,20 +329,142 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     _validateForm();
   }
 
-  /// Get unique device ID for Android or iOS platforms
+  Future<bool> _checkAdhaarNumberExists(String adhaarNumber) async {
+    if (!validateAdhaarNumber(adhaarNumber)) {
+      return false;
+    }
+
+    setState(() {
+      _isCheckingAdhaar = true;
+      _fieldErrors['adhaar_number'] = null;
+    });
+
+    try {
+      final response = await http.post(
+        Uri.parse(ApiEndpoints.checkAdhaarNumber),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'adhaar_number': int.parse(adhaarNumber),
+          'pathak_id': ApiEndpoints.pathakIdInt,
+        }),
+      );
+
+      bool isDuplicate = false;
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        isDuplicate = data['status'] == true;
+      }
+
+      setState(() {
+        _isCheckingAdhaar = false;
+        if (response.statusCode == 200) {
+          if (isDuplicate) {
+            _fieldErrors['adhaar_number'] =
+                'Aadhaar number already registered.';
+          }
+        } else {
+          _fieldErrors['adhaar_number'] = ApiEndpoints.genericApiFailureMessage;
+        }
+      });
+
+      if (response.statusCode != 200) {
+        await BugReportService.reportApiFailure(
+          title: 'Check Aadhaar number API failed',
+          errorMessage: response.body,
+          pageUrl: '/registration',
+          statusCode: response.statusCode,
+          endpoint: ApiEndpoints.checkAdhaarNumber,
+        );
+      }
+
+      _validateForm();
+      return isDuplicate;
+    } catch (e) {
+      await BugReportService.reportApiFailure(
+        title: 'Check Aadhaar number API exception',
+        errorMessage: e.toString(),
+        pageUrl: '/registration',
+        endpoint: ApiEndpoints.checkAdhaarNumber,
+      );
+      setState(() {
+        _isCheckingAdhaar = false;
+        _fieldErrors['adhaar_number'] = ApiEndpoints.genericApiFailureMessage;
+      });
+      _validateForm();
+      return false;
+    }
+  }
+
   Future<String> _getDeviceId() async {
     const AndroidId androidIdPlugin = AndroidId();
     final deviceInfo = DeviceInfoPlugin();
 
     if (Platform.isAndroid) {
-      String? androidId = await androidIdPlugin.getId();
-      return androidId ?? "unknown";
-    } else if (Platform.isIOS) {
-      IosDeviceInfo iosInfo = await deviceInfo.iosInfo;
-      return iosInfo.identifierForVendor ?? "unknown";
-    } else {
-      return "unsupported_platform";
+      final androidId = await androidIdPlugin.getId();
+      return androidId ?? 'unknown';
     }
+    if (Platform.isIOS) {
+      final iosInfo = await deviceInfo.iosInfo;
+      return iosInfo.identifierForVendor ?? 'unknown';
+    }
+    return 'unsupported_platform';
+  }
+
+  String? _extractFirstErrorText(dynamic value) {
+    if (value == null) return null;
+    if (value is String && value.trim().isNotEmpty) {
+      return value.trim();
+    }
+    if (value is List && value.isNotEmpty) {
+      final first = value.first;
+      if (first is String && first.trim().isNotEmpty) {
+        return first.trim();
+      }
+    }
+    return null;
+  }
+
+  void _applyRegistrationApiErrors(String responseBody) {
+    String? resolvedError;
+    String? phoneError;
+    String? adhaarError;
+
+    try {
+      final decoded = jsonDecode(responseBody);
+      if (decoded is Map<String, dynamic>) {
+        // Some backends return field errors at top-level, others nest under "message".
+        final dynamic messagePayload = decoded['message'];
+        final List<dynamic> payloadsToScan = [decoded];
+        if (messagePayload is Map<String, dynamic>) {
+          payloadsToScan.add(messagePayload);
+        }
+
+        for (final payload in payloadsToScan) {
+          if (payload is! Map<String, dynamic>) continue;
+
+          phoneError ??= _extractFirstErrorText(payload['phone_number']);
+          adhaarError ??= _extractFirstErrorText(payload['adhaar_number']);
+          resolvedError ??= _extractFirstErrorText(payload['device_id']);
+        }
+
+        resolvedError ??= _extractFirstErrorText(decoded['detail']);
+        resolvedError ??= _extractFirstErrorText(decoded['error']);
+        if (resolvedError == null) {
+          final messageText = decoded['message'];
+          if (messageText is String && messageText.trim().isNotEmpty) {
+            resolvedError = messageText.trim();
+          }
+        }
+      }
+    } catch (_) {
+      // Keep generic fallback below for non-JSON responses.
+    }
+
+    setState(() {
+      _fieldErrors['phone_number'] = phoneError;
+      _fieldErrors['adhaar_number'] = adhaarError;
+      _errorMessage = resolvedError ?? ApiEndpoints.genericApiFailureMessage;
+    });
   }
 
   /// Submits registration data to backend API
@@ -335,6 +481,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     if (!validatePhone(_phoneController.text)) {
       errors['phone_number'] = "Phone number must be 10 digits only.";
     }
+    if (!validateAdhaarNumber(_adhaarNumberController.text)) {
+      errors['adhaar_number'] = "Aadhaar number must be exactly 4 digits.";
+    }
     if (selectedDob == null) {
       errors['dob'] = 'Date of Birth is required.';
     }
@@ -343,6 +492,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     }
     if (!validateSelection(selectedInstrument)) {
       errors['instrument'] = "Please select an instrument.";
+    }
+    if (selectedJoiningYear == null) {
+      errors['joining_year'] = 'Please select joining year.';
     }
 
     if (errors.isNotEmpty) {
@@ -368,16 +520,17 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
           "phone_number": _phoneController.text,
+          "adhaar_number": int.tryParse(_adhaarNumberController.text),
           "first_name": _firstNameController.text,
           "last_name": _lastNameController.text,
           "gender": selectedSex,
           "instrument": selectedInstrument,
+          "pathak_id": ApiEndpoints.pathakIdInt,
           "dob": selectedDob != null
               ? '${selectedDob!.year}-${selectedDob!.month.toString().padLeft(2, '0')}-${selectedDob!.day.toString().padLeft(2, '0')}'
               : null,
           "joining_year": selectedJoiningYear,
           "device_id": await _getDeviceId(),
-          "pathak_id": ApiEndpoints.pathakId,
         }),
       );
 
@@ -386,7 +539,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       if (response.statusCode == 201) {
         final data = jsonDecode(response.body);
         final accessToken = data['access_token'];
-        await _promptBiometricAfterNotificationPermission();
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -406,9 +558,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           endpoint: ApiEndpoints.register,
         );
 
-        setState(() {
-          _errorMessage = ApiEndpoints.genericApiFailureMessage;
-        });
+        _applyRegistrationApiErrors(response.body);
       }
     } catch (e) {
       await BugReportService.reportApiFailure(
@@ -424,312 +574,416 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     }
   }
 
-  Future<void> _promptBiometricAfterNotificationPermission() async {
-    try {
-      final isSupported = await _auth.isDeviceSupported();
-      if (!isSupported) return;
-      final canCheck = await _auth.canCheckBiometrics;
-      if (!canCheck) return;
-      await _auth.authenticate(
-        localizedReason: 'Enable biometric for quick login',
-        options: const AuthenticationOptions(
-          stickyAuth: false,
-          biometricOnly: true,
-        ),
-      );
-    } catch (_) {
-      // Skip silently if biometric is unavailable or user cancels.
-    }
-  }
-
   @override
   void dispose() {
     // Clean up controllers and focus node to prevent memory leaks
     _phoneController.dispose();
+    _adhaarNumberController.dispose();
     _firstNameController.dispose();
     _lastNameController.dispose();
     _phoneFocusNode.dispose();
+    _adhaarFocusNode.dispose();
 
     _debounceTimer?.cancel();
+    _adhaarDebounceTimer?.cancel();
 
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final isIos = Platform.isIOS;
+    final mediaQuery = MediaQuery.of(context);
+    final formBottomPadding =
+        (isIos ? 32.0 : 16.0) +
+        mediaQuery.padding.bottom +
+        mediaQuery.viewInsets.bottom;
+
     return Scaffold(
       backgroundColor: AppColors.primaryMaroon,
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Back button top-left aligned
-              Align(
-                alignment: Alignment.topLeft,
-                child: IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  color: AppColors.accentYellow,
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ),
-              const SizedBox(height: 8),
-
-              // Splash logo image
-              Image.asset(
-                'assets/logos/splash_logo.png',
-                height: 120,
-                fit: BoxFit.contain,
-              ),
-              const SizedBox(height: 32),
-
-              // First Name input
-              PremiumInputBox(
-                controller: _firstNameController,
-                label: "First Name",
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z\s]')),
-                ],
-              ),
-              if (_fieldErrors['first_name'] != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4.0, left: 4.0),
-                  child: Text(
-                    _fieldErrors['first_name']!,
-                    style: const TextStyle(
-                      color: AppColors.accentYellow,
-                      fontSize: 13,
-                    ),
+      body: SafeArea(
+        top: isIos,
+        bottom: isIos,
+        child: Stack(
+          children: [
+            LayoutBuilder(
+              builder: (context, constraints) {
+                return SingleChildScrollView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.fromLTRB(
+                    24,
+                    isIos ? 72 : 88,
+                    24,
+                    formBottomPadding,
                   ),
-                ),
-              const SizedBox(height: 16),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        minHeight: constraints.maxHeight - (isIos ? 72 : 88),
+                        maxWidth: 520,
+                      ),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          const SizedBox(height: 8),
 
-              // Last Name input
-              PremiumInputBox(
-                controller: _lastNameController,
-                label: "Last Name",
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(RegExp(r'[a-zA-Z\s]')),
-                ],
-              ),
-              if (_fieldErrors['last_name'] != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4.0, left: 4.0),
-                  child: Text(
-                    _fieldErrors['last_name']!,
-                    style: const TextStyle(
-                      color: AppColors.accentYellow,
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 16),
-
-              // Phone Number input
-              PremiumInputBox(
-                controller: _phoneController,
-                label: "Phone Number",
-                keyboardType: TextInputType.phone,
-                maxLength: 10,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                focusNode: _phoneFocusNode,
-              ),
-              if (_isCheckingPhone)
-                const Padding(
-                  padding: EdgeInsets.only(top: 8.0, left: 4.0),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            AppColors.accentYellow,
+                          // Splash logo image
+                          Image.asset(
+                            'assets/logos/splash_logo.png',
+                            height: 120,
+                            fit: BoxFit.contain,
                           ),
-                        ),
+                          const SizedBox(height: 32),
+
+                          // First Name input
+                          PremiumInputBox(
+                            controller: _firstNameController,
+                            label: "First Name",
+                            inputFormatters: [
+                              FilteringTextInputFormatter.allow(
+                                RegExp(r'[a-zA-Z\s]'),
+                              ),
+                            ],
+                          ),
+                          if (_fieldErrors['first_name'] != null)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                top: 4.0,
+                                left: 4.0,
+                              ),
+                              child: Text(
+                                _fieldErrors['first_name']!,
+                                style: const TextStyle(
+                                  color: AppColors.accentYellow,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 16),
+
+                          // Last Name input
+                          PremiumInputBox(
+                            controller: _lastNameController,
+                            label: "Last Name",
+                            inputFormatters: [
+                              FilteringTextInputFormatter.allow(
+                                RegExp(r'[a-zA-Z\s]'),
+                              ),
+                            ],
+                          ),
+                          if (_fieldErrors['last_name'] != null)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                top: 4.0,
+                                left: 4.0,
+                              ),
+                              child: Text(
+                                _fieldErrors['last_name']!,
+                                style: const TextStyle(
+                                  color: AppColors.accentYellow,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 16),
+
+                          // Phone Number input
+                          PremiumInputBox(
+                            controller: _phoneController,
+                            label: "Phone Number",
+                            keyboardType: TextInputType.phone,
+                            maxLength: 10,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
+                            focusNode: _phoneFocusNode,
+                          ),
+                          if (_isCheckingPhone)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 8.0, left: 4.0),
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        AppColors.accentYellow,
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Checking phone number...',
+                                    style: TextStyle(
+                                      color: AppColors.accentYellow,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else if (_fieldErrors['phone_number'] != null)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                top: 4.0,
+                                left: 4.0,
+                              ),
+                              child: Text(
+                                _fieldErrors['phone_number']!,
+                                style: const TextStyle(
+                                  color: AppColors.accentYellow,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 16),
+                          PremiumInputBox(
+                            controller: _adhaarNumberController,
+                            label: "Aadhaar Number (Last 4 digits)",
+                            keyboardType: TextInputType.number,
+                            maxLength: 4,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.digitsOnly,
+                            ],
+                            focusNode: _adhaarFocusNode,
+                          ),
+                          if (_isCheckingAdhaar)
+                            const Padding(
+                              padding: EdgeInsets.only(top: 8.0, left: 4.0),
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        AppColors.accentYellow,
+                                      ),
+                                    ),
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Checking Aadhaar number...',
+                                    style: TextStyle(
+                                      color: AppColors.accentYellow,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else if (_fieldErrors['adhaar_number'] != null)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                top: 4.0,
+                                left: 4.0,
+                              ),
+                              child: Text(
+                                _fieldErrors['adhaar_number']!,
+                                style: const TextStyle(
+                                  color: AppColors.accentYellow,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 16),
+                          PremiumDropdown(
+                            label: "Gender",
+                            value: selectedSex,
+                            options: const ["Male", "Female", "Other"],
+                            onChanged: (val) {
+                              setState(() {
+                                selectedSex = val;
+                              });
+                              _validateForm();
+                            },
+                          ),
+                          if (_fieldErrors['sex'] != null)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                top: 4.0,
+                                left: 4.0,
+                              ),
+                              child: Text(
+                                _fieldErrors['sex']!,
+                                style: const TextStyle(
+                                  color: AppColors.accentYellow,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 16),
+                          GestureDetector(
+                            onTap: () async {
+                              final DateTime? picked = await showDatePicker(
+                                context: context,
+                                initialDate: selectedDob ?? DateTime(2000),
+                                firstDate: DateTime(1950),
+                                lastDate: DateTime.now(),
+                              );
+                              if (picked != null && picked != selectedDob) {
+                                setState(() {
+                                  selectedDob = picked;
+                                  _fieldErrors.remove('dob');
+                                });
+                                if (!_isAtLeast16(picked)) {
+                                  setState(() {
+                                    selectedDob = null;
+                                    _fieldErrors['dob'] =
+                                        'You must be 16 years old';
+                                  });
+                                  await _showUnderAgePopup();
+                                }
+                                _validateForm();
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 12,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryMaroon,
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: AppColors.accentYellow.withAlpha(77),
+                                    blurRadius: 12,
+                                    offset: const Offset(0, 4),
+                                  ),
+                                ],
+                              ),
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Text(
+                                    selectedDob != null
+                                        ? '${selectedDob!.day}/${selectedDob!.month}/${selectedDob!.year}'
+                                        : 'Date of Birth',
+                                    style: const TextStyle(
+                                      color: AppColors.textLight,
+                                      fontSize: 16,
+                                    ),
+                                  ),
+                                  const Icon(
+                                    Icons.calendar_today,
+                                    color: AppColors.accentYellow,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          if (_fieldErrors['dob'] != null)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                top: 4.0,
+                                left: 4.0,
+                              ),
+                              child: Text(
+                                _fieldErrors['dob']!,
+                                style: const TextStyle(
+                                  color: AppColors.accentYellow,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 16),
+                          PremiumDropdown(
+                            label: "Joining Year",
+                            value: selectedJoiningYear?.toString(),
+                            options: List.generate(
+                              DateTime.now().year >= 2011
+                                  ? (DateTime.now().year - 2011 + 1)
+                                  : 0,
+                              (index) =>
+                                  (DateTime.now().year - index).toString(),
+                            ),
+                            onChanged: (val) {
+                              setState(() {
+                                selectedJoiningYear = int.tryParse(val ?? '');
+                              });
+                              _validateForm();
+                            },
+                          ),
+                          const SizedBox(height: 16),
+                          PremiumDropdown(
+                            label: "Instrument",
+                            value: selectedInstrument,
+                            options: _instruments,
+                            onChanged: (val) {
+                              setState(() {
+                                selectedInstrument = val;
+                              });
+                              _validateForm();
+                            },
+                          ),
+                          if (_fieldErrors['instrument'] != null)
+                            Padding(
+                              padding: const EdgeInsets.only(
+                                top: 4.0,
+                                left: 4.0,
+                              ),
+                              child: Text(
+                                _fieldErrors['instrument']!,
+                                style: const TextStyle(
+                                  color: Colors.red,
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 24),
+                          PremiumButton(
+                            text: "Register",
+                            isEnabled: _isFormValid && !isLoading,
+                            isLoading: isLoading,
+                            onPressed: _isFormValid && !isLoading
+                                ? _register
+                                : null,
+                          ),
+                          const SizedBox(height: 16),
+                          if (_errorMessage != null) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              _errorMessage!,
+                              style: const TextStyle(
+                                color: AppColors.accentYellow,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ],
                       ),
-                      SizedBox(width: 8),
-                      Text(
-                        'Checking phone number...',
-                        style: TextStyle(
-                          color: AppColors.accentYellow,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                )
-              else if (_fieldErrors['phone_number'] != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4.0, left: 4.0),
-                  child: Text(
-                    _fieldErrors['phone_number']!,
-                    style: const TextStyle(
+                );
+              },
+            ),
+            Positioned(
+              top: 8,
+              left: 8,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(24),
+                  onTap: () => Navigator.of(context).pop(),
+                  child: const Padding(
+                    padding: EdgeInsets.all(10),
+                    child: Icon(
+                      Icons.arrow_back,
                       color: AppColors.accentYellow,
-                      fontSize: 13,
+                      size: 28,
                     ),
                   ),
                 ),
-              const SizedBox(height: 16),
-
-              // Gender dropdown
-              PremiumDropdown(
-                label: "Gender",
-                value: selectedSex,
-                options: const ["Male", "Female", "Other"],
-                onChanged: (val) {
-                  setState(() {
-                    selectedSex = val;
-                  });
-                  _validateForm();
-                },
               ),
-              if (_fieldErrors['sex'] != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4.0, left: 4.0),
-                  child: Text(
-                    _fieldErrors['sex']!,
-                    style: const TextStyle(
-                      color: AppColors.accentYellow,
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 16),
-
-              // Date of Birth picker
-              GestureDetector(
-                onTap: () async {
-                  final DateTime? picked = await showDatePicker(
-                    context: context,
-                    initialDate: selectedDob ?? DateTime(2000),
-                    firstDate: DateTime(1950),
-                    lastDate: DateTime.now(),
-                  );
-                  if (picked != null && picked != selectedDob) {
-                    setState(() {
-                      selectedDob = picked;
-                      _fieldErrors.remove('dob');
-                    });
-                    if (!_isAtLeast18(picked)) {
-                      setState(() {
-                        selectedDob = null;
-                        _fieldErrors['dob'] = 'You must be 18 years old';
-                      });
-                      await _showUnderAgePopup();
-                    }
-                    _validateForm();
-                  }
-                },
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 12,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryMaroon,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: AppColors.accentYellow.withAlpha(77),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        selectedDob != null
-                            ? '${selectedDob!.day}/${selectedDob!.month}/${selectedDob!.year}'
-                            : 'Date of Birth',
-                        style: const TextStyle(
-                          color: AppColors.textLight,
-                          fontSize: 16,
-                        ),
-                      ),
-                      const Icon(
-                        Icons.calendar_today,
-                        color: AppColors.accentYellow,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              if (_fieldErrors['dob'] != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4.0, left: 4.0),
-                  child: Text(
-                    _fieldErrors['dob']!,
-                    style: const TextStyle(
-                      color: AppColors.accentYellow,
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 16),
-
-              // Joining Year dropdown
-              PremiumDropdown(
-                label: "Joining Year",
-                value: selectedJoiningYear?.toString(),
-                options: List.generate(
-                  30,
-                  (index) => (DateTime.now().year - index).toString(),
-                ),
-                onChanged: (val) {
-                  setState(() {
-                    selectedJoiningYear = int.tryParse(val ?? '');
-                  });
-                  _validateForm();
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // Instrument dropdown
-              PremiumDropdown(
-                label: "Instrument",
-                value: selectedInstrument,
-                options: _instruments,
-                onChanged: (val) {
-                  setState(() {
-                    selectedInstrument = val;
-                  });
-                  _validateForm();
-                },
-              ),
-              if (_fieldErrors['instrument'] != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 4.0, left: 4.0),
-                  child: Text(
-                    _fieldErrors['instrument']!,
-                    style: const TextStyle(color: Colors.red, fontSize: 13),
-                  ),
-                ),
-              const SizedBox(height: 24),
-
-              // Register button with loading spinner and enabling logic
-              PremiumButton(
-                text: "Register",
-                isEnabled: _isFormValid && !isLoading,
-                isLoading: isLoading,
-                onPressed: _isFormValid && !isLoading ? _register : null,
-              ),
-
-              // Display general error messages if any
-              if (_errorMessage != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _errorMessage!,
-                  style: const TextStyle(color: AppColors.accentYellow),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

@@ -1423,7 +1423,6 @@ class ApiService {
       }
 
       Future<http.Response?> sendPayload(Map<String, dynamic> payload) async {
-        debugPrint('[createNotification] POST $uri payload=$payload');
         return AuthorizedApiService.sendWithAutoRefresh(
           null,
           (token) => http.post(
@@ -1466,10 +1465,6 @@ class ApiService {
           throw Exception('Session expired. Please login again.');
         }
 
-        debugPrint(
-          '[createNotification] status=${response.statusCode}, body=${response.body}',
-        );
-
         if (response.statusCode == 200 || response.statusCode == 201) {
           if (response.body.trim().isEmpty) {
             return;
@@ -1502,6 +1497,15 @@ class ApiService {
           }
           // Try next payload variant if available.
           continue;
+        }
+
+        if (response.statusCode == 429) {
+          final dynamic decoded = response.body.isNotEmpty
+              ? jsonDecode(response.body)
+              : <String, dynamic>{};
+          if (decoded is Map<String, dynamic>) {
+            throw Exception(extractErrorMessage(decoded));
+          }
         }
 
         throw Exception(
