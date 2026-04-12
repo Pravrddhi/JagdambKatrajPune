@@ -262,7 +262,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       final response = await http.post(
         Uri.parse(ApiEndpoints.checkPhoneNumber),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'phone_number': phoneNumber}),
+        body: jsonEncode({
+          'phone_number': phoneNumber,
+          'pathak_id': ApiEndpoints.pathakIdInt,
+        }),
       );
 
       setState(() {

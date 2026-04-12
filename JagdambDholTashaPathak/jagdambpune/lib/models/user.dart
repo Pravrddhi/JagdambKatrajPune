@@ -1,6 +1,7 @@
 class User {
   final int? id;
   final bool? isActive;
+  final bool? isDeleted;
   final int? approvalStatus;
   final String? phoneNumber;
   final String? firstName;
@@ -18,6 +19,7 @@ class User {
   User({
     this.id,
     this.isActive,
+    this.isDeleted,
     this.approvalStatus,
     this.phoneNumber,
     this.firstName,
@@ -34,6 +36,15 @@ class User {
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
+    final rawDeleted = json['isdelete'] ?? json['is_deleted'];
+    final bool? parsedIsDeleted = (() {
+      if (rawDeleted == null) return null;
+      if (rawDeleted is bool) return rawDeleted;
+      if (rawDeleted is num) return rawDeleted != 0;
+      final normalized = rawDeleted.toString().trim().toLowerCase();
+      return normalized == 'true' || normalized == '1' || normalized == 'yes';
+    })();
+
     final dynamic gatRaw =
         json['gat_name'] ??
         json['gat'] ??
@@ -54,6 +65,10 @@ class User {
           ? json['approval_status'] as int
           : int.tryParse('${json['approval_status'] ?? ''}'),
       isActive: (() {
+        if (parsedIsDeleted == true) {
+          return false;
+        }
+
         if (json['is_active'] is bool) {
           return json['is_active'] as bool;
         }
@@ -71,13 +86,14 @@ class User {
 
         return parsedApprovalStatus == 1;
       })(),
+      isDeleted: parsedIsDeleted,
       phoneNumber: json['phone_number'],
       firstName: json['first_name'],
       lastName: json['last_name'],
       instrument: json['instrument'],
       joiningYear: json['joining_year']?.toString(),
       sex: json['sex'],
-      role: json['role'],
+      role: json['role']?.toString() ?? json['group_name']?.toString(),
       bloodGroup: json['blood_group'],
       emergencyContactName: json['emergency_contact_name'],
       emergencyContactPhone: json['emergency_contact_phone'],
@@ -89,6 +105,7 @@ class User {
   User copyWith({
     int? id,
     bool? isActive,
+    bool? isDeleted,
     int? approvalStatus,
     String? phoneNumber,
     String? firstName,
@@ -106,6 +123,7 @@ class User {
     return User(
       id: id ?? this.id,
       isActive: isActive ?? this.isActive,
+      isDeleted: isDeleted ?? this.isDeleted,
       approvalStatus: approvalStatus ?? this.approvalStatus,
       phoneNumber: phoneNumber ?? this.phoneNumber,
       firstName: firstName ?? this.firstName,

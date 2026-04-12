@@ -800,15 +800,36 @@ class ApiService {
       );
 
       if (response.statusCode == 200) {
-        final Map<String, dynamic> data = jsonDecode(response.body);
+        final dynamic decoded = jsonDecode(response.body);
 
-        if (data['status'] == true && data['users'] is List) {
-          final List<dynamic> usersList = data['users'];
-          return usersList
-              .map(
-                (userJson) => User.fromJson(userJson as Map<String, dynamic>),
-              )
+        if (decoded is List) {
+          return decoded
+              .whereType<Map>()
+              .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
               .toList();
+        }
+
+        if (decoded is Map<String, dynamic>) {
+          if (decoded['users'] is List) {
+            return (decoded['users'] as List)
+                .whereType<Map>()
+                .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
+                .toList();
+          }
+
+          if (decoded['data'] is List) {
+            return (decoded['data'] as List)
+                .whereType<Map>()
+                .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
+                .toList();
+          }
+
+          // Some backends return a single user object for list endpoint.
+          if (decoded['id'] != null &&
+              decoded['first_name'] != null &&
+              decoded['last_name'] != null) {
+            return [User.fromJson(decoded)];
+          }
         }
 
         throw Exception('Invalid response format for users');
@@ -965,6 +986,345 @@ class ApiService {
         stackTrace: st.toString(),
         pageUrl: '/users/$userId/approval',
         endpoint: ApiEndpoints.getUserApproval(userId),
+      );
+      rethrow;
+    }
+  }
+
+  static Future<String> softDeleteUser({required int userId}) async {
+    try {
+      String? storedAccessToken = await _storage.read(
+        key: ApiEndpoints.accessTokenKey,
+      );
+
+      if (storedAccessToken == null) {
+        throw Exception('No access token found. Please login again.');
+      }
+
+      final uri = Uri.parse(ApiEndpoints.getUserSoftDelete(userId));
+
+      final response = await http.patch(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $storedAccessToken',
+        },
+      );
+
+      final dynamic decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200) {
+        if (decoded is Map<String, dynamic>) {
+          final status = decoded['status'] == true;
+          final message = decoded['message']?.toString();
+          if (status) {
+            return message ?? 'User deleted successfully.';
+          }
+          if (message != null && message.isNotEmpty) {
+            throw Exception(message);
+          }
+        }
+        throw Exception('Failed to soft delete user');
+      }
+
+      if (response.statusCode == 400 ||
+          response.statusCode == 403 ||
+          response.statusCode == 404) {
+        if (decoded is Map<String, dynamic>) {
+          final message = decoded['message']?.toString();
+          if (message != null && message.isNotEmpty) {
+            throw Exception(message);
+          }
+          final detail = decoded['detail']?.toString();
+          if (detail != null && detail.isNotEmpty) {
+            throw Exception(detail);
+          }
+        }
+        throw Exception(
+          'Failed to soft delete user (status code ${response.statusCode})',
+        );
+      }
+
+      if (response.statusCode == 401) {
+        final success = await _handleTokenRefresh();
+        if (success) {
+          return softDeleteUser(userId: userId);
+        }
+        throw Exception('Session expired. Please login again.');
+      }
+
+      throw Exception(
+        'Failed to soft delete user (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'User soft-delete API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/users/$userId/soft-delete',
+        endpoint: ApiEndpoints.getUserSoftDelete(userId),
+      );
+      rethrow;
+    }
+  }
+
+  static Future<String> restoreUser({required int userId}) async {
+    try {
+      String? storedAccessToken = await _storage.read(
+        key: ApiEndpoints.accessTokenKey,
+      );
+
+      if (storedAccessToken == null) {
+        throw Exception('No access token found. Please login again.');
+      }
+
+      final uri = Uri.parse(ApiEndpoints.getUserRestore(userId));
+
+      final response = await http.patch(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $storedAccessToken',
+        },
+      );
+
+      final dynamic decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200) {
+        if (decoded is Map<String, dynamic>) {
+          final status = decoded['status'] == true;
+          final message = decoded['message']?.toString();
+          if (status) {
+            return message ?? 'User restored successfully.';
+          }
+          if (message != null && message.isNotEmpty) {
+            throw Exception(message);
+          }
+        }
+        throw Exception('Failed to restore user');
+      }
+
+      if (response.statusCode == 400 ||
+          response.statusCode == 403 ||
+          response.statusCode == 404) {
+        if (decoded is Map<String, dynamic>) {
+          final message = decoded['message']?.toString();
+          if (message != null && message.isNotEmpty) {
+            throw Exception(message);
+          }
+          final detail = decoded['detail']?.toString();
+          if (detail != null && detail.isNotEmpty) {
+            throw Exception(detail);
+          }
+        }
+        throw Exception(
+          'Failed to restore user (status code ${response.statusCode})',
+        );
+      }
+
+      if (response.statusCode == 401) {
+        final success = await _handleTokenRefresh();
+        if (success) {
+          return restoreUser(userId: userId);
+        }
+        throw Exception('Session expired. Please login again.');
+      }
+
+      throw Exception(
+        'Failed to restore user (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'User restore API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/users/$userId/restore',
+        endpoint: ApiEndpoints.getUserRestore(userId),
+      );
+      rethrow;
+    }
+  }
+
+  static Future<List<String>> fetchGroups() async {
+    try {
+      String? storedAccessToken = await _storage.read(
+        key: ApiEndpoints.accessTokenKey,
+      );
+
+      if (storedAccessToken == null) {
+        throw Exception('No access token found. Please login again.');
+      }
+
+      final endpointsToTry = <String>[
+        ApiEndpoints.fetchGroups,
+        '${ApiEndpoints.baseUrl}/users/groups/',
+      ];
+
+      for (final endpoint in endpointsToTry) {
+        final response = await http.get(
+          Uri.parse(endpoint),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $storedAccessToken',
+          },
+        );
+
+        final dynamic decoded = response.body.isNotEmpty
+            ? jsonDecode(response.body)
+            : <String, dynamic>{};
+
+        if (response.statusCode == 200) {
+          if (decoded is Map<String, dynamic> && decoded['groups'] is List) {
+            final groups = (decoded['groups'] as List)
+                .map((e) => e.toString().trim())
+                .where((e) => e.isNotEmpty)
+                .where((group) {
+                  final normalized = group.toLowerCase();
+                  // Never allow assigning admin-level groups from this flow.
+                  return normalized != 'pathak_admin' &&
+                      normalized != 'pathak-admin' &&
+                      normalized != 'gat_pramukh' &&
+                      normalized != 'gat-pramukh';
+                })
+                .toList();
+            return groups;
+          }
+          throw Exception('Invalid response format for groups');
+        }
+
+        if (response.statusCode == 401) {
+          final success = await _handleTokenRefresh();
+          if (success) {
+            return fetchGroups();
+          }
+          throw Exception('Session expired. Please login again.');
+        }
+
+        // If endpoint is not found, try next fallback endpoint.
+        if (response.statusCode == 404) {
+          continue;
+        }
+
+        if (decoded is Map<String, dynamic>) {
+          final message = decoded['message']?.toString();
+          if (message != null && message.isNotEmpty) {
+            throw Exception(message);
+          }
+          final detail = decoded['detail']?.toString();
+          if (detail != null && detail.isNotEmpty) {
+            throw Exception(detail);
+          }
+        }
+
+        throw Exception(
+          'Failed to load groups (status code ${response.statusCode})',
+        );
+      }
+
+      throw Exception(
+        'Groups endpoint not found. Please verify backend route.',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Fetch groups API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/groups',
+        endpoint: ApiEndpoints.fetchGroups,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<String> updateUserGroup({
+    required int userId,
+    required String groupName,
+  }) async {
+    try {
+      String? storedAccessToken = await _storage.read(
+        key: ApiEndpoints.accessTokenKey,
+      );
+
+      if (storedAccessToken == null) {
+        throw Exception('No access token found. Please login again.');
+      }
+
+      final response = await http.patch(
+        Uri.parse(ApiEndpoints.getUserGroupUpdate(userId)),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $storedAccessToken',
+        },
+        body: jsonEncode({'group_name': groupName}),
+      );
+
+      final dynamic decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200) {
+        if (decoded is Map<String, dynamic>) {
+          final status = decoded['status'] == true;
+          final message = decoded['message']?.toString();
+          if (status) {
+            return message ?? 'User group updated successfully.';
+          }
+          if (message != null && message.isNotEmpty) {
+            throw Exception(message);
+          }
+        }
+        throw Exception('Failed to update user group');
+      }
+
+      if (response.statusCode == 400 ||
+          response.statusCode == 403 ||
+          response.statusCode == 404) {
+        if (decoded is Map<String, dynamic>) {
+          final message = decoded['message']?.toString();
+          if (message != null && message.isNotEmpty) {
+            throw Exception(message);
+          }
+
+          final groupNameErrors = decoded['group_name'];
+          if (groupNameErrors is List && groupNameErrors.isNotEmpty) {
+            final first = groupNameErrors.first.toString().trim();
+            if (first.isNotEmpty) {
+              throw Exception(first);
+            }
+          }
+
+          final detail = decoded['detail']?.toString();
+          if (detail != null && detail.isNotEmpty) {
+            throw Exception(detail);
+          }
+        }
+        throw Exception(
+          'Failed to update user group (status code ${response.statusCode})',
+        );
+      }
+
+      if (response.statusCode == 401) {
+        final success = await _handleTokenRefresh();
+        if (success) {
+          return updateUserGroup(userId: userId, groupName: groupName);
+        }
+        throw Exception('Session expired. Please login again.');
+      }
+
+      throw Exception(
+        'Failed to update user group (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Update user group API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/users/$userId/group',
+        endpoint: ApiEndpoints.getUserGroupUpdate(userId),
       );
       rethrow;
     }

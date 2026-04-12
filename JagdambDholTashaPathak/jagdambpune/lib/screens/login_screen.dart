@@ -26,7 +26,8 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  static const String _loginFailureMessage = 'Something went wrong';
+  static const String _loginFailureMessage =
+      ApiEndpoints.genericApiFailureMessage;
 
   final TextEditingController _pinController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
@@ -70,10 +71,23 @@ class _LoginScreenState extends State<LoginScreen> {
   String _friendlyErrorMessage(Object error) {
     final raw = error.toString().trim();
     const prefix = 'Exception: ';
-    if (raw.startsWith(prefix)) {
-      return raw.substring(prefix.length).trim();
+    final cleaned = raw.startsWith(prefix)
+        ? raw.substring(prefix.length).trim()
+        : raw;
+
+    if (cleaned.isEmpty) {
+      return ApiEndpoints.genericApiFailureMessage;
     }
-    return raw;
+
+    final normalized = cleaned.toLowerCase();
+    if (normalized.contains('socketexception') ||
+        normalized.contains('failed host lookup') ||
+        normalized.contains('timed out') ||
+        normalized.contains('timeout')) {
+      return ApiEndpoints.serverUnreachableMessage;
+    }
+
+    return cleaned;
   }
 
   @override
@@ -201,7 +215,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final bool isWeb = kIsWeb;
     final String pin = _pinController.text.trim();
     final String phoneNumber = _phoneController.text.trim();
-    final String password = _passwordController.text;
+    final String webPin = _passwordController.text;
 
     if (isWeb) {
       if (phoneNumber.length != 10) {
@@ -210,9 +224,9 @@ class _LoginScreenState extends State<LoginScreen> {
         });
         return;
       }
-      if (password.isEmpty) {
+      if (webPin.isEmpty || webPin.length < 6) {
         setState(() {
-          _errorMessage = 'Please enter your password.';
+          _errorMessage = 'Please enter a valid 6-digit PIN.';
         });
         return;
       }
@@ -235,7 +249,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (isWeb) {
         data = await WebApiService.loginWithPassword(
           phoneNumber: phoneNumber,
-          password: password,
+          pin: webPin,
         );
       } else {
         final response = await http.post(
@@ -286,6 +300,44 @@ class _LoginScreenState extends State<LoginScreen> {
         });
         return;
       }
+      final shouldShowRejectionPopup = data['show_rejection_popup'] == true;
+      final rejectionTitle = data['rejection_title']?.toString().trim();
+      final rejectionMessage = data['rejection_message']?.toString().trim();
+      final rejectionComment = data['rejection_comment']?.toString().trim();
+
+      if (shouldShowRejectionPopup) {
+        await _clearStoredSessionForUnapprovedUser();
+        if (!mounted) return;
+        final popupTitle = (rejectionTitle != null && rejectionTitle.isNotEmpty)
+            ? rejectionTitle
+            : 'Rejected !';
+        final popupParts = <String>[
+          if (rejectionMessage != null && rejectionMessage.isNotEmpty)
+            rejectionMessage,
+          if (rejectionComment != null && rejectionComment.isNotEmpty)
+            rejectionComment,
+        ];
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => AlertDialog(
+            title: Text(popupTitle),
+            content: Text(
+              popupParts.isEmpty
+                  ? 'Your account has been rejected with below comment'
+                  : popupParts.join('\n\n'),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
       final rawApprovalStatus =
           profileData['approval_status'] ?? data['approval_status'];
       final approvalStatus = rawApprovalStatus is int
