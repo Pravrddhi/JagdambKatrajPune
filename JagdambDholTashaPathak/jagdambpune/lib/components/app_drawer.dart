@@ -46,6 +46,7 @@ class AppDrawer extends StatelessWidget {
         builder: (context) => AllUsersScreen(
           showStatusFilters: showStatusFilters,
           isPathakAdmin: _isPathakAdmin,
+          canUpdateUserGroup: _isPathakAdminOnly,
           isGatPramukh: _isGatPramukh,
           gatPramukhName:
               userDetails?['gat_pramukh_name']?.toString() ??

@@ -7,6 +7,7 @@ import '../theme/app_colors.dart';
 class AllUsersScreen extends StatefulWidget {
   final bool showStatusFilters;
   final bool isPathakAdmin;
+  final bool canUpdateUserGroup;
   final bool isGatPramukh;
   final String? gatPramukhName;
 
@@ -14,6 +15,7 @@ class AllUsersScreen extends StatefulWidget {
     super.key,
     this.showStatusFilters = true,
     this.isPathakAdmin = false,
+    this.canUpdateUserGroup = false,
     this.isGatPramukh = false,
     this.gatPramukhName,
   });
@@ -23,15 +25,19 @@ class AllUsersScreen extends StatefulWidget {
 }
 
 class _AllUsersScreenState extends State<AllUsersScreen> {
+  String _mainTab = 'users';
   List<User> _users = [];
   List<User> _filteredUsers = [];
+  List<String> _availableGroups = [];
   List<String> _gatFilterOptions = ['all'];
   Map<String, String> _gatAliasToCanonical = {};
   String _statusFilter = 'all';
   String _selectedGatName = 'all';
 
   bool _isLoading = true;
+  bool _isLoadingGroups = false;
   String? _errorMessage;
+  String? _groupsErrorMessage;
 
   final TextEditingController _searchController = TextEditingController();
 
@@ -39,13 +45,21 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
 
   int get _rejectedCount => _users.where((user) => _isRejected(user)).length;
 
-  bool _isPending(User user) => user.approvalStatus == 0;
+  int get _deletedCount => _users.where((user) => _isSoftDeleted(user)).length;
 
-  bool _isApproved(User user) => user.approvalStatus == 1;
+  bool _isSoftDeleted(User user) => user.isDeleted == true;
+
+  bool _isPending(User user) =>
+      user.approvalStatus == 0 && !_isSoftDeleted(user);
+
+  bool _isApproved(User user) =>
+      user.approvalStatus == 1 && !_isSoftDeleted(user);
 
   bool _isRejected(User user) => user.approvalStatus == 3;
 
   String _statusLabel(User user) {
+    if (_isRejected(user) && _isSoftDeleted(user)) return 'Rejected (Deleted)';
+    if (_isSoftDeleted(user)) return 'Deleted';
     if (_isApproved(user)) return 'Approved';
     if (_isRejected(user)) return 'Rejected';
     if (_isPending(user)) return 'Pending';
@@ -156,6 +170,45 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
     }
   }
 
+  Future<void> _loadGroups() async {
+    if (!widget.canUpdateUserGroup) return;
+
+    setState(() {
+      _isLoadingGroups = true;
+      _groupsErrorMessage = null;
+    });
+
+    try {
+      final groups = await ApiService.fetchGroups();
+      if (!mounted) return;
+      setState(() {
+        _availableGroups = groups;
+        _isLoadingGroups = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      if (_isSessionExpiredError(e)) {
+        await _redirectToLoginWithMessage();
+        return;
+      }
+
+      setState(() {
+        _groupsErrorMessage = _cleanErrorMessage(e);
+        _isLoadingGroups = false;
+      });
+    }
+  }
+
+  void _setMainTab(String tab) {
+    if (_mainTab == tab) return;
+    setState(() {
+      _mainTab = tab;
+    });
+    if (tab == 'groups' && _availableGroups.isEmpty && !_isLoadingGroups) {
+      _loadGroups();
+    }
+  }
+
   void _applyFilters() {
     final query = _searchController.text.toLowerCase();
 
@@ -168,6 +221,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         final matchesStatus = switch (_statusFilter) {
           'pending' => _isPending(user),
           'rejected' => _isRejected(user),
+          'deleted' => _isSoftDeleted(user),
           _ => true,
         };
 
@@ -221,6 +275,10 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         message.contains('no access token found');
   }
 
+  String _cleanErrorMessage(Object error) {
+    return error.toString().replaceFirst('Exception: ', '').trim();
+  }
+
   Future<void> _redirectToLoginWithMessage() async {
     if (!mounted) {
       return;
@@ -265,6 +323,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         detailedUser.copyWith(
           approvalStatus: detailedUser.approvalStatus ?? user.approvalStatus,
           isActive: detailedUser.isActive ?? user.isActive,
+          isDeleted: detailedUser.isDeleted ?? user.isDeleted,
         ),
         fallbackUserId: userId,
       );
@@ -461,6 +520,310 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
     _applyFilters();
   }
 
+  Future<void> _softDeleteUser(int userId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete User'),
+        content: const Text(
+          'Are you sure you want to delete this user? This action will deactivate the account.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    // Close the user details popup before making API call.
+    Navigator.of(context).pop();
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final message = await ApiService.softDeleteUser(userId: userId);
+      if (!mounted) return;
+      final successMessage = message
+          .replaceAll(
+            RegExp(r'soft\\s*deleted', caseSensitive: false),
+            'deleted',
+          )
+          .replaceAll(
+            RegExp(r'soft\\s*delete', caseSensitive: false),
+            'delete',
+          );
+
+      _users = _users.map<User>((user) {
+        if (user.id != userId) {
+          return user;
+        }
+        return user.copyWith(isDeleted: true, isActive: false);
+      }).toList();
+      _statusFilter = 'deleted';
+      _applyFilters();
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(successMessage)));
+    } catch (e) {
+      if (!mounted) return;
+
+      if (_isSessionExpiredError(e)) {
+        await _redirectToLoginWithMessage();
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_cleanErrorMessage(e))));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _restoreUser(int userId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Restore User'),
+        content: const Text(
+          'Are you sure you want to restore this user account?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Restore'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final message = await ApiService.restoreUser(userId: userId);
+      if (!mounted) return;
+
+      Navigator.of(context).pop();
+
+      _users = _users.map<User>((user) {
+        if (user.id != userId) {
+          return user;
+        }
+        return user.copyWith(isDeleted: false, isActive: true);
+      }).toList();
+      _applyFilters();
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    } catch (e) {
+      if (!mounted) return;
+
+      if (_isSessionExpiredError(e)) {
+        await _redirectToLoginWithMessage();
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(_cleanErrorMessage(e))));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _showUpdateGroupDialog(User user, int userId) async {
+    if (!widget.canUpdateUserGroup) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Only pathak_admin can update user group.'),
+        ),
+      );
+      return;
+    }
+
+    if (_availableGroups.isEmpty) {
+      await _loadGroups();
+    }
+    if (!mounted) return;
+
+    if (_availableGroups.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _groupsErrorMessage?.isNotEmpty == true
+                ? _groupsErrorMessage!
+                : 'No groups available.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final currentRole = user.role?.trim();
+    String selectedGroup = _availableGroups.contains(currentRole)
+        ? currentRole!
+        : _availableGroups.first;
+    bool isSubmitting = false;
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final hasGroupChanged =
+                selectedGroup.trim().toLowerCase() !=
+                (currentRole ?? '').trim().toLowerCase();
+            return AlertDialog(
+              title: const Text('Update User Group'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'User: ${_fullName(user)}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<String>(
+                    value: selectedGroup,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Group',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: _availableGroups
+                        .map(
+                          (group) => DropdownMenuItem<String>(
+                            value: group,
+                            child: Text(group),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: isSubmitting
+                        ? null
+                        : (value) {
+                            if (value == null) return;
+                            setDialogState(() {
+                              selectedGroup = value;
+                            });
+                          },
+                  ),
+                  if (!hasGroupChanged)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text(
+                        'Selected group is same as current group.',
+                        style: TextStyle(
+                          color: AppColors.disabled,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          if (!hasGroupChanged) {
+                            ScaffoldMessenger.of(this.context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Please select a different group to update.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          setDialogState(() {
+                            isSubmitting = true;
+                          });
+                          try {
+                            final message = await ApiService.updateUserGroup(
+                              userId: userId,
+                              groupName: selectedGroup,
+                            );
+                            if (!mounted) return;
+                            Navigator.pop(dialogContext);
+                            // Also close the underlying user details popup.
+                            Navigator.of(this.context).pop();
+                            setState(() {
+                              _users = _users.map<User>((entry) {
+                                if (entry.id != userId) return entry;
+                                return entry.copyWith(role: selectedGroup);
+                              }).toList();
+                            });
+                            _applyFilters();
+                            ScaffoldMessenger.of(
+                              this.context,
+                            ).showSnackBar(SnackBar(content: Text(message)));
+                          } catch (e) {
+                            if (!mounted) return;
+                            if (_isSessionExpiredError(e)) {
+                              Navigator.pop(dialogContext);
+                              await _redirectToLoginWithMessage();
+                              return;
+                            }
+                            setDialogState(() {
+                              isSubmitting = false;
+                            });
+                            ScaffoldMessenger.of(this.context).showSnackBar(
+                              SnackBar(content: Text(_cleanErrorMessage(e))),
+                            );
+                          }
+                        },
+                  child: isSubmitting
+                      ? const SizedBox(
+                          height: 16,
+                          width: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Update'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _showUserDetails(User user, {int? fallbackUserId}) {
     final effectiveUserId = user.id ?? fallbackUserId;
 
@@ -530,6 +893,45 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
           ),
         ),
         actions: [
+          if (widget.canUpdateUserGroup && !_isSoftDeleted(user))
+            TextButton(
+              onPressed: effectiveUserId == null
+                  ? null
+                  : () => _showUpdateGroupDialog(user, effectiveUserId),
+              child: const Text(
+                'Update Group',
+                style: TextStyle(
+                  color: AppColors.primaryMaroon,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          if (widget.isPathakAdmin && _isSoftDeleted(user))
+            TextButton(
+              onPressed: effectiveUserId == null
+                  ? null
+                  : () => _restoreUser(effectiveUserId),
+              child: const Text(
+                'Restore',
+                style: TextStyle(
+                  color: AppColors.primaryMaroon,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          if (widget.isPathakAdmin && !_isSoftDeleted(user))
+            TextButton(
+              onPressed: effectiveUserId == null
+                  ? null
+                  : () => _softDeleteUser(effectiveUserId),
+              child: const Text(
+                'Delete',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
           if (_statusFilter == 'pending' && _isPending(user))
             TextButton(
               onPressed: effectiveUserId == null
@@ -693,53 +1095,130 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
             )
           : Column(
               children: [
-                Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.primaryMaroon.withAlpha(16),
-                          blurRadius: 8,
-                          offset: const Offset(0, 3),
+                if (widget.canUpdateUserGroup)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                    child: Row(
+                      children: [
+                        ChoiceChip(
+                          label: const Text('Users'),
+                          selected: _mainTab == 'users',
+                          selectedColor: AppColors.accentYellow,
+                          onSelected: (_) => _setMainTab('users'),
+                          labelStyle: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: const Text('Groups'),
+                          selected: _mainTab == 'groups',
+                          selectedColor: AppColors.accentYellow,
+                          onSelected: (_) => _setMainTab('groups'),
+                          labelStyle: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ],
                     ),
-                    child: TextField(
-                      controller: _searchController,
-                      style: const TextStyle(
-                        color: AppColors.primaryMaroon,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      decoration: InputDecoration(
-                        hintText: 'Search by name...',
-                        hintStyle: const TextStyle(color: AppColors.disabled),
-                        prefixIcon: const Icon(
-                          Icons.search,
-                          color: AppColors.primaryMaroon,
-                        ),
-                        filled: true,
-                        fillColor: Colors.white,
-                        enabledBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(14),
-                          borderSide: BorderSide(
-                            color: AppColors.primaryMaroon.withAlpha(28),
+                  ),
+                if (_mainTab == 'groups')
+                  Expanded(
+                    child: _isLoadingGroups
+                        ? const Center(
+                            child: CircularProgressIndicator(
+                              color: AppColors.primaryMaroon,
+                            ),
+                          )
+                        : _groupsErrorMessage != null
+                        ? Center(
+                            child: Text(
+                              _groupsErrorMessage!,
+                              style: const TextStyle(
+                                color: AppColors.primaryMaroon,
+                              ),
+                            ),
+                          )
+                        : _availableGroups.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'No groups found',
+                              style: TextStyle(
+                                color: AppColors.primaryMaroon,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            itemCount: _availableGroups.length,
+                            itemBuilder: (context, index) {
+                              final group = _availableGroups[index];
+                              return ListTile(
+                                leading: const Icon(
+                                  Icons.group,
+                                  color: AppColors.primaryMaroon,
+                                ),
+                                title: Text(
+                                  group,
+                                  style: const TextStyle(
+                                    color: AppColors.primaryMaroon,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              );
+                            },
                           ),
+                  )
+                else
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppColors.primaryMaroon.withAlpha(16),
+                            blurRadius: 8,
+                            offset: const Offset(0, 3),
+                          ),
+                        ],
+                      ),
+                      child: TextField(
+                        controller: _searchController,
+                        style: const TextStyle(
+                          color: AppColors.primaryMaroon,
+                          fontWeight: FontWeight.w500,
                         ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(14),
-                          borderSide: const BorderSide(
-                            color: AppColors.accentYellow,
-                            width: 1.6,
+                        decoration: InputDecoration(
+                          hintText: 'Search by name...',
+                          hintStyle: const TextStyle(color: AppColors.disabled),
+                          prefixIcon: const Icon(
+                            Icons.search,
+                            color: AppColors.primaryMaroon,
+                          ),
+                          filled: true,
+                          fillColor: Colors.white,
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: BorderSide(
+                              color: AppColors.primaryMaroon.withAlpha(28),
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            borderSide: const BorderSide(
+                              color: AppColors.accentYellow,
+                              width: 1.6,
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                ),
-                if (widget.showStatusFilters)
+                if (_mainTab == 'users' && widget.showStatusFilters)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: Row(
@@ -776,10 +1255,21 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                             fontWeight: FontWeight.w600,
                           ),
                         ),
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          label: Text('Deleted ($_deletedCount)'),
+                          selected: _statusFilter == 'deleted',
+                          selectedColor: AppColors.accentYellow,
+                          onSelected: (_) => _setStatusFilter('deleted'),
+                          labelStyle: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
                       ],
                     ),
                   ),
-                if (widget.isPathakAdmin)
+                if (_mainTab == 'users' && widget.isPathakAdmin)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
                     child: Container(
@@ -822,77 +1312,78 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                       ),
                     ),
                   ),
-                const SizedBox(height: 10),
-                Expanded(
-                  child: _filteredUsers.isEmpty
-                      ? const Center(
-                          child: Text(
-                            'No users found',
-                            style: TextStyle(
-                              color: AppColors.primaryMaroon,
-                              fontWeight: FontWeight.w600,
+                if (_mainTab == 'users') const SizedBox(height: 10),
+                if (_mainTab == 'users')
+                  Expanded(
+                    child: _filteredUsers.isEmpty
+                        ? const Center(
+                            child: Text(
+                              'No users found',
+                              style: TextStyle(
+                                color: AppColors.primaryMaroon,
+                                fontWeight: FontWeight.w600,
+                              ),
                             ),
-                          ),
-                        )
-                      : ListView.builder(
-                          itemCount: _filteredUsers.length,
-                          itemBuilder: (context, index) {
-                            final user = _filteredUsers[index];
+                          )
+                        : ListView.builder(
+                            itemCount: _filteredUsers.length,
+                            itemBuilder: (context, index) {
+                              final user = _filteredUsers[index];
 
-                            return Card(
-                              color: Colors.white,
-                              elevation: 5,
-                              margin: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 8,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: ListTile(
-                                onTap: () => _openUserDetails(user),
-                                contentPadding: const EdgeInsets.symmetric(
+                              return Card(
+                                color: Colors.white,
+                                elevation: 5,
+                                margin: const EdgeInsets.symmetric(
                                   horizontal: 16,
                                   vertical: 8,
                                 ),
-                                leading: CircleAvatar(
-                                  backgroundColor: AppColors.accentYellow,
-                                  child: Text(
-                                    _userInitial(user),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: ListTile(
+                                  onTap: () => _openUserDetails(user),
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 8,
+                                  ),
+                                  leading: CircleAvatar(
+                                    backgroundColor: AppColors.accentYellow,
+                                    child: Text(
+                                      _userInitial(user),
+                                      style: const TextStyle(
+                                        color: AppColors.primaryMaroon,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  title: Text(
+                                    _fullName(user),
                                     style: const TextStyle(
                                       color: AppColors.primaryMaroon,
-                                      fontWeight: FontWeight.bold,
+                                      fontWeight: FontWeight.w600,
                                     ),
                                   ),
-                                ),
-                                title: Text(
-                                  _fullName(user),
-                                  style: const TextStyle(
+                                  subtitle: Padding(
+                                    padding: const EdgeInsets.only(top: 6),
+                                    child: Text(
+                                      user.role == null ||
+                                              user.role!.trim().isEmpty
+                                          ? 'Tap to view details'
+                                          : user.role!,
+                                      style: const TextStyle(
+                                        color: AppColors.disabled,
+                                      ),
+                                    ),
+                                  ),
+                                  trailing: const Icon(
+                                    Icons.chevron_right,
                                     color: AppColors.primaryMaroon,
-                                    fontWeight: FontWeight.w600,
                                   ),
                                 ),
-                                subtitle: Padding(
-                                  padding: const EdgeInsets.only(top: 6),
-                                  child: Text(
-                                    user.role == null ||
-                                            user.role!.trim().isEmpty
-                                        ? 'Tap to view details'
-                                        : user.role!,
-                                    style: const TextStyle(
-                                      color: AppColors.disabled,
-                                    ),
-                                  ),
-                                ),
-                                trailing: const Icon(
-                                  Icons.chevron_right,
-                                  color: AppColors.primaryMaroon,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                ),
+                              );
+                            },
+                          ),
+                  ),
               ],
             ),
     );

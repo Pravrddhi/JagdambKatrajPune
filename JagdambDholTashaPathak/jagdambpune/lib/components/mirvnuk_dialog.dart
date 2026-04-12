@@ -381,6 +381,7 @@ class MirvnukForm {
                             return;
                           }
 
+                          bool _dialogPopped = false;
                           setState(() => isSubmitting = true);
 
                           final accessToken = await storage.read(
@@ -442,6 +443,7 @@ class MirvnukForm {
 
                             if (response.statusCode == 200 ||
                                 response.statusCode == 201) {
+                              _dialogPopped = true;
                               Navigator.of(dialogContext).pop();
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
@@ -487,7 +489,7 @@ class MirvnukForm {
                               ),
                             );
                           } finally {
-                            if (dialogContext.mounted) {
+                            if (!_dialogPopped && dialogContext.mounted) {
                               setState(() => isSubmitting = false);
                             }
                           }
