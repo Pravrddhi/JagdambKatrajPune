@@ -47,6 +47,7 @@ class ApiEndpoints {
   }
 
   static const String pathakId = AppConfig.pathakId;
+  static int get pathakIdInt => int.tryParse(pathakId) ?? 1;
 
   // -------------------
   // Storage Keys
@@ -178,6 +179,9 @@ class ApiEndpoints {
   /// Get users (admin only)
   static final String fetchAllUsers = '$baseUrl/users/';
 
+  /// Fetch all assignable groups for pathak admin
+  static final String fetchGroups = '$baseUrl/groups/';
+
   /// Base endpoint for a specific user by id (api/user/<int:id>/)
   static final String userByIdBase = '$baseUrl/user';
 
@@ -203,7 +207,11 @@ class ApiEndpoints {
 
   /// Generic message shown for API failures.
   static const String genericApiFailureMessage =
-      'Something went wrong. Bug has reported to admins';
+      'Something went wrong. Please try again. If the issue continues, contact support.';
+
+  /// Message shown when backend server cannot be reached.
+  static const String serverUnreachableMessage =
+      'Unable to reach server. Please check your internet connection and try again.';
 
   /// Helper method to build Uri with optional query parameters
   static Uri buildUri(String endpoint, [Map<String, dynamic>? queryParams]) {
@@ -238,6 +246,16 @@ class ApiEndpoints {
 
   /// Build endpoint to approve/reject user by id
   static String getUserApproval(int id) => '$userApprovalBase/$id/approval/';
+
+  /// Build endpoint to soft-delete user by id
+  static String getUserSoftDelete(int id) =>
+      '$userApprovalBase/$id/soft-delete/';
+
+  /// Build endpoint to restore soft-deleted user by id
+  static String getUserRestore(int id) => '$userApprovalBase/$id/restore/';
+
+  /// Build endpoint to update user group by id
+  static String getUserGroupUpdate(int id) => '$userApprovalBase/$id/group/';
 
   /// Build endpoint to review a document by id
   static String reviewPathakDocument(int id) =>

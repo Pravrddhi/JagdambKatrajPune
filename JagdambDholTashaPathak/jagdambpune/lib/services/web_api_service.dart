@@ -22,7 +22,7 @@ class WebApiService {
 
   static Future<Map<String, dynamic>> loginWithPassword({
     required String phoneNumber,
-    required String password,
+    required String pin,
   }) async {
     try {
       final response = await http
@@ -31,7 +31,9 @@ class WebApiService {
             headers: ApiEndpoints.jsonHeaders(),
             body: jsonEncode({
               'phone_number': phoneNumber,
-              'password': password,
+              'password': pin,
+              'pin': pin,
+              'pathak_id': ApiEndpoints.pathakIdInt,
             }),
           )
           .timeout(const Duration(seconds: 15));
@@ -45,6 +47,17 @@ class WebApiService {
       final bool isSuccessful =
           response.statusCode == 200 && decoded['status'] == true;
       if (!isSuccessful) {
+        if (response.statusCode == 401) {
+          throw Exception('Invalid phone number or PIN.');
+        }
+        if (response.statusCode == 404) {
+          throw Exception('User not found.');
+        }
+        if (response.statusCode == 409) {
+          throw Exception(
+            'Multiple users found for this phone number. Please provide pathak_id.',
+          );
+        }
         final message =
             decoded['message']?.toString() ??
             decoded['detail']?.toString() ??
@@ -53,7 +66,7 @@ class WebApiService {
           throw Exception(message.trim());
         }
         throw Exception(
-          'Web password login failed (status code ${response.statusCode})',
+          'Web PIN login failed (status code ${response.statusCode})',
         );
       }
 
@@ -66,6 +79,13 @@ class WebApiService {
         pageUrl: '/login',
         endpoint: ApiEndpoints.passwordLogin,
       );
+      final raw = e.toString().toLowerCase();
+      if (raw.contains('socketexception') ||
+          raw.contains('failed host lookup') ||
+          raw.contains('timed out') ||
+          raw.contains('timeout')) {
+        throw Exception(ApiEndpoints.serverUnreachableMessage);
+      }
       rethrow;
     }
   }
