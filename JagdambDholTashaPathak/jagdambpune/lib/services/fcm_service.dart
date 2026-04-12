@@ -19,6 +19,22 @@ class FCMService {
         'BHabFcp7zlBBZhkM_PiiHdGBji4v8Rpm-iG4ZLqxfHGGqCWLT2_EWv1pdpB-TqRlQ_MOE-QP0x7OOQaVGpKCZLk',
   );
 
+  Future<String?> _waitForApnsToken() async {
+    for (var attempt = 0; attempt < 8; attempt++) {
+      final apnsToken = await _fcm.getAPNSToken();
+      if (apnsToken != null && apnsToken.isNotEmpty) {
+        print('[FCM] APNS token available on attempt=${attempt + 1}');
+        return apnsToken;
+      }
+
+      print('[FCM] APNS token not ready attempt=${attempt + 1}');
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
+    print('[FCM] APNS token unavailable after retries');
+    return null;
+  }
+
   /// Ask user permission to show notifications.
   Future<bool> requestNotificationPermission() async {
     print('[FCM] requestNotificationPermission called kIsWeb=$kIsWeb');
@@ -53,36 +69,52 @@ class FCMService {
 
     // Get the token
     String? token;
-    if (kIsWeb) {
-      if (_webVapidKey.trim().isEmpty) {
-        await BugReportService.reportApiFailure(
-          title: 'Missing web VAPID key for FCM token',
-          errorMessage:
-              'FIREBASE_WEB_VAPID_KEY dart-define is empty. Web FCM token cannot be generated.',
-          pageUrl: '/notifications/update-fcm-token',
-          endpoint: ApiEndpoints.updateFCMToken,
-        );
+    try {
+      if (kIsWeb) {
+        if (_webVapidKey.trim().isEmpty) {
+          await BugReportService.reportApiFailure(
+            title: 'Missing web VAPID key for FCM token',
+            errorMessage:
+                'FIREBASE_WEB_VAPID_KEY dart-define is empty. Web FCM token cannot be generated.',
+            pageUrl: '/notifications/update-fcm-token',
+            endpoint: ApiEndpoints.updateFCMToken,
+          );
+          return null;
+        }
+        for (var attempt = 0; attempt < 3; attempt++) {
+          print('[FCM] web getToken attempt=${attempt + 1}');
+          try {
+            token = await _fcm
+                .getToken(vapidKey: _webVapidKey)
+                .timeout(const Duration(seconds: 10));
+            print(
+              '[FCM] web getToken attempt=${attempt + 1} result=${token == null || token.isEmpty ? 'empty' : 'ok'}',
+            );
+          } catch (e) {
+            print('[FCM] web getToken attempt=${attempt + 1} exception=$e');
+          }
+          if (token != null && token.isNotEmpty) {
+            break;
+          }
+          await Future.delayed(const Duration(milliseconds: 800));
+        }
+      } else {
+        if (defaultTargetPlatform == TargetPlatform.iOS) {
+          final apnsToken = await _waitForApnsToken();
+          if (apnsToken == null || apnsToken.isEmpty) {
+            return null;
+          }
+        }
+
+        token = await _fcm.getToken();
+      }
+    } catch (e) {
+      final message = e.toString();
+      if (message.contains('apns-token-not-set')) {
+        print('[FCM] getToken skipped: APNS token not set yet');
         return null;
       }
-      for (var attempt = 0; attempt < 3; attempt++) {
-        print('[FCM] web getToken attempt=${attempt + 1}');
-        try {
-          token = await _fcm
-              .getToken(vapidKey: _webVapidKey)
-              .timeout(const Duration(seconds: 10));
-          print(
-            '[FCM] web getToken attempt=${attempt + 1} result=${token == null || token.isEmpty ? 'empty' : 'ok'}',
-          );
-        } catch (e) {
-          print('[FCM] web getToken attempt=${attempt + 1} exception=$e');
-        }
-        if (token != null && token.isNotEmpty) {
-          break;
-        }
-        await Future.delayed(const Duration(milliseconds: 800));
-      }
-    } else {
-      token = await _fcm.getToken();
+      rethrow;
     }
 
     if (token != null && token.isNotEmpty) {
@@ -110,18 +142,23 @@ class FCMService {
   }
 
   /// Ensure latest token is sent to backend (useful on app start/login resume)
-  Future<void> syncCurrentTokenToServer({bool isLogin = true}) async {
+  Future<bool> syncCurrentTokenToServer({bool isLogin = true}) async {
     print(
       '[FCM] syncCurrentTokenToServer start isLogin=$isLogin kIsWeb=$kIsWeb',
     );
-    final token = await getFcmToken(isLogin: isLogin);
+    String? token;
+    try {
+      token = await getFcmToken(isLogin: isLogin);
+    } catch (e) {
+      print('[FCM] syncCurrentTokenToServer token fetch exception=$e');
+    }
     print(
       '[FCM] getFcmToken result: ${token == null ? 'null' : 'token length=${token.length}'}',
     );
     if (token != null && token.isNotEmpty) {
       print('[FCM] sync using fresh token length=${token.length}');
       await sendTokenToServer(token);
-      return;
+      return true;
     }
 
     final cachedToken = await storage.read(key: _cachedFcmTokenKey);
@@ -131,9 +168,12 @@ class FCMService {
     if (cachedToken != null && cachedToken.isNotEmpty) {
       print('[FCM] sync using cached token length=${cachedToken.length}');
       await sendTokenToServer(cachedToken);
+      return true;
     } else {
       print('[FCM] sync skipped: no fresh or cached token');
     }
+
+    return false;
   }
 
   /// Subscribe to a topic

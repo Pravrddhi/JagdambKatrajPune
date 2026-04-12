@@ -25,9 +25,11 @@ class RegistrationWebScreen extends StatefulWidget {
 
 class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
   final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _adhaarNumberController = TextEditingController();
   final TextEditingController _firstNameController = TextEditingController();
   final TextEditingController _lastNameController = TextEditingController();
   final FocusNode _phoneFocusNode = FocusNode();
+  final FocusNode _adhaarFocusNode = FocusNode();
 
   Map<String, String?> errors = {};
   Map<String, String?> _fieldErrors = {};
@@ -39,20 +41,13 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
   int? selectedJoiningYear;
 
   bool _isCheckingPhone = false;
+  bool _isCheckingAdhaar = false;
   bool _isFormValid = false;
   bool isLoading = false;
 
   List<String> _instruments = [];
   Timer? _debounceTimer;
-
-  /// Web device id format: firstname_mobilenumber
-  String _generateWebDeviceId() {
-    final firstName = _firstNameController.text.trim().toLowerCase();
-    final normalizedFirstName = firstName.replaceAll(RegExp(r'[^a-z0-9]'), '');
-    final phone = _phoneController.text.trim().replaceAll(RegExp(r'\D'), '');
-
-    return '${normalizedFirstName}_$phone';
-  }
+  Timer? _adhaarDebounceTimer;
 
   @override
   void initState() {
@@ -61,15 +56,24 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     _firstNameController.addListener(_validateForm);
     _lastNameController.addListener(_validateForm);
     _phoneController.addListener(_validateForm);
+    _adhaarNumberController.addListener(_validateForm);
 
     _loadInstruments();
 
     _phoneController.addListener(() {
       _onPhoneChanged(_phoneController.text.trim());
     });
+    _adhaarNumberController.addListener(() {
+      _onAdhaarChanged(_adhaarNumberController.text.trim());
+    });
     _phoneFocusNode.addListener(() {
       if (!_phoneFocusNode.hasFocus) {
         _checkPhoneNumberExists(_phoneController.text.trim());
+      }
+    });
+    _adhaarFocusNode.addListener(() {
+      if (!_adhaarFocusNode.hasFocus) {
+        _checkAdhaarNumberExists(_adhaarNumberController.text.trim());
       }
     });
   }
@@ -79,6 +83,17 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     _debounceTimer = Timer(const Duration(milliseconds: 500), () {
       if (value.length == 10) {
         _checkPhoneNumberExists(value);
+      }
+    });
+  }
+
+  void _onAdhaarChanged(String value) {
+    if (_adhaarDebounceTimer?.isActive ?? false) {
+      _adhaarDebounceTimer!.cancel();
+    }
+    _adhaarDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+      if (value.length == 4) {
+        _checkAdhaarNumberExists(value);
       }
     });
   }
@@ -195,9 +210,11 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
         validateFirstName(_firstNameController.text) &&
         validateLastName(_lastNameController.text) &&
         validatePhone(_phoneController.text) &&
+        validateAdhaarNumber(_adhaarNumberController.text) &&
         selectedDob != null &&
         validateSelection(selectedSex) &&
         validateSelection(selectedInstrument) &&
+        selectedJoiningYear != null &&
         _fieldErrors.values.every((error) => error == null);
 
     setState(() {
@@ -208,9 +225,10 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
   bool validateFirstName(String firstName) => firstName.trim().isNotEmpty;
   bool validateLastName(String lastName) => lastName.trim().isNotEmpty;
   bool validatePhone(String phone) => RegExp(r'^\d{10}$').hasMatch(phone);
+  bool validateAdhaarNumber(String value) => RegExp(r'^\d{4}$').hasMatch(value);
   bool validateSelection(String? value) => value != null;
 
-  bool _isAtLeast18(DateTime dob) {
+  bool _isAtLeast16(DateTime dob) {
     final now = DateTime.now();
     int age = now.year - dob.year;
     final hasNotHadBirthdayYet =
@@ -218,7 +236,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     if (hasNotHadBirthdayYet) {
       age -= 1;
     }
-    return age >= 18;
+    return age >= 16;
   }
 
   Future<void> _showUnderAgePopup() async {
@@ -228,7 +246,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
       builder: (_) => AlertDialog(
         title: const Text('Access Denied'),
         content: const Text(
-          'below 18 are not allowed please ask your parents to login',
+          'below 16 are not allowed please ask your parents to login',
         ),
         actions: [
           TextButton(
@@ -297,6 +315,72 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     _validateForm();
   }
 
+  Future<bool> _checkAdhaarNumberExists(String adhaarNumber) async {
+    if (!validateAdhaarNumber(adhaarNumber)) {
+      return false;
+    }
+
+    setState(() {
+      _isCheckingAdhaar = true;
+      _fieldErrors['adhaar_number'] = null;
+    });
+
+    try {
+      final response = await http.post(
+        Uri.parse(ApiEndpoints.checkAdhaarNumber),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'adhaar_number': int.parse(adhaarNumber),
+          'pathak_id': ApiEndpoints.pathakIdInt,
+        }),
+      );
+
+      bool isDuplicate = false;
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        isDuplicate = data['status'] == true;
+      }
+
+      setState(() {
+        _isCheckingAdhaar = false;
+        if (response.statusCode == 200) {
+          if (isDuplicate) {
+            _fieldErrors['adhaar_number'] =
+                'Aadhaar number already registered.';
+          }
+        } else {
+          _fieldErrors['adhaar_number'] = ApiEndpoints.genericApiFailureMessage;
+        }
+      });
+
+      if (response.statusCode != 200) {
+        await BugReportService.reportApiFailure(
+          title: 'Check Aadhaar number API failed',
+          errorMessage: response.body,
+          pageUrl: '/registration',
+          statusCode: response.statusCode,
+          endpoint: ApiEndpoints.checkAdhaarNumber,
+        );
+      }
+
+      _validateForm();
+      return isDuplicate;
+    } catch (e) {
+      await BugReportService.reportApiFailure(
+        title: 'Check Aadhaar number API exception',
+        errorMessage: e.toString(),
+        pageUrl: '/registration',
+        endpoint: ApiEndpoints.checkAdhaarNumber,
+      );
+      setState(() {
+        _isCheckingAdhaar = false;
+        _fieldErrors['adhaar_number'] = ApiEndpoints.genericApiFailureMessage;
+      });
+      _validateForm();
+      return false;
+    }
+  }
+
   Future<void> _register() async {
     errors.clear();
 
@@ -309,6 +393,9 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     if (!validatePhone(_phoneController.text)) {
       errors['phone_number'] = 'Phone number must be 10 digits only.';
     }
+    if (!validateAdhaarNumber(_adhaarNumberController.text)) {
+      errors['adhaar_number'] = 'Aadhaar number must be exactly 4 digits.';
+    }
     if (selectedDob == null) {
       errors['dob'] = 'Date of Birth is required.';
     }
@@ -317,6 +404,9 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     }
     if (!validateSelection(selectedInstrument)) {
       errors['instrument'] = 'Please select an instrument.';
+    }
+    if (selectedJoiningYear == null) {
+      errors['joining_year'] = 'Please select joining year.';
     }
 
     if (errors.isNotEmpty) {
@@ -338,16 +428,17 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
 
     final requestPayload = {
       'phone_number': _phoneController.text,
+      'adhaar_number': int.tryParse(_adhaarNumberController.text),
       'first_name': _firstNameController.text,
       'last_name': _lastNameController.text,
       'gender': selectedSex,
       'instrument': selectedInstrument,
+      'pathak_id': ApiEndpoints.pathakIdInt,
       'dob': selectedDob != null
           ? '${selectedDob!.year}-${selectedDob!.month.toString().padLeft(2, '0')}-${selectedDob!.day.toString().padLeft(2, '0')}'
           : null,
       'joining_year': selectedJoiningYear,
-      'device_id': _generateWebDeviceId(),
-      'pathak_id': ApiEndpoints.pathakId,
+      'device_id': 'web',
     };
 
     try {
@@ -413,10 +504,13 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
   @override
   void dispose() {
     _phoneController.dispose();
+    _adhaarNumberController.dispose();
     _firstNameController.dispose();
     _lastNameController.dispose();
     _phoneFocusNode.dispose();
+    _adhaarFocusNode.dispose();
     _debounceTimer?.cancel();
+    _adhaarDebounceTimer?.cancel();
     super.dispose();
   }
 
@@ -553,6 +647,52 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       ),
                     ),
                   const SizedBox(height: 16),
+                  PremiumInputBox(
+                    controller: _adhaarNumberController,
+                    label: 'Aadhaar Number (Last 4 digits)',
+                    keyboardType: TextInputType.number,
+                    maxLength: 4,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    focusNode: _adhaarFocusNode,
+                  ),
+                  if (_isCheckingAdhaar)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8.0, left: 4.0),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                AppColors.accentYellow,
+                              ),
+                            ),
+                          ),
+                          SizedBox(width: 8),
+                          Text(
+                            'Checking Aadhaar number...',
+                            style: TextStyle(
+                              color: AppColors.accentYellow,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  else if (_fieldErrors['adhaar_number'] != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4.0, left: 4.0),
+                      child: Text(
+                        _fieldErrors['adhaar_number']!,
+                        style: const TextStyle(
+                          color: AppColors.accentYellow,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 16),
                   PremiumDropdown(
                     label: 'Gender',
                     value: selectedSex,
@@ -589,10 +729,10 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                           selectedDob = picked;
                           _fieldErrors.remove('dob');
                         });
-                        if (!_isAtLeast18(picked)) {
+                        if (!_isAtLeast16(picked)) {
                           setState(() {
                             selectedDob = null;
-                            _fieldErrors['dob'] = 'You must be 18 years old';
+                            _fieldErrors['dob'] = 'You must be 16 years old';
                           });
                           await _showUnderAgePopup();
                         }
@@ -653,7 +793,9 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                     label: 'Joining Year',
                     value: selectedJoiningYear?.toString(),
                     options: List.generate(
-                      30,
+                      DateTime.now().year >= 2011
+                          ? (DateTime.now().year - 2011 + 1)
+                          : 0,
                       (index) => (DateTime.now().year - index).toString(),
                     ),
                     onChanged: (val) {

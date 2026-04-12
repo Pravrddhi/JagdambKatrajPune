@@ -8,6 +8,7 @@ import '../config/api_endpoints.dart';
 
 class BugReportService {
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
+  static const bool _sendBugReportsToBackend = false;
 
   static Future<void> reportApiFailure({
     required String title,
@@ -18,6 +19,10 @@ class BugReportService {
     String? endpoint,
   }) async {
     try {
+      if (!_sendBugReportsToBackend) {
+        return;
+      }
+
       // Web flow should not post bug reports to protected endpoint.
       if (kIsWeb) {
         return;

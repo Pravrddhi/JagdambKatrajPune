@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import 'firebase_options.dart';
@@ -110,6 +111,8 @@ Future<void> main() async {
 
   if (_firebaseReady && !kIsWeb) {
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    // Request notification permission on Android 13+
+    await _requestNotificationPermission();
   }
 
   if (!kIsWeb) {
@@ -120,7 +123,11 @@ Future<void> main() async {
         ?.createNotificationChannel(channel);
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const initSettings = InitializationSettings(android: androidInit);
+    const darwinInit = DarwinInitializationSettings();
+    const initSettings = InitializationSettings(
+      android: androidInit,
+      iOS: darwinInit,
+    );
     await flutterLocalNotificationsPlugin.initialize(initSettings);
   }
 
@@ -133,6 +140,21 @@ Future<void> main() async {
       child: const MyApp(),
     ),
   );
+}
+
+Future<void> _requestNotificationPermission() async {
+  if (defaultTargetPlatform != TargetPlatform.android) return;
+
+  final status = await Permission.notification.request();
+  if (status.isDenied) {
+    // Permission denied
+    debugPrint('[Notification] Permission denied');
+  } else if (status.isPermanentlyDenied) {
+    // Permission permanently denied, open app settings
+    debugPrint('[Notification] Permission permanently denied');
+  } else if (status.isGranted) {
+    debugPrint('[Notification] Permission granted');
+  }
 }
 
 class MyApp extends StatefulWidget {
