@@ -77,6 +77,9 @@ class ApiEndpoints {
   /// Check if phone number already exists
   static final String checkPhoneNumber = '$baseUrl/auth/check-phone-number/';
 
+  /// Check if Aadhaar number already exists within a pathak
+  static final String checkAdhaarNumber = '$baseUrl/auth/check-adhaar-number/';
+
   /// Check device registration
   static final String checkDeviceRegistration = '$baseUrl/auth/device-check/';
 
