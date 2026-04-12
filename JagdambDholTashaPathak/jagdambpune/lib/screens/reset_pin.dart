@@ -72,10 +72,18 @@ class _ResetPinScreenState extends State<ResetPinScreen> {
       final response = await http.post(
         Uri.parse(ApiEndpoints.verifyDevicePhone),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({"device_id": deviceId, "phone_number": phoneNumber}),
+        body: jsonEncode({
+          "device_id": deviceId,
+          "phone_number": phoneNumber,
+          "pathak_id": ApiEndpoints.pathakIdInt,
+        }),
       );
 
-      if (response.statusCode == 200) {
+      final responseData = jsonDecode(response.body);
+      final isSuccessful =
+          response.statusCode == 200 && responseData['status'] == true;
+
+      if (isSuccessful) {
         // Verification successful, proceed to set PIN dialog
         Navigator.pop(context); // Close current screen
         showSetPinDialog(context, phoneNumber, isResetFlow: true);
@@ -89,7 +97,9 @@ class _ResetPinScreenState extends State<ResetPinScreen> {
           endpoint: ApiEndpoints.verifyDevicePhone,
         );
         setState(() {
-          errorMessage = ApiEndpoints.genericApiFailureMessage;
+          errorMessage =
+              responseData['message']?.toString() ??
+              ApiEndpoints.genericApiFailureMessage;
         });
       }
     } catch (e) {

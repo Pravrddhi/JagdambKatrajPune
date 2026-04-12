@@ -41,13 +41,17 @@ Future<String> showSetPinDialog(
                     body: jsonEncode({
                       'phone_number': phoneNumber,
                       'pin': pinController.text,
+                      'pathak_id': ApiEndpoints.pathakIdInt,
                     }),
                   );
 
+                  final data = jsonDecode(response.body);
+                  final bool isSuccessful =
+                      response.statusCode == 200 && data['status'] == true;
+
                   setState(() => isLoading = false);
 
-                  if (response.statusCode == 200) {
-                    final data = jsonDecode(response.body);
+                  if (isSuccessful) {
                     await storage.write(key: 'pin', value: pinController.text);
                     // Reset flow only confirms PIN update and sends the user
                     // back to login. Registration flow receives fresh tokens.
@@ -76,7 +80,14 @@ Future<String> showSetPinDialog(
                       endpoint: ApiEndpoints.setPin,
                     );
                     setState(() {
-                      errorText = ApiEndpoints.genericApiFailureMessage;
+                      if (response.statusCode == 404 ||
+                          response.statusCode == 409) {
+                        errorText =
+                            data['message']?.toString() ??
+                            ApiEndpoints.genericApiFailureMessage;
+                      } else {
+                        errorText = ApiEndpoints.genericApiFailureMessage;
+                      }
                     });
                   }
                 } catch (e) {

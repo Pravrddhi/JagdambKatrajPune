@@ -249,7 +249,10 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     });
 
     try {
-      final requestPayload = {'phone_number': phoneNumber};
+      final requestPayload = {
+        'phone_number': phoneNumber,
+        'pathak_id': ApiEndpoints.pathakIdInt,
+      };
       final response = await http.post(
         Uri.parse(ApiEndpoints.checkPhoneNumber),
         headers: {'Content-Type': 'application/json'},
