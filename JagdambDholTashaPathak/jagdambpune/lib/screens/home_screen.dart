@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:provider/provider.dart';
@@ -15,6 +16,7 @@ import '../services/user_service.dart';
 import '../components/emergency_contact_dialog.dart';
 import '../providers/notification_provider.dart';
 import '../config/api_endpoints.dart';
+import '../services/fcm_service.dart';
 import '../services/notification_socket_service.dart';
 import 'attendance_module_screen.dart';
 
@@ -61,8 +63,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   ];
   late final PageController _sayingsPageController;
   Timer? _sayingsTimer;
+  Timer? _pushSetupRetryTimer;
   int _currentSayingIndex = 0;
   NotificationSocketService? _notificationSocketService;
+  final FCMService _fcmService = FCMService();
+  int _pushSetupRetryCount = 0;
+
+  static const int _maxPushSetupRetries = 3;
 
   @override
   void initState() {
@@ -106,6 +113,45 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     if (!mounted) return;
     final provider = context.read<NotificationProvider>();
     await provider.fetchFromBackend(page: 1, pageSize: 20);
+  }
+
+  Future<void> _ensureMobilePushSetup() async {
+    if (kIsWeb) return;
+
+    // Keep token refresh listener active and sync the current token once
+    // we have an authenticated user session.
+    _fcmService.listenTokenRefresh();
+    final hasToken = await _fcmService.syncCurrentTokenToServer(isLogin: false);
+
+    if (defaultTargetPlatform == TargetPlatform.iOS && !hasToken) {
+      _pushSetupRetryCount = 0;
+      _scheduleIosPushRetry();
+    }
+  }
+
+  void _scheduleIosPushRetry() {
+    if (!mounted || _pushSetupRetryCount >= _maxPushSetupRetries) {
+      return;
+    }
+
+    _pushSetupRetryTimer?.cancel();
+    _pushSetupRetryTimer = Timer(const Duration(seconds: 4), () async {
+      if (!mounted) return;
+
+      _pushSetupRetryCount += 1;
+      final hasToken = await _fcmService.syncCurrentTokenToServer(
+        isLogin: true,
+      );
+
+      if (hasToken) {
+        _pushSetupRetryTimer?.cancel();
+        return;
+      }
+
+      if (mounted && _pushSetupRetryCount < _maxPushSetupRetries) {
+        _scheduleIosPushRetry();
+      }
+    });
   }
 
   void _connectNotificationSocket(String token) {
@@ -164,6 +210,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
           final loaded = await _loadUserDetails(effectiveHomeToken);
           if (!mounted || !loaded) return;
+          await _ensureMobilePushSetup();
           await _syncNotificationsFromBackend();
           _connectNotificationSocket(effectiveHomeToken);
         } else {
@@ -179,12 +226,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         accessToken = token;
         final loaded = await _loadUserDetails(accessToken);
         if (!mounted || !loaded) return;
+        await _ensureMobilePushSetup();
         await _syncNotificationsFromBackend();
         _connectNotificationSocket(accessToken);
         await _showEmergencyDialogOnFirstLoginIfNeeded(accessToken);
       } else {
         final loaded = await _loadUserDetails(widget.authToken);
         if (!mounted || !loaded) return;
+        await _ensureMobilePushSetup();
         await _syncNotificationsFromBackend();
         _connectNotificationSocket(widget.authToken);
         await _showEmergencyDialogOnFirstLoginIfNeeded(widget.authToken);
@@ -769,6 +818,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _notificationSocketService?.dispose().ignore();
     _fabAnimationController.dispose();
     _sayingsTimer?.cancel();
+    _pushSetupRetryTimer?.cancel();
     _sayingsPageController.dispose();
     super.dispose();
   }
