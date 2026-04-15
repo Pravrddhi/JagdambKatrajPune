@@ -162,6 +162,11 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     _cooldownUserScope = _extractUserScopeFromToken(token) ?? 'anon';
     await _cleanupLegacyGlobalCooldownKeys();
     await _restoreCheckoutCooldown();
+    // Resync scanner after cooldown state is restored to prevent
+    // camera from starting if cooldown is active
+    if (mounted) {
+      _syncScannerLifecycle();
+    }
   }
 
   Future<void> _cleanupLegacyGlobalCooldownKeys() async {
@@ -342,8 +347,13 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     if (Navigator.of(context).canPop()) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (Navigator.of(context).canPop()) {
-          Navigator.of(context).pop();
+        try {
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
+        } catch (e) {
+          // Handle navigation errors gracefully
+          debugPrint('Navigation error after attendance popup: $e');
         }
       });
       return;
@@ -353,8 +363,13 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     if (!widget.scanOnly && _tabController.length > 1) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        if (_tabController.length > 1) {
-          _tabController.animateTo(1);
+        try {
+          if (_tabController.length > 1) {
+            _tabController.animateTo(1);
+          }
+        } catch (e) {
+          // Handle tab controller errors gracefully
+          debugPrint('Tab controller error after attendance popup: $e');
         }
       });
     }

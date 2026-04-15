@@ -9,6 +9,7 @@ import '../screens/document_center_screen.dart';
 import '../screens/gat_details_screen.dart';
 import '../screens/coming_soon_screen.dart';
 import '../screens/attendance_module_screen.dart';
+import '../screens/terms_conditions_manage_screen.dart';
 
 class AppDrawer extends StatelessWidget {
   final String? firstName;
@@ -276,6 +277,26 @@ class AppDrawer extends StatelessWidget {
                 style: TextStyle(color: AppColors.primaryMaroon),
               ),
               onTap: () => _navigateToDocuments(context),
+            ),
+          if (_isPathakAdminOnly)
+            ListTile(
+              leading: const Icon(
+                Icons.description,
+                color: AppColors.primaryMaroon,
+              ),
+              title: const Text(
+                'Manage Terms',
+                style: TextStyle(color: AppColors.primaryMaroon),
+              ),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const TermsConditionsManageScreen(),
+                  ),
+                );
+              },
             ),
           if (_isPathakAdmin && (flags?.showFinance ?? true))
             ListTile(

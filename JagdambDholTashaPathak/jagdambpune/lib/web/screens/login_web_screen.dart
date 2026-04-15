@@ -114,33 +114,48 @@ class LoginWebScreen extends StatelessWidget {
                     ),
                   )
                 else
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      if (showRegistration)
-                        GestureDetector(
-                          onTap: onRegistrationTap,
-                          child: const Text(
-                            'Registration',
-                            style: TextStyle(
-                              color: AppColors.accentYellow,
-                              decoration: TextDecoration.underline,
-                              fontSize: 14,
-                            ),
+                      GestureDetector(
+                        onTap: onResetPinTap,
+                        child: const Text(
+                          'Reset PIN',
+                          style: TextStyle(
+                            color: AppColors.accentYellow,
+                            decoration: TextDecoration.underline,
+                            fontSize: 14,
                           ),
-                        )
-                      else
-                        GestureDetector(
-                          onTap: onResetPinTap,
-                          child: const Text(
-                            'Reset PIN',
-                            style: TextStyle(
-                              color: AppColors.accentYellow,
-                              decoration: TextDecoration.underline,
-                              fontSize: 14,
+                        ),
+                      ),
+                      if (showRegistration) ...[
+                        const SizedBox(height: 8),
+                        Center(
+                          child: SizedBox(
+                            width: 180,
+                            child: ElevatedButton(
+                              onPressed: onRegistrationTap,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.accentYellow,
+                                foregroundColor: AppColors.primaryMaroon,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 10,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              child: const Text(
+                                'Register for Pathak',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
                             ),
                           ),
                         ),
+                      ],
                     ],
                   ),
               ],
