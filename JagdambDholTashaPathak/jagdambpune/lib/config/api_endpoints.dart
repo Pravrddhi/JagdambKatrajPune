@@ -87,6 +87,16 @@ class ApiEndpoints {
   static final String verifyDevicePhone =
       '$baseUrl/auth/device/verify-phone-device/';
 
+  /// Terms and conditions list (pathak scoped)
+  static final String termsAndConditions = '$baseUrl/terms-and-conditions/';
+
+  /// Pathak-admin management endpoint for terms and conditions
+  static final String termsAndConditionsManage =
+      '$baseUrl/terms-and-conditions/manage/';
+
+  /// Reset PIN with phone number + Aadhaar last 4 digits
+  static final String resetPin = '$baseUrl/auth/reset-pin/';
+
   /// Refresh access token
   static final String getRefreshToken = '$baseUrl/auth/token/refresh/';
 
