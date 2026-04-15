@@ -50,8 +50,8 @@ android {
         applicationId = "com.jagdambpune.app"
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
-        versionCode = 7
-        versionName = "1.0.3"
+        versionCode = 9
+        versionName = "1.0.5"
     }
 }
 

@@ -129,31 +129,31 @@ class LoginWebScreen extends StatelessWidget {
                         ),
                       ),
                       if (showRegistration) ...[
-                        const SizedBox(height: 8),
-                        Center(
-                          child: SizedBox(
-                            width: 180,
-                            child: ElevatedButton(
-                              onPressed: onRegistrationTap,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.accentYellow,
-                                foregroundColor: AppColors.primaryMaroon,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 10,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
+                        const SizedBox(height: 10),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              'New to Pathak?  ',
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 14,
                               ),
+                            ),
+                            GestureDetector(
+                              onTap: onRegistrationTap,
                               child: const Text(
-                                'Register for Pathak',
+                                'Register',
                                 style: TextStyle(
+                                  color: AppColors.accentYellow,
                                   fontSize: 14,
-                                  fontWeight: FontWeight.w600,
+                                  fontWeight: FontWeight.bold,
+                                  decoration: TextDecoration.underline,
+                                  decorationColor: AppColors.accentYellow,
                                 ),
                               ),
                             ),
-                          ),
+                          ],
                         ),
                       ],
                     ],

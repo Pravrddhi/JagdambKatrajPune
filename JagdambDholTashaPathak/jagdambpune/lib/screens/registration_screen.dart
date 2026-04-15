@@ -763,8 +763,8 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     return Scaffold(
       backgroundColor: AppColors.primaryMaroon,
       body: SafeArea(
-        top: isIos,
-        bottom: isIos,
+        top: true,
+        bottom: false,
         child: Stack(
           children: [
             LayoutBuilder(
@@ -772,16 +772,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                 return SingleChildScrollView(
                   keyboardDismissBehavior:
                       ScrollViewKeyboardDismissBehavior.onDrag,
-                  padding: EdgeInsets.fromLTRB(
-                    24,
-                    isIos ? 72 : 88,
-                    24,
-                    formBottomPadding,
-                  ),
+                  padding: EdgeInsets.fromLTRB(24, 72, 24, formBottomPadding),
                   child: Center(
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
-                        minHeight: constraints.maxHeight - (isIos ? 72 : 88),
+                        minHeight: constraints.maxHeight - 72,
                         maxWidth: 520,
                       ),
                       child: Column(
@@ -1146,34 +1141,39 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                                 ),
                               ),
                             ),
-                          const SizedBox(height: 24),
-                          PremiumButton(
-                            text: "Register",
-                            isEnabled:
-                                _isFormValid && _hasAcceptedTerms && !isLoading,
-                            isLoading: isLoading,
-                            onPressed:
-                                _isFormValid && _hasAcceptedTerms && !isLoading
-                                ? _register
-                                : null,
-                          ),
-                          const SizedBox(height: 16),
-                          if (_errorMessage != null) ...[
-                            const SizedBox(height: 12),
-                            Text(
-                              _errorMessage!,
-                              style: const TextStyle(
-                                color: AppColors.accentYellow,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
+                          const SizedBox(height: 80),
                         ],
                       ),
                     ),
                   ),
                 );
               },
+            ),
+            Positioned(
+              bottom: mediaQuery.padding.bottom + 16,
+              left: 24,
+              right: 24,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_errorMessage != null) ...[
+                    Text(
+                      _errorMessage!,
+                      style: const TextStyle(color: AppColors.accentYellow),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                  PremiumButton(
+                    text: "Register",
+                    isEnabled: _isFormValid && _hasAcceptedTerms && !isLoading,
+                    isLoading: isLoading,
+                    onPressed: _isFormValid && _hasAcceptedTerms && !isLoading
+                        ? _register
+                        : null,
+                  ),
+                ],
+              ),
             ),
             Positioned(
               top: 8,
