@@ -611,37 +611,55 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                             ],
                             const SizedBox(height: 16),
-                            Wrap(
-                              alignment: WrapAlignment.center,
-                              crossAxisAlignment: WrapCrossAlignment.center,
-                              spacing: 8,
-                              runSpacing: 4,
+                            Column(
+                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                if (flags?.showRegistration ?? false) ...[
-                                  GestureDetector(
-                                    onTap: () {
-                                      Navigator.pushNamed(context, '/register');
-                                    },
-                                    child: const Text(
-                                      'Registration',
-                                      style: TextStyle(
-                                        color: AppColors.accentYellow,
-                                        decoration: TextDecoration.underline,
-                                        fontSize: 14,
-                                      ),
+                                GestureDetector(
+                                  onTap: () {
+                                    Navigator.pushNamed(context, '/resetPin');
+                                  },
+                                  child: const Text(
+                                    'Reset PIN',
+                                    style: TextStyle(
+                                      color: AppColors.accentYellow,
+                                      decoration: TextDecoration.underline,
+                                      fontSize: 14,
                                     ),
                                   ),
-                                ] else ...[
-                                  GestureDetector(
-                                    onTap: () {
-                                      Navigator.pushNamed(context, '/resetPin');
-                                    },
-                                    child: const Text(
-                                      'Reset PIN',
-                                      style: TextStyle(
-                                        color: AppColors.accentYellow,
-                                        decoration: TextDecoration.underline,
-                                        fontSize: 14,
+                                ),
+                                if (flags?.showRegistration ?? false) ...[
+                                  const SizedBox(height: 8),
+                                  Center(
+                                    child: SizedBox(
+                                      width: 180,
+                                      child: ElevatedButton(
+                                        onPressed: () {
+                                          Navigator.pushNamed(
+                                            context,
+                                            '/register',
+                                          );
+                                        },
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor:
+                                              AppColors.accentYellow,
+                                          foregroundColor:
+                                              AppColors.primaryMaroon,
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 10,
+                                          ),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                        ),
+                                        child: const Text(
+                                          'Register for Pathak',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
                                       ),
                                     ),
                                   ),

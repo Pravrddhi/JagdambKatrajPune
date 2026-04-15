@@ -147,15 +147,6 @@ class EmergencyContactDialog {
                   ),
                 ),
                 actions: [
-                  TextButton(
-                    onPressed: isLoading
-                        ? null
-                        : () => Navigator.of(context).pop(),
-                    child: const Text(
-                      'Cancel',
-                      style: TextStyle(color: AppColors.primaryMaroon),
-                    ),
-                  ),
                   ElevatedButton.icon(
                     onPressed: isLoading
                         ? null

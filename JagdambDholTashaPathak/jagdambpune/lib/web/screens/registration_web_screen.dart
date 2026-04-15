@@ -24,6 +24,9 @@ class RegistrationWebScreen extends StatefulWidget {
 }
 
 class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
+  static const String _termsAcceptedStorageKey =
+      'terms_and_conditions_accepted';
+
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _adhaarNumberController = TextEditingController();
   final TextEditingController _firstNameController = TextEditingController();
@@ -44,6 +47,10 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
   bool _isCheckingAdhaar = false;
   bool _isFormValid = false;
   bool isLoading = false;
+  bool _hasAcceptedTerms = false;
+  bool _isTermsLoading = false;
+  String _termsErrorMessage = '';
+  List<String> _termsAndConditions = const <String>[];
 
   List<String> _instruments = [];
   Timer? _debounceTimer;
@@ -59,6 +66,8 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     _adhaarNumberController.addListener(_validateForm);
 
     _loadInstruments();
+    _loadStoredTermsAcceptance();
+    _loadTermsAndConditions();
 
     _phoneController.addListener(() {
       _onPhoneChanged(_phoneController.text.trim());
@@ -421,6 +430,13 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
       });
     }
 
+    if (!_hasAcceptedTerms) {
+      setState(() {
+        _errorMessage = 'Please accept Terms & Conditions to continue.';
+      });
+      return;
+    }
+
     setState(() {
       isLoading = true;
       _errorMessage = null;
@@ -438,6 +454,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
           ? '${selectedDob!.year}-${selectedDob!.month.toString().padLeft(2, '0')}-${selectedDob!.day.toString().padLeft(2, '0')}'
           : null,
       'joining_year': selectedJoiningYear,
+      'has_accepted_terms': _hasAcceptedTerms,
       'device_id': 'web',
     };
 
@@ -499,6 +516,151 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
         _errorMessage = ApiEndpoints.genericApiFailureMessage;
       });
     }
+  }
+
+  Future<void> _loadStoredTermsAcceptance() async {
+    try {
+      final stored = await _storage.read(key: _termsAcceptedStorageKey);
+      if (!mounted) return;
+      setState(() {
+        _hasAcceptedTerms = stored == 'true';
+      });
+    } catch (_) {
+      // Non-blocking: checkbox remains unchecked if storage read fails.
+    }
+  }
+
+  Future<void> _setTermsAcceptance(bool accepted) async {
+    setState(() {
+      _hasAcceptedTerms = accepted;
+      if (accepted &&
+          _errorMessage == 'Please accept Terms & Conditions to continue.') {
+        _errorMessage = null;
+      }
+    });
+    try {
+      await _storage.write(
+        key: _termsAcceptedStorageKey,
+        value: accepted ? 'true' : 'false',
+      );
+    } catch (_) {
+      // Non-blocking: local persistence should not block registration.
+    }
+  }
+
+  Future<void> _loadTermsAndConditions() async {
+    if (_isTermsLoading) return;
+
+    setState(() {
+      _isTermsLoading = true;
+      _termsErrorMessage = '';
+    });
+
+    try {
+      final uri = Uri.parse(
+        '${ApiEndpoints.termsAndConditions}?pathak_id=${ApiEndpoints.pathakIdInt}',
+      );
+      final response = await http.get(uri, headers: ApiEndpoints.jsonHeaders());
+
+      if (response.statusCode != 200) {
+        await BugReportService.reportApiFailure(
+          title: 'Terms and conditions API failed',
+          errorMessage: response.body,
+          pageUrl: '/registration',
+          statusCode: response.statusCode,
+          endpoint: ApiEndpoints.termsAndConditions,
+        );
+        if (!mounted) return;
+        setState(() {
+          _termsErrorMessage = ApiEndpoints.genericApiFailureMessage;
+          _termsAndConditions = const <String>[];
+        });
+        return;
+      }
+
+      final decoded = jsonDecode(response.body);
+      final termsRaw = (decoded is Map<String, dynamic>)
+          ? decoded['terms_and_conditions']
+          : null;
+
+      final parsedTerms = termsRaw is List
+          ? termsRaw
+                .map((e) => e.toString().trim())
+                .where((e) => e.isNotEmpty)
+                .toList()
+          : <String>[];
+
+      if (!mounted) return;
+      setState(() {
+        _termsAndConditions = parsedTerms;
+      });
+    } catch (e) {
+      await BugReportService.reportApiFailure(
+        title: 'Terms and conditions API exception',
+        errorMessage: e.toString(),
+        pageUrl: '/registration',
+        endpoint: ApiEndpoints.termsAndConditions,
+      );
+      if (!mounted) return;
+      setState(() {
+        _termsErrorMessage = ApiEndpoints.serverUnreachableMessage;
+        _termsAndConditions = const <String>[];
+      });
+    } finally {
+      if (!mounted) return;
+      setState(() {
+        _isTermsLoading = false;
+      });
+    }
+  }
+
+  Future<void> _showTermsDialog() async {
+    if (_isTermsLoading) return;
+    if (_termsAndConditions.isEmpty) {
+      await _loadTermsAndConditions();
+    }
+    if (!mounted) return;
+
+    final terms = _termsAndConditions;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Terms and Conditions'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: terms.isEmpty
+              ? Text(
+                  _termsErrorMessage.isNotEmpty
+                      ? _termsErrorMessage
+                      : 'No terms available right now.',
+                )
+              : ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: terms.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  itemBuilder: (_, index) =>
+                      Text('${index + 1}. ${terms[index]}'),
+                ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              await _setTermsAcceptance(true);
+              if (!mounted) return;
+              Navigator.pop(context);
+            },
+            child: const Text(
+              'Accept',
+              style: TextStyle(color: AppColors.primaryMaroon),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -828,12 +990,60 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                         ),
                       ),
                     ),
+                  const SizedBox(height: 12),
+                  TextButton(
+                    onPressed: _showTermsDialog,
+                    child: const Text(
+                      'View Terms & Accept',
+                      style: TextStyle(
+                        color: AppColors.primaryMaroon,
+                        decoration: TextDecoration.underline,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    _hasAcceptedTerms ? 'Terms accepted' : 'Terms not accepted',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: _hasAcceptedTerms
+                          ? AppColors.accentYellow
+                          : AppColors.textLight,
+                      fontSize: 12,
+                    ),
+                  ),
+                  if (_isTermsLoading)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 4),
+                      child: SizedBox(
+                        height: 16,
+                        width: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.accentYellow,
+                        ),
+                      ),
+                    ),
+                  if (_termsErrorMessage.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        _termsErrorMessage,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: AppColors.accentYellow,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
                   const SizedBox(height: 24),
                   PremiumButton(
                     text: 'Register',
-                    isEnabled: _isFormValid && !isLoading,
+                    isEnabled: _isFormValid && _hasAcceptedTerms && !isLoading,
                     isLoading: isLoading,
-                    onPressed: _isFormValid && !isLoading ? _register : null,
+                    onPressed: _isFormValid && _hasAcceptedTerms && !isLoading
+                        ? _register
+                        : null,
                   ),
                   if (_errorMessage != null) ...[
                     const SizedBox(height: 12),

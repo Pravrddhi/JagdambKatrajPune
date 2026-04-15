@@ -16,6 +16,7 @@ Future<String> showSetPinDialog(
   BuildContext context,
   String phoneNumber, {
   required bool isResetFlow,
+  String? adhaarNumber,
 }) async {
   final pinController = TextEditingController();
   final GlobalKey<FormState> formKey = GlobalKey<FormState>();
@@ -35,14 +36,31 @@ Future<String> showSetPinDialog(
                 setState(() => isLoading = true);
 
                 try {
-                  final response = await http.post(
-                    Uri.parse(ApiEndpoints.setPin),
-                    headers: {'Content-Type': 'application/json'},
-                    body: jsonEncode({
+                  late final Uri endpoint;
+                  late final Map<String, dynamic> body;
+
+                  if (isResetFlow && adhaarNumber != null) {
+                    // Reset PIN flow using phone + Aadhaar last 4 digits.
+                    endpoint = Uri.parse(ApiEndpoints.resetPin);
+                    body = {
+                      'phone_number': '+91$phoneNumber',
+                      'adhaar_number': adhaarNumber,
+                      'new_pin': pinController.text,
+                    };
+                  } else {
+                    // Registration/old reset flow
+                    endpoint = Uri.parse(ApiEndpoints.setPin);
+                    body = {
                       'phone_number': phoneNumber,
                       'pin': pinController.text,
                       'pathak_id': ApiEndpoints.pathakIdInt,
-                    }),
+                    };
+                  }
+
+                  final response = await http.post(
+                    endpoint,
+                    headers: {'Content-Type': 'application/json'},
+                    body: jsonEncode(body),
                   );
 
                   final data = jsonDecode(response.body);
@@ -77,7 +95,7 @@ Future<String> showSetPinDialog(
                       errorMessage: response.body,
                       pageUrl: '/set-pin',
                       statusCode: response.statusCode,
-                      endpoint: ApiEndpoints.setPin,
+                      endpoint: endpoint.toString(),
                     );
                     setState(() {
                       if (response.statusCode == 404 ||
@@ -95,7 +113,9 @@ Future<String> showSetPinDialog(
                     title: 'Set PIN API exception',
                     errorMessage: e.toString(),
                     pageUrl: '/set-pin',
-                    endpoint: ApiEndpoints.setPin,
+                    endpoint: isResetFlow && adhaarNumber != null
+                        ? ApiEndpoints.resetPin
+                        : ApiEndpoints.setPin,
                   );
                   setState(() {
                     isLoading = false;

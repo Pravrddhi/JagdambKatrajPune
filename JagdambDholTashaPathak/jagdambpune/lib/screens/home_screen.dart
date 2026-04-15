@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
 import '../widgets/set_pin_dialog.dart';
@@ -118,6 +119,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   Future<void> _ensureMobilePushSetup() async {
     if (kIsWeb) return;
 
+    // Request notification permission on Android 13+ after login
+    await _requestNotificationPermission();
+
     // Keep token refresh listener active and sync the current token once
     // we have an authenticated user session.
     _fcmService.listenTokenRefresh();
@@ -152,6 +156,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _scheduleIosPushRetry();
       }
     });
+  }
+
+  Future<void> _requestNotificationPermission() async {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+
+    final status = await Permission.notification.request();
+    if (status.isDenied) {
+      debugPrint('[Notification] Permission denied');
+    } else if (status.isPermanentlyDenied) {
+      debugPrint('[Notification] Permission permanently denied');
+    } else if (status.isGranted) {
+      debugPrint('[Notification] Permission granted');
+    }
   }
 
   void _connectNotificationSocket(String token) {
