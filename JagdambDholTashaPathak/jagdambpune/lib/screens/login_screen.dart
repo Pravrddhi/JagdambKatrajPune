@@ -611,61 +611,22 @@ class _LoginScreenState extends State<LoginScreen> {
                               ),
                             ],
                             const SizedBox(height: 16),
-                            Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                GestureDetector(
-                                  onTap: () {
-                                    Navigator.pushNamed(context, '/resetPin');
-                                  },
-                                  child: const Text(
-                                    'Reset PIN',
-                                    style: TextStyle(
-                                      color: AppColors.accentYellow,
-                                      decoration: TextDecoration.underline,
-                                      fontSize: 14,
-                                    ),
+                            Center(
+                              child: GestureDetector(
+                                onTap: () {
+                                  Navigator.pushNamed(context, '/resetPin');
+                                },
+                                child: const Text(
+                                  'Reset PIN',
+                                  style: TextStyle(
+                                    color: AppColors.accentYellow,
+                                    decoration: TextDecoration.underline,
+                                    fontSize: 14,
                                   ),
                                 ),
-                                if (flags?.showRegistration ?? false) ...[
-                                  const SizedBox(height: 8),
-                                  Center(
-                                    child: SizedBox(
-                                      width: 180,
-                                      child: ElevatedButton(
-                                        onPressed: () {
-                                          Navigator.pushNamed(
-                                            context,
-                                            '/register',
-                                          );
-                                        },
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor:
-                                              AppColors.accentYellow,
-                                          foregroundColor:
-                                              AppColors.primaryMaroon,
-                                          padding: const EdgeInsets.symmetric(
-                                            vertical: 10,
-                                          ),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
-                                          ),
-                                        ),
-                                        child: const Text(
-                                          'Register for Pathak',
-                                          style: TextStyle(
-                                            fontSize: 14,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ],
+                              ),
                             ),
+                            const SizedBox(height: 80),
                           ],
                         ),
                       ),
@@ -676,6 +637,48 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           ),
 
+          if (flags?.showRegistration ?? false)
+            Positioned(
+              bottom: mediaQuery.padding.bottom + 24,
+              left: 0,
+              right: 0,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Divider(
+                    color: Colors.white24,
+                    indent: 48,
+                    endIndent: 48,
+                    thickness: 1,
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Text(
+                        'New to Pathak?  ',
+                        style: TextStyle(color: Colors.white70, fontSize: 14),
+                      ),
+                      GestureDetector(
+                        onTap: () {
+                          Navigator.pushNamed(context, '/register');
+                        },
+                        child: const Text(
+                          'Register',
+                          style: TextStyle(
+                            color: AppColors.accentYellow,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            decoration: TextDecoration.underline,
+                            decorationColor: AppColors.accentYellow,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
           if (_isLoggingIn) const LoggingInOverlay(),
         ],
       ),
