@@ -688,9 +688,11 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
       return;
     }
 
-    final currentRole = user.role?.trim();
-    String selectedGroup = _availableGroups.contains(currentRole)
-        ? currentRole!
+    final currentGroup = user.groups.isNotEmpty
+        ? user.groups.first.trim()
+        : (user.role ?? '').trim();
+    String selectedGroup = _availableGroups.contains(currentGroup)
+        ? currentGroup
         : _availableGroups.first;
     bool isSubmitting = false;
 
@@ -701,7 +703,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
           builder: (context, setDialogState) {
             final hasGroupChanged =
                 selectedGroup.trim().toLowerCase() !=
-                (currentRole ?? '').trim().toLowerCase();
+                currentGroup.toLowerCase();
             return AlertDialog(
               title: const Text('Update User Group'),
               content: Column(
@@ -786,7 +788,10 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                             setState(() {
                               _users = _users.map<User>((entry) {
                                 if (entry.id != userId) return entry;
-                                return entry.copyWith(role: selectedGroup);
+                                return entry.copyWith(
+                                  role: selectedGroup,
+                                  groups: <String>[selectedGroup],
+                                );
                               }).toList();
                             });
                             _applyFilters();
@@ -872,7 +877,10 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
               _detailCard(
                 children: [
                   _row('Phone', user.phoneNumber),
-                  _row('Role', user.role),
+                  _row(
+                    'Role',
+                    user.groups.isNotEmpty ? user.groups.join(', ') : user.role,
+                  ),
                   _row('Status', _statusLabel(user)),
                   _row('Instrument', user.instrument),
                   _row('Joined Year', user.joiningYear),
@@ -893,82 +901,89 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
           ),
         ),
         actions: [
-          if (widget.canUpdateUserGroup && !_isSoftDeleted(user))
-            TextButton(
-              onPressed: effectiveUserId == null
-                  ? null
-                  : () => _showUpdateGroupDialog(user, effectiveUserId),
-              child: const Text(
-                'Update Group',
-                style: TextStyle(
-                  color: AppColors.primaryMaroon,
-                  fontWeight: FontWeight.w700,
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (widget.canUpdateUserGroup && !_isSoftDeleted(user))
+                TextButton(
+                  onPressed: effectiveUserId == null
+                      ? null
+                      : () => _showUpdateGroupDialog(user, effectiveUserId),
+                  child: const Text(
+                    'Update Group',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              if (widget.isPathakAdmin && _isSoftDeleted(user))
+                TextButton(
+                  onPressed: effectiveUserId == null
+                      ? null
+                      : () => _restoreUser(effectiveUserId),
+                  child: const Text(
+                    'Restore',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              if (widget.isPathakAdmin && !_isSoftDeleted(user))
+                TextButton(
+                  onPressed: effectiveUserId == null
+                      ? null
+                      : () => _softDeleteUser(effectiveUserId),
+                  child: const Text(
+                    'Delete',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              if (_statusFilter == 'pending' && _isPending(user))
+                TextButton(
+                  onPressed: effectiveUserId == null
+                      ? null
+                      : () => _rejectUser(effectiveUserId),
+                  child: const Text(
+                    'Reject',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              if ((_statusFilter == 'pending' && _isPending(user)) ||
+                  (_statusFilter == 'rejected' && _isRejected(user)))
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.accentYellow,
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  onPressed: effectiveUserId == null
+                      ? null
+                      : () => _approveUser(effectiveUserId),
+                  child: const Text(
+                    'Approve',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(
+                  'Close',
+                  style: TextStyle(
+                    color: AppColors.primaryMaroon,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
-            ),
-          if (widget.isPathakAdmin && _isSoftDeleted(user))
-            TextButton(
-              onPressed: effectiveUserId == null
-                  ? null
-                  : () => _restoreUser(effectiveUserId),
-              child: const Text(
-                'Restore',
-                style: TextStyle(
-                  color: AppColors.primaryMaroon,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          if (widget.isPathakAdmin && !_isSoftDeleted(user))
-            TextButton(
-              onPressed: effectiveUserId == null
-                  ? null
-                  : () => _softDeleteUser(effectiveUserId),
-              child: const Text(
-                'Delete',
-                style: TextStyle(
-                  color: Colors.red,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          if (_statusFilter == 'pending' && _isPending(user))
-            TextButton(
-              onPressed: effectiveUserId == null
-                  ? null
-                  : () => _rejectUser(effectiveUserId),
-              child: const Text(
-                'Reject',
-                style: TextStyle(
-                  color: Colors.red,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          if ((_statusFilter == 'pending' && _isPending(user)) ||
-              (_statusFilter == 'rejected' && _isRejected(user)))
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.accentYellow,
-                foregroundColor: AppColors.primaryMaroon,
-              ),
-              onPressed: effectiveUserId == null
-                  ? null
-                  : () => _approveUser(effectiveUserId),
-              child: const Text(
-                'Approve',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text(
-              'Close',
-              style: TextStyle(
-                color: AppColors.primaryMaroon,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+            ],
           ),
         ],
       ),
@@ -1366,10 +1381,13 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                                   subtitle: Padding(
                                     padding: const EdgeInsets.only(top: 6),
                                     child: Text(
-                                      user.role == null ||
-                                              user.role!.trim().isEmpty
+                                      (user.groups.isEmpty &&
+                                              (user.role == null ||
+                                                  user.role!.trim().isEmpty))
                                           ? 'Tap to view details'
-                                          : user.role!,
+                                          : (user.groups.isNotEmpty
+                                                ? user.groups.join(', ')
+                                                : user.role!),
                                       style: const TextStyle(
                                         color: AppColors.disabled,
                                       ),

@@ -90,7 +90,7 @@ class ApiEndpoints {
   /// Terms and conditions list (pathak scoped)
   static final String termsAndConditions = '$baseUrl/terms-and-conditions/';
 
-  /// Pathak-admin management endpoint for terms and conditions
+  /// Pathak-admin endpoint for terms and conditions
   static final String termsAndConditionsManage =
       '$baseUrl/terms-and-conditions/manage/';
 
@@ -120,7 +120,7 @@ class ApiEndpoints {
   /// Update status of a Mirvnuk event (0=not started, 1=started, 3=canceled, 4=completed)
   static final String updateMirvnukStatus = '$baseUrl/mirvnuk-status/';
 
-  /// Generate attendance QR at a specific location (management/pathak_admin)
+  /// Generate attendance QR at a specific location (pathak_admin)
   static final String generateAttendanceQr = '$baseUrl/attendance/qr/generate/';
 
   /// Mark attendance by scanning QR (all users)
@@ -140,7 +140,7 @@ class ApiEndpoints {
   /// List my attendance entries (calendar view)
   static final String myAttendance = '$baseUrl/attendance/my/';
 
-  /// List attendance grouped by user (admin/management)
+  /// List attendance grouped by user (pathak_admin and gat_pramukh)
   static final String attendanceByUser = '$baseUrl/attendance/by-user/';
 
   /// Create a new notification
@@ -213,6 +213,57 @@ class ApiEndpoints {
 
   /// Get user details
   static final String getUserDetails = '$baseUrl/profile/get-user-details/';
+
+  // -------------------
+  // Dhol Maintenance Endpoints
+  // -------------------
+
+  /// List inventory and add/update inventory items
+  static final String maintenanceInventory = '$baseUrl/maintenance/inventory/';
+
+  /// Update/delete specific inventory item
+  static String getMaintenanceInventoryItem(int id) =>
+      '$baseUrl/maintenance/inventory/$id/';
+
+  /// List and create inventory requests
+  static final String maintenanceInventoryRequests =
+      '$baseUrl/maintenance/inventory/requests/';
+
+  /// Approve/reject inventory request
+  static final String maintenanceInventoryRequestAction =
+      '$baseUrl/maintenance/inventory/requests/action/';
+
+  /// List and create dhol maintenance entries
+  static final String maintenanceEntries = '$baseUrl/maintenance/entries/';
+
+  /// Approve/reject dhol maintenance entry
+  static final String maintenanceEntryAction =
+      '$baseUrl/maintenance/entries/action/';
+
+  /// Maintenance stock analysis dashboard
+  static final String maintenanceAnalysis = '$baseUrl/maintenance/analysis/';
+
+  /// Maintenance events list/create
+  static final String maintenanceEvents = '$baseUrl/maintenance/events/';
+
+  /// Maintenance event details by id
+  static String getMaintenanceEventDetail(int eventId) =>
+      '$baseUrl/maintenance/events/$eventId/';
+
+  /// Submit completion request for a maintenance event
+  static String getMaintenanceEventCompletionRequests(int eventId) =>
+      '$baseUrl/maintenance/events/$eventId/completion-requests/';
+
+  /// List completion requests
+  static final String maintenanceCompletionRequests =
+      '$baseUrl/maintenance/completion-requests/';
+
+  /// Approve/reject completion request by id
+  static String getMaintenanceCompletionRequestAction(int requestId) =>
+      '$baseUrl/maintenance/completion-requests/$requestId/action/';
+
+  /// Maintenance audit logs
+  static final String maintenanceAuditLogs = '$baseUrl/maintenance/audit-logs/';
 
   // -------------------
   // Miscellaneous Constants

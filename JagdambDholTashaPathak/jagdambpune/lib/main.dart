@@ -147,16 +147,6 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
-  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
-  late final _FeatureFlagNavigationObserver _featureFlagNavigationObserver =
-      _FeatureFlagNavigationObserver(
-        onNavigation: () {
-          final navContext = _navigatorKey.currentContext;
-          if (navContext == null) return;
-          navContext.read<FeatureFlagsProvider>().fetchFeatureFlags();
-        },
-      );
-
   Future<void> _handleIncomingMessage(RemoteMessage message) async {
     final notification = message.notification;
     final title =
@@ -239,8 +229,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      navigatorKey: _navigatorKey,
-      navigatorObservers: [_featureFlagNavigationObserver],
       title: AppConfig.appTitle,
       theme: ThemeData(
         primaryColor: AppColors.primaryMaroon,
@@ -309,48 +297,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         '/resetPin': (context) => const ResetPinScreen(),
       },
     );
-  }
-}
-
-class _FeatureFlagNavigationObserver extends NavigatorObserver {
-  final VoidCallback onNavigation;
-
-  _FeatureFlagNavigationObserver({required this.onNavigation});
-
-  bool _shouldRefreshForRoute(Route<dynamic>? route) {
-    if (route == null) return false;
-    return route is PageRoute<dynamic>;
-  }
-
-  void _refreshOnNav(Route<dynamic>? route) {
-    if (!_shouldRefreshForRoute(route)) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      onNavigation();
-    });
-  }
-
-  @override
-  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    super.didPush(route, previousRoute);
-    _refreshOnNav(route);
-  }
-
-  @override
-  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    super.didPop(route, previousRoute);
-    _refreshOnNav(route);
-  }
-
-  @override
-  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) {
-    super.didReplace(newRoute: newRoute, oldRoute: oldRoute);
-    _refreshOnNav(newRoute);
-  }
-
-  @override
-  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
-    super.didRemove(route, previousRoute);
-    _refreshOnNav(previousRoute);
   }
 }
 

@@ -1186,9 +1186,7 @@ class ApiService {
                   final normalized = group.toLowerCase();
                   // Never allow assigning admin-level groups from this flow.
                   return normalized != 'pathak_admin' &&
-                      normalized != 'pathak-admin' &&
-                      normalized != 'gat_pramukh' &&
-                      normalized != 'gat-pramukh';
+                      normalized != 'pathak-admin';
                 })
                 .toList();
             return groups;

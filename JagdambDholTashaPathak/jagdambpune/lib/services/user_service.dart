@@ -8,6 +8,22 @@ import 'refresh_token_service.dart';
 class UserService {
   static const _storage = FlutterSecureStorage();
 
+  /// Normalizes profile payloads coming from either flat profile APIs
+  /// or login-style wrappers that contain the profile inside `data`.
+  static Map<String, dynamic> normalizeUserPayload(Map<String, dynamic> raw) {
+    final root = Map<String, dynamic>.from(raw);
+    final nested = root['data'] is Map
+        ? Map<String, dynamic>.from(root['data'] as Map)
+        : <String, dynamic>{};
+
+    final merged = <String, dynamic>{...nested, ...root};
+
+    merged['joining_year'] ??= merged['joiningYear'] ?? merged['joined_year'];
+    merged['gat_pramukh_name'] ??= merged['gatPramukhName'];
+
+    return merged;
+  }
+
   /// Fetch user details from API using the provided [token].
   /// If token expired, automatically refreshes then retries.
   /// Throws exceptions on failure.
@@ -19,7 +35,7 @@ class UserService {
         final data = jsonDecode(response.body);
 
         if (data['status'] == true && data['data'] != null) {
-          return data['data'];
+          return normalizeUserPayload(Map<String, dynamic>.from(data));
         } else {
           throw Exception(data['message'] ?? 'Failed to load user details.');
         }

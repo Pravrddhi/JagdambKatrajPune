@@ -14,6 +14,58 @@ class ProfileScreen extends StatelessWidget {
     required this.userDetails, // default hidden
   });
 
+  bool _parseBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value == 1;
+    final normalized = value?.toString().trim().toLowerCase();
+    return normalized == 'true' || normalized == '1' || normalized == 'yes';
+  }
+
+  bool _isGatPramukh(Map<String, dynamic> details) {
+    final nested = details['data'];
+    return _parseBool(details['is_gat_pramukh']) ||
+        _parseBool(details['isGatPramukh']) ||
+        (nested is Map<String, dynamic> &&
+            (_parseBool(nested['is_gat_pramukh']) ||
+                _parseBool(nested['isGatPramukh']))) ||
+        (nested is Map &&
+            (_parseBool(nested['is_gat_pramukh']) ||
+                _parseBool(nested['isGatPramukh'])));
+  }
+
+  String? _gatName(Map<String, dynamic> details) {
+    final nested = details['data'];
+    final candidates = <dynamic>[
+      details['gat_name'],
+      details['gatName'],
+      details['gat'],
+      if (nested is Map<String, dynamic>) ...[
+        nested['gat_name'],
+        nested['gatName'],
+        nested['gat'],
+      ],
+      if (nested is Map) ...[
+        nested['gat_name'],
+        nested['gatName'],
+        nested['gat'],
+      ],
+    ];
+
+    for (final candidate in candidates) {
+      final value = candidate?.toString().trim() ?? '';
+      if (value.isNotEmpty) return value;
+    }
+    return null;
+  }
+
+  String _gatPramukhBannerText(Map<String, dynamic> details) {
+    final gatName = _gatName(details);
+    if (gatName != null && gatName.isNotEmpty) {
+      return 'You are gat pramukh of $gatName';
+    }
+    return 'You are gat pramukh';
+  }
+
   @override
   Widget build(BuildContext context) {
     /// Prepare user details, excluding unnecessary keys
@@ -21,6 +73,9 @@ class ProfileScreen extends StatelessWidget {
     final filteredDetails = userDetails.entries
         .where((entry) {
           if (entry.key == 'events' ||
+              entry.key == 'data' ||
+              entry.key == 'groups' ||
+              entry.key == 'group' ||
               entry.key == 'role' ||
               entry.key == 'is_gat_pramukh' ||
               entry.key == 'has_fcm_token' ||
@@ -65,6 +120,53 @@ class ProfileScreen extends StatelessWidget {
             /// Profile avatar
             const _Avatar(),
             const SizedBox(height: 20),
+
+            if (_isGatPramukh(userDetails))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Align(
+                  alignment: Alignment.center,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          AppColors.accentYellow.withValues(alpha: 0.3),
+                          Colors.white,
+                        ],
+                        begin: Alignment.centerLeft,
+                        end: Alignment.centerRight,
+                      ),
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: AppColors.accentYellow.withValues(alpha: 0.85),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.workspace_premium_outlined,
+                          size: 14,
+                          color: AppColors.primaryMaroon,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          _gatPramukhBannerText(userDetails),
+                          style: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
 
             /// User details card
             _UserDetailsCard(
