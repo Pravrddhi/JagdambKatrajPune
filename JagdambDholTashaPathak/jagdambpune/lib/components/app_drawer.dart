@@ -9,6 +9,7 @@ import '../screens/document_center_screen.dart';
 import '../screens/gat_details_screen.dart';
 import '../screens/coming_soon_screen.dart';
 import '../screens/attendance_module_screen.dart';
+import '../screens/dhol_maintenance_screen.dart';
 import '../screens/terms_conditions_manage_screen.dart';
 
 class AppDrawer extends StatelessWidget {
@@ -24,6 +25,12 @@ class AppDrawer extends StatelessWidget {
     this.userDetails,
     required this.onLogout,
   });
+
+  static const Set<String> _fixedGroups = <String>{
+    'pathak_admin',
+    'vadak',
+    'maintance_admin',
+  };
 
   void _navigateToProfile(BuildContext context) {
     Navigator.pop(context); // Close drawer first
@@ -87,6 +94,73 @@ class AppDrawer extends StatelessWidget {
     );
   }
 
+  bool get _isMaintanceAdmin {
+    final details = userDetails;
+    final groups = _normalizedGroups(details);
+    final hasMaintenanceRole = groups.contains('maintance_admin');
+
+    if (hasMaintenanceRole) return true;
+
+    return _parseBool(details?['is_maintance_admin']) ||
+        _parseBool(details?['is_maintaince_admin']) ||
+        _parseBool(details?['is_maintenance_admin']) ||
+        _parseBool(details?['isMaintenanceAdmin']) ||
+        _parseBool(details?['isMaintainceAdmin']) ||
+        _parseBool(details?['isMaintanceAdmin']);
+  }
+
+  bool get _canManageMaintenanceInventory =>
+      _isMaintanceAdmin || _isPathakAdminOnly;
+
+  bool get _canCreateMaintenanceEvents =>
+      _isMaintanceAdmin || _isPathakAdminOnly;
+
+  bool get _canApproveMaintenanceCompletions =>
+      _isPathakAdminOnly || _isGatPramukh;
+
+  bool get _canApproveMaintenanceEntries =>
+      _isMaintanceAdmin || _isPathakAdminOnly || _isGatPramukh;
+
+  void _navigateToMaintenance(BuildContext context) {
+    Navigator.pop(context);
+    final nested = userDetails?['data'];
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => DholMaintenanceScreen(
+          canManageInventory: _canManageMaintenanceInventory,
+          canApproveEntries: _canApproveMaintenanceEntries,
+          canCreateMaintenanceEvents: _canCreateMaintenanceEvents,
+          canApproveCompletionRequests: _canApproveMaintenanceCompletions,
+          isPathakAdminApprover: _isPathakAdminOnly,
+          approverGatId: int.tryParse(
+            userDetails?['gat_id']?.toString() ??
+                userDetails?['gatId']?.toString() ??
+                (nested is Map<String, dynamic>
+                    ? nested['gat_id']?.toString()
+                    : null) ??
+                (nested is Map<String, dynamic>
+                    ? nested['gatId']?.toString()
+                    : null) ??
+                (nested is Map ? nested['gat_id']?.toString() : null) ??
+                (nested is Map ? nested['gatId']?.toString() : null) ??
+                '',
+          ),
+          currentUserId: int.tryParse(
+            userDetails?['id']?.toString() ??
+                userDetails?['user_id']?.toString() ??
+                userDetails?['userId']?.toString() ??
+                '',
+          ),
+          currentUserName:
+              '${userDetails?['first_name'] ?? ''} ${userDetails?['last_name'] ?? ''}'
+                  .trim(),
+          userInstrument: userDetails?['instrument']?.toString(),
+        ),
+      ),
+    );
+  }
+
   void _navigateToComingSoon(BuildContext context, String title) {
     Navigator.pop(context);
     Navigator.push(
@@ -130,44 +204,119 @@ class AppDrawer extends StatelessWidget {
     return normalized == 'true' || normalized == '1' || normalized == 'yes';
   }
 
+  String _normalizeRole(dynamic value) {
+    return value
+            ?.toString()
+            .trim()
+            .toLowerCase()
+            .replaceAll('-', '_')
+            .replaceAll(' ', '_') ??
+        '';
+  }
+
+  Set<String> _normalizedGroups(Map<String, dynamic>? details) {
+    final resolved = <String>{};
+    if (details == null) return resolved;
+
+    final nested = details['data'];
+    final groupSources = <dynamic>[
+      details['groups'],
+      details['group'],
+      if (nested is Map<String, dynamic>) ...[
+        nested['groups'],
+        nested['group'],
+      ],
+      if (nested is Map) ...[nested['groups'], nested['group']],
+    ];
+
+    for (final source in groupSources) {
+      if (source is String) {
+        final normalized = _normalizeRole(source);
+        if (_fixedGroups.contains(normalized)) {
+          resolved.add(normalized);
+        }
+        continue;
+      }
+      if (source is! List) continue;
+      for (final group in source) {
+        final candidates = <dynamic>[
+          group,
+          if (group is Map<String, dynamic>) ...[
+            group['name'],
+            group['group'],
+            group['group_name'],
+            group['role'],
+            group['role_name'],
+            group['code'],
+            group['slug'],
+          ],
+          if (group is Map) ...[
+            group['name'],
+            group['group'],
+            group['group_name'],
+            group['role'],
+            group['role_name'],
+            group['code'],
+            group['slug'],
+          ],
+        ];
+
+        for (final candidate in candidates) {
+          final normalized = _normalizeRole(candidate);
+          if (_fixedGroups.contains(normalized)) {
+            resolved.add(normalized);
+          }
+        }
+      }
+    }
+
+    final roleCandidates = <dynamic>[
+      details['role'],
+      details['user_role'],
+      details['role_name'],
+      details['userRole'],
+      details['userType'],
+      details['user_type'],
+      details['type'],
+      details['group'],
+      details['group_name'],
+    ];
+    for (final candidate in roleCandidates) {
+      final normalized = _normalizeRole(candidate);
+      if (_fixedGroups.contains(normalized)) {
+        resolved.add(normalized);
+      }
+    }
+
+    return resolved;
+  }
+
   /// True when the user has admin-level access:
-  /// pathak_admin/management roles or gat-pramukh access.
+  /// pathak_admin role or gat-pramukh access.
   bool get _isAdminLike {
     if (userDetails == null) return false;
-    final role = userDetails!['role']?.toString().trim().toLowerCase();
-    final isRoleAdmin = role == 'pathak_admin' || role == 'pathak-admin';
-    final isRoleManagement = role == 'management';
-    final isRoleGatPramukh = role == 'gat_pramukh' || role == 'gat-pramukh';
-    final isGatPramukhFlag =
-        _parseBool(userDetails!['is_gat_pramukh']) ||
-        _parseBool(userDetails!['isGatPramukh']);
-    return isRoleAdmin ||
-        isRoleManagement ||
-        isRoleGatPramukh ||
-        isGatPramukhFlag;
+    final groups = _normalizedGroups(userDetails);
+    final isRoleAdmin = groups.contains('pathak_admin');
+    final isGatPramukhFlag = _isGatPramukh;
+    return isRoleAdmin || isGatPramukhFlag;
   }
 
   bool get _isPathakAdminOnly {
-    final role = userDetails?['role']?.toString().trim().toLowerCase();
-    return role == 'pathak_admin' || role == 'pathak-admin';
+    final details = userDetails;
+    final groups = _normalizedGroups(details);
+    final hasPathakAdminRole = groups.contains('pathak_admin');
+
+    return hasPathakAdminRole ||
+        _parseBool(details?['is_pathak_admin']) ||
+        _parseBool(details?['isPathakAdmin']);
   }
 
   bool get _isPathakAdmin {
-    return _isPathakAdminOnly || _isManagement;
-  }
-
-  bool get _isManagement {
-    final role = userDetails?['role']?.toString().trim().toLowerCase();
-    return role == 'management';
-  }
-
-  bool get _isSuperuser {
-    final role = userDetails?['role']?.toString().trim().toLowerCase();
-    return role == 'superuser';
+    return _isPathakAdminOnly;
   }
 
   bool get _canGenerateAttendanceQr {
-    return _isPathakAdmin || _isManagement;
+    return _isPathakAdmin;
   }
 
   bool get _canSetAttendanceLocation {
@@ -175,16 +324,20 @@ class AppDrawer extends StatelessWidget {
   }
 
   bool get _canViewAttendanceByUser {
-    return _isPathakAdmin || _isManagement || _isSuperuser || _isGatPramukh;
+    return _isPathakAdmin || _isGatPramukh;
   }
 
   bool get _isGatPramukh {
     if (userDetails == null) return false;
-    final role = userDetails!['role']?.toString().trim().toLowerCase();
-    final isRoleGatPramukh = role == 'gat_pramukh' || role == 'gat-pramukh';
-    return isRoleGatPramukh ||
-        _parseBool(userDetails!['is_gat_pramukh']) ||
-        _parseBool(userDetails!['isGatPramukh']);
+    final nested = userDetails!['data'];
+    return _parseBool(userDetails!['is_gat_pramukh']) ||
+        _parseBool(userDetails!['isGatPramukh']) ||
+        (nested is Map<String, dynamic> &&
+            (_parseBool(nested['is_gat_pramukh']) ||
+                _parseBool(nested['isGatPramukh']))) ||
+        (nested is Map &&
+            (_parseBool(nested['is_gat_pramukh']) ||
+                _parseBool(nested['isGatPramukh'])));
   }
 
   @override
@@ -235,7 +388,7 @@ class AppDrawer extends StatelessWidget {
               ),
               onTap: () => _navigateToAllUsers(context),
             ),
-          // Show Gat Details for pathak_admin/management and My Gat for all other logged-in users.
+          // Show Gat Details for pathak_admin and My Gat for all other logged-in users.
           if (userDetails != null && (flags?.showGat ?? true))
             ListTile(
               leading: const Icon(Icons.groups, color: AppColors.primaryMaroon),
@@ -267,7 +420,7 @@ class AppDrawer extends StatelessWidget {
                 'Maintenance',
                 style: TextStyle(color: AppColors.primaryMaroon),
               ),
-              onTap: () => _navigateToComingSoon(context, 'Maintenance'),
+              onTap: () => _navigateToMaintenance(context),
             ),
           if (flags?.showDocuments ?? false)
             ListTile(

@@ -1,4 +1,10 @@
 class User {
+  static const Set<String> _fixedGroups = <String>{
+    'pathak_admin',
+    'vadak',
+    'maintance_admin',
+  };
+
   final int? id;
   final bool? isActive;
   final bool? isDeleted;
@@ -10,6 +16,7 @@ class User {
   final String? joiningYear;
   final String? sex;
   final String? role;
+  final List<String> groups;
   final String? bloodGroup;
   final String? emergencyContactName;
   final String? emergencyContactPhone;
@@ -28,6 +35,7 @@ class User {
     this.joiningYear,
     this.sex,
     this.role,
+    this.groups = const <String>[],
     this.bloodGroup,
     this.emergencyContactName,
     this.emergencyContactPhone,
@@ -36,6 +44,16 @@ class User {
   });
 
   factory User.fromJson(Map<String, dynamic> json) {
+    String normalizeGroup(dynamic value) {
+      return value
+              ?.toString()
+              .trim()
+              .toLowerCase()
+              .replaceAll('-', '_')
+              .replaceAll(' ', '_') ??
+          '';
+    }
+
     final rawDeleted = json['isdelete'] ?? json['is_deleted'];
     final bool? parsedIsDeleted = (() {
       if (rawDeleted == null) return null;
@@ -56,6 +74,34 @@ class User {
       Map<String, dynamic> map => map['name']?.toString(),
       _ => gatRaw.toString(),
     };
+
+    final normalizedGroups = <String>[];
+    final groupsRaw = json['groups'];
+    if (groupsRaw is List) {
+      for (final value in groupsRaw) {
+        final normalized = normalizeGroup(value);
+        if (_fixedGroups.contains(normalized) &&
+            !normalizedGroups.contains(normalized)) {
+          normalizedGroups.add(normalized);
+        }
+      }
+    }
+
+    final legacyRole =
+        json['role']?.toString() ??
+        json['group_name']?.toString() ??
+        json['group']?.toString();
+    final normalizedLegacyRole = normalizeGroup(legacyRole);
+    if (_fixedGroups.contains(normalizedLegacyRole) &&
+        !normalizedGroups.contains(normalizedLegacyRole)) {
+      normalizedGroups.add(normalizedLegacyRole);
+    }
+
+    final primaryRole = normalizedGroups.isNotEmpty
+        ? normalizedGroups.first
+        : (legacyRole?.trim().isEmpty ?? true)
+        ? null
+        : legacyRole?.trim();
 
     return User(
       id: json['id'] is int
@@ -93,7 +139,8 @@ class User {
       instrument: json['instrument'],
       joiningYear: json['joining_year']?.toString(),
       sex: json['sex'],
-      role: json['role']?.toString() ?? json['group_name']?.toString(),
+      role: primaryRole,
+      groups: normalizedGroups,
       bloodGroup: json['blood_group'],
       emergencyContactName: json['emergency_contact_name'],
       emergencyContactPhone: json['emergency_contact_phone'],
@@ -114,6 +161,7 @@ class User {
     String? joiningYear,
     String? sex,
     String? role,
+    List<String>? groups,
     String? bloodGroup,
     String? emergencyContactName,
     String? emergencyContactPhone,
@@ -132,6 +180,7 @@ class User {
       joiningYear: joiningYear ?? this.joiningYear,
       sex: sex ?? this.sex,
       role: role ?? this.role,
+      groups: groups ?? this.groups,
       bloodGroup: bloodGroup ?? this.bloodGroup,
       emergencyContactName: emergencyContactName ?? this.emergencyContactName,
       emergencyContactPhone:

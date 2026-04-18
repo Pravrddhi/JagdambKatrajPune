@@ -1141,39 +1141,34 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
                                 ),
                               ),
                             ),
-                          const SizedBox(height: 80),
+                          const SizedBox(height: 24),
+                          PremiumButton(
+                            text: "Register",
+                            isEnabled:
+                                _isFormValid && _hasAcceptedTerms && !isLoading,
+                            isLoading: isLoading,
+                            onPressed:
+                                _isFormValid && _hasAcceptedTerms && !isLoading
+                                ? _register
+                                : null,
+                          ),
+                          const SizedBox(height: 16),
+                          if (_errorMessage != null) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              _errorMessage!,
+                              style: const TextStyle(
+                                color: AppColors.accentYellow,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
                         ],
                       ),
                     ),
                   ),
                 );
               },
-            ),
-            Positioned(
-              bottom: mediaQuery.padding.bottom + 16,
-              left: 24,
-              right: 24,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (_errorMessage != null) ...[
-                    Text(
-                      _errorMessage!,
-                      style: const TextStyle(color: AppColors.accentYellow),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                  ],
-                  PremiumButton(
-                    text: "Register",
-                    isEnabled: _isFormValid && _hasAcceptedTerms && !isLoading,
-                    isLoading: isLoading,
-                    onPressed: _isFormValid && _hasAcceptedTerms && !isLoading
-                        ? _register
-                        : null,
-                  ),
-                ],
-              ),
             ),
             Positioned(
               top: 8,

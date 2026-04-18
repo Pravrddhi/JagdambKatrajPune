@@ -2480,7 +2480,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         children: [
           Text(
             widget.canSetAttendanceLocation
-                ? 'Only Pathak Admin can set the attendance location. Management can generate QR only from configured location.'
+                ? 'Only Pathak Admin can set the attendance location. Other users can generate QR only from the configured location.'
                 : 'QR can be generated only at the location configured by Pathak Admin, within the allowed radius.',
             style: const TextStyle(
               color: AppColors.primaryMaroon,
