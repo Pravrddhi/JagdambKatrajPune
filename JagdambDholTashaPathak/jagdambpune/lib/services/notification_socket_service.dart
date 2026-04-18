@@ -44,6 +44,11 @@ class NotificationSocketService {
     try {
       final uri = ApiEndpoints.notificationsWebSocketUri(token);
       _channel = WebSocketChannel.connect(uri);
+      // WebSocketChannel.connect may expose connection failures through
+      // channel.ready. Handle it to avoid unhandled async exceptions.
+      _channel!.ready.catchError((_) {
+        _scheduleReconnect();
+      });
       _subscription = _channel!.stream.listen(
         _onMessage,
         onError: (_) => _scheduleReconnect(),
