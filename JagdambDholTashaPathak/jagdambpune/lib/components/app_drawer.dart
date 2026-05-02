@@ -30,6 +30,7 @@ class AppDrawer extends StatelessWidget {
     'pathak_admin',
     'vadak',
     'maintance_admin',
+    'management',
   };
 
   void _navigateToProfile(BuildContext context) {
@@ -292,13 +293,17 @@ class AppDrawer extends StatelessWidget {
   }
 
   /// True when the user has admin-level access:
-  /// pathak_admin role or gat-pramukh access.
+  /// pathak_admin, management role, or gat-pramukh access.
   bool get _isAdminLike {
     if (userDetails == null) return false;
     final groups = _normalizedGroups(userDetails);
     final isRoleAdmin = groups.contains('pathak_admin');
+    final isManagementRole =
+        groups.contains('management') ||
+        _parseBool(userDetails?['is_management']) ||
+        _parseBool(userDetails?['isManagement']);
     final isGatPramukhFlag = _isGatPramukh;
-    return isRoleAdmin || isGatPramukhFlag;
+    return isRoleAdmin || isManagementRole || isGatPramukhFlag;
   }
 
   bool get _isPathakAdminOnly {
@@ -378,7 +383,7 @@ class AppDrawer extends StatelessWidget {
             ),
             onTap: () => _navigateToProfile(context),
           ),
-          // Show Users for pathak_admin and gat pramukhs
+          // Show Users for pathak_admin, management, and gat pramukhs.
           if (_isAdminLike)
             ListTile(
               leading: const Icon(Icons.people, color: AppColors.primaryMaroon),

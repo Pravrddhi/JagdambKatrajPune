@@ -5,8 +5,10 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'firebase_options.dart';
 import 'providers/feature_flags_provider.dart';
@@ -32,6 +34,7 @@ const AndroidNotificationChannel channel = AndroidNotificationChannel(
 const FlutterSecureStorage _bgStorage = FlutterSecureStorage();
 const String _notificationStorageKey = 'app_notifications';
 bool _firebaseReady = false;
+final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -147,6 +150,10 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  String? _appVersion;
+  bool _isShowingUpdateDialog = false;
+  FeatureFlagsProvider? _featureFlagsProvider;
+
   Future<void> _handleIncomingMessage(RemoteMessage message) async {
     final notification = message.notification;
     final title =
@@ -193,6 +200,13 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _loadAppVersion();
+    try {
+      _featureFlagsProvider = context.read<FeatureFlagsProvider>();
+      _featureFlagsProvider?.addListener(_onFeatureFlagsChanged);
+    } catch (_) {
+      _featureFlagsProvider = null;
+    }
 
     if (_firebaseReady && !kIsWeb) {
       FirebaseMessaging.onMessage.listen((message) {
@@ -209,8 +223,136 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _loadAppVersion() async {
+    if (kIsWeb) return;
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      _appVersion = info.version;
+      await _maybeShowUpdateDialog();
+    } catch (_) {
+      // If package info fails we skip forced-update check for this session.
+    }
+  }
+
+  void _onFeatureFlagsChanged() {
+    _maybeShowUpdateDialog();
+  }
+
+  int _compareVersions(String current, String required) {
+    final currentParts = current
+        .split('.')
+        .map((p) => int.tryParse(p.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+        .toList();
+    final requiredParts = required
+        .split('.')
+        .map((p) => int.tryParse(p.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+        .toList();
+
+    final maxLen = currentParts.length > requiredParts.length
+        ? currentParts.length
+        : requiredParts.length;
+
+    for (var i = 0; i < maxLen; i++) {
+      final a = i < currentParts.length ? currentParts[i] : 0;
+      final b = i < requiredParts.length ? requiredParts[i] : 0;
+      if (a < b) return -1;
+      if (a > b) return 1;
+    }
+    return 0;
+  }
+
+  Future<void> _maybeShowUpdateDialog() async {
+    if (!mounted || _isShowingUpdateDialog) {
+      return;
+    }
+
+    final flags = context.read<FeatureFlagsProvider>().flags;
+    if (flags == null) return;
+
+    final dialogContext = _rootNavigatorKey.currentContext ?? context;
+
+    if (kIsWeb) {
+      final shouldShowWebUpdateNotice =
+          (flags.updateMessage?.trim().isNotEmpty ?? false) ||
+          flags.forceUpdateAndroid ||
+          flags.forceUpdateIos ||
+          (flags.minAndroidVersion?.trim().isNotEmpty ?? false) ||
+          (flags.minIosVersion?.trim().isNotEmpty ?? false);
+
+      if (!shouldShowWebUpdateNotice) return;
+
+      _isShowingUpdateDialog = true;
+      await showDialog<void>(
+        context: dialogContext,
+        barrierDismissible: true,
+        builder: (_) => AlertDialog(
+          title: const Text('Update Available'),
+          content: Text(flags.updateMessage ?? 'New updates has ben there'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      _isShowingUpdateDialog = false;
+      return;
+    }
+
+    final isAndroid = defaultTargetPlatform == TargetPlatform.android;
+    final isIos = defaultTargetPlatform == TargetPlatform.iOS;
+    if (!isAndroid && !isIos) return;
+
+    final minVersion = isAndroid
+        ? flags.minAndroidVersion
+        : flags.minIosVersion;
+    final forceFlag = isAndroid
+        ? flags.forceUpdateAndroid
+        : flags.forceUpdateIos;
+    final storeUrl = isAndroid ? flags.androidStoreUrl : flags.iosStoreUrl;
+
+    final requiresByVersion =
+        minVersion != null &&
+        _appVersion != null &&
+        _compareVersions(_appVersion!, minVersion) < 0;
+    final requiresUpdate = forceFlag || requiresByVersion;
+
+    if (!requiresUpdate) return;
+
+    _isShowingUpdateDialog = true;
+
+    await showDialog<void>(
+      context: dialogContext,
+      barrierDismissible: false,
+      builder: (_) => WillPopScope(
+        onWillPop: () async => false,
+        child: AlertDialog(
+          title: const Text('Update Required'),
+          content: Text(
+            flags.updateMessage ??
+                'A new version of the app is available. Please update to continue.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                if (storeUrl == null || storeUrl.trim().isEmpty) return;
+                final uri = Uri.tryParse(storeUrl.trim());
+                if (uri == null) return;
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              },
+              child: const Text('Update'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
+    _featureFlagsProvider?.removeListener(_onFeatureFlagsChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -223,12 +365,14 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         page: 1,
         pageSize: 20,
       );
+      _maybeShowUpdateDialog();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: _rootNavigatorKey,
       title: AppConfig.appTitle,
       theme: ThemeData(
         primaryColor: AppColors.primaryMaroon,
