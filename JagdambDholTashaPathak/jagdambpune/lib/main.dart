@@ -236,6 +236,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   }
 
   void _onFeatureFlagsChanged() {
+    if (kIsWeb) return;
     _maybeShowUpdateDialog();
   }
 
@@ -263,7 +264,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   }
 
   Future<void> _maybeShowUpdateDialog() async {
-    if (!mounted || _isShowingUpdateDialog) {
+    if (kIsWeb || !mounted || _isShowingUpdateDialog) {
       return;
     }
 
@@ -271,35 +272,6 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     if (flags == null) return;
 
     final dialogContext = _rootNavigatorKey.currentContext ?? context;
-
-    if (kIsWeb) {
-      final shouldShowWebUpdateNotice =
-          (flags.updateMessage?.trim().isNotEmpty ?? false) ||
-          flags.forceUpdateAndroid ||
-          flags.forceUpdateIos ||
-          (flags.minAndroidVersion?.trim().isNotEmpty ?? false) ||
-          (flags.minIosVersion?.trim().isNotEmpty ?? false);
-
-      if (!shouldShowWebUpdateNotice) return;
-
-      _isShowingUpdateDialog = true;
-      await showDialog<void>(
-        context: dialogContext,
-        barrierDismissible: true,
-        builder: (_) => AlertDialog(
-          title: const Text('Update Available'),
-          content: Text(flags.updateMessage ?? 'New updates has ben there'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-      _isShowingUpdateDialog = false;
-      return;
-    }
 
     final isAndroid = defaultTargetPlatform == TargetPlatform.android;
     final isIos = defaultTargetPlatform == TargetPlatform.iOS;
@@ -359,6 +331,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (kIsWeb) return;
     if (state == AppLifecycleState.resumed) {
       context.read<FeatureFlagsProvider>().fetchFeatureFlags(force: true);
       context.read<NotificationProvider>().fetchFromBackend(
