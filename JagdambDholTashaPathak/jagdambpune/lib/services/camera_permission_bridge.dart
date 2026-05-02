@@ -72,7 +72,7 @@ Future<bool> hasCameraPermissionWeb() async {
 
     // Try to query camera permission status
     final result = await permissions.query({'name': 'camera'});
-    final state = result['state'].toString().toLowerCase();
+    final state = result.state?.toLowerCase() ?? '';
     return state == 'granted';
   } catch (_) {
     return true; // Assume granted if check fails

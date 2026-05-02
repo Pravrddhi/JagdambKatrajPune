@@ -7,6 +7,13 @@ class FeatureFlags {
   final bool showFinance;
   final bool showDocuments;
   final bool showMirvnukLiveTracking;
+  final bool forceUpdateAndroid;
+  final bool forceUpdateIos;
+  final String? minAndroidVersion;
+  final String? minIosVersion;
+  final String? androidStoreUrl;
+  final String? iosStoreUrl;
+  final String? updateMessage;
 
   FeatureFlags({
     required this.showUpdateProfile,
@@ -17,6 +24,13 @@ class FeatureFlags {
     required this.showFinance,
     required this.showDocuments,
     required this.showMirvnukLiveTracking,
+    required this.forceUpdateAndroid,
+    required this.forceUpdateIos,
+    this.minAndroidVersion,
+    this.minIosVersion,
+    this.androidStoreUrl,
+    this.iosStoreUrl,
+    this.updateMessage,
   });
 
   // Backward-compatible aliases used in existing UI code.
@@ -76,7 +90,54 @@ class FeatureFlags {
         json['showMirvnukLiveTracking'] ?? json['show_mirvnuk_live_tracking'],
         defaultWhenNull: false,
       ),
+      forceUpdateAndroid: _toBool(
+        json['forceUpdateAndroid'] ??
+            json['force_update_android'] ??
+            json['android_force_update'],
+        defaultWhenNull: false,
+      ),
+      forceUpdateIos: _toBool(
+        json['forceUpdateIos'] ??
+            json['force_update_ios'] ??
+            json['ios_force_update'],
+        defaultWhenNull: false,
+      ),
+      minAndroidVersion: _toNullableString(
+        json['minAndroidVersion'] ??
+            json['min_android_version'] ??
+            json['android_min_version'] ??
+            json['required_android_version'],
+      ),
+      minIosVersion: _toNullableString(
+        json['minIosVersion'] ??
+            json['min_ios_version'] ??
+            json['ios_min_version'] ??
+            json['required_ios_version'],
+      ),
+      androidStoreUrl: _toNullableString(
+        json['androidStoreUrl'] ??
+            json['android_store_url'] ??
+            json['play_store_url'] ??
+            json['android_app_url'],
+      ),
+      iosStoreUrl: _toNullableString(
+        json['iosStoreUrl'] ??
+            json['ios_store_url'] ??
+            json['app_store_url'] ??
+            json['ios_app_url'],
+      ),
+      updateMessage: _toNullableString(
+        json['updateMessage'] ??
+            json['update_message'] ??
+            json['force_update_message'],
+      ),
     );
+  }
+
+  static String? _toNullableString(dynamic value) {
+    if (value == null) return null;
+    final text = value.toString().trim();
+    return text.isEmpty ? null : text;
   }
 
   static bool _toBool(dynamic value, {bool defaultWhenNull = false}) {

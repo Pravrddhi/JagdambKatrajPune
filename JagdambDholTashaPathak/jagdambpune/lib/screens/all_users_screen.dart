@@ -31,7 +31,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
   List<String> _availableGroups = [];
   List<String> _gatFilterOptions = ['all'];
   Map<String, String> _gatAliasToCanonical = {};
-  String _statusFilter = 'all';
+  String _statusFilter = 'approved';
   String _selectedGatName = 'all';
 
   bool _isLoading = true;
@@ -42,6 +42,8 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
   final TextEditingController _searchController = TextEditingController();
 
   int get _pendingCount => _users.where((user) => _isPending(user)).length;
+
+  int get _approvedCount => _users.where((user) => _isApproved(user)).length;
 
   int get _rejectedCount => _users.where((user) => _isRejected(user)).length;
 
@@ -219,10 +221,11 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         final matchesSearch = name.contains(query);
 
         final matchesStatus = switch (_statusFilter) {
+          'approved' => _isApproved(user),
           'pending' => _isPending(user),
           'rejected' => _isRejected(user),
           'deleted' => _isSoftDeleted(user),
-          _ => true,
+          _ => _isApproved(user),
         };
 
         final userGat = user.gatName?.trim() ?? '';
@@ -456,7 +459,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                     try {
                       final message = await ApiService.updateUserApproval(
                         userId: userId,
-                        decision: 0,
+                        decision: 3,
                         comment: comment,
                       );
 
@@ -1239,10 +1242,10 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                     child: Row(
                       children: [
                         ChoiceChip(
-                          label: const Text('All'),
-                          selected: _statusFilter == 'all',
+                          label: Text('Approved ($_approvedCount)'),
+                          selected: _statusFilter == 'approved',
                           selectedColor: AppColors.accentYellow,
-                          onSelected: (_) => _setStatusFilter('all'),
+                          onSelected: (_) => _setStatusFilter('approved'),
                           labelStyle: const TextStyle(
                             color: AppColors.primaryMaroon,
                             fontWeight: FontWeight.w600,

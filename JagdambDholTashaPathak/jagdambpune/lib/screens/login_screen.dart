@@ -12,9 +12,11 @@ import 'home_screen.dart';
 import '../services/bug_report_service.dart';
 import '../services/web_api_service.dart';
 import '../services/fcm_service.dart';
+import '../services/api_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../widgets/common_button.dart';
 import '../widgets/input_box.dart';
+import '../widgets/dropdown.dart';
 import 'package:provider/provider.dart';
 import '../providers/feature_flags_provider.dart';
 import '../web/screens/login_web_screen.dart';
@@ -29,6 +31,16 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   static const String _loginFailureMessage =
       ApiEndpoints.genericApiFailureMessage;
+  static const List<String> _bloodGroups = <String>[
+    'A+',
+    'A-',
+    'B+',
+    'B-',
+    'AB+',
+    'AB-',
+    'O+',
+    'O-',
+  ];
 
   final TextEditingController _pinController = TextEditingController();
   final TextEditingController _phoneController = TextEditingController();
@@ -281,8 +293,6 @@ class _LoginScreenState extends State<LoginScreen> {
       final rejectionComment = data['rejection_comment']?.toString().trim();
 
       if (shouldShowRejectionPopup) {
-        await _clearStoredSessionForUnapprovedUser();
-        if (!mounted) return;
         final popupTitle = (rejectionTitle != null && rejectionTitle.isNotEmpty)
             ? rejectionTitle
             : 'Rejected !';
@@ -292,23 +302,14 @@ class _LoginScreenState extends State<LoginScreen> {
           if (rejectionComment != null && rejectionComment.isNotEmpty)
             rejectionComment,
         ];
-        await showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => AlertDialog(
-            title: Text(popupTitle),
-            content: Text(
-              popupParts.isEmpty
-                  ? 'Your account has been rejected with below comment'
-                  : popupParts.join('\n\n'),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('OK'),
-              ),
-            ],
-          ),
+        await _showRejectedDialogWithReregister(
+          title: popupTitle,
+          message: popupParts.isEmpty
+              ? 'Your account has been rejected with below comment'
+              : popupParts.join('\n\n'),
+          payload: data,
+          profileData: profileData,
+          accessToken: accessToken,
         );
         return;
       }
@@ -344,25 +345,14 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       if (approvalStatus == 3) {
-        await _clearStoredSessionForUnapprovedUser();
-        if (!mounted) return;
-        await showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => AlertDialog(
-            title: const Text('Rejected !'),
-            content: Text(
-              approvalComment.isNotEmpty
-                  ? 'Your account has been rejected with below comment\n\n$approvalComment'
-                  : 'Your account has been rejected with below comment',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('OK'),
-              ),
-            ],
-          ),
+        await _showRejectedDialogWithReregister(
+          title: 'Rejected !',
+          message: approvalComment.isNotEmpty
+              ? 'Your account has been rejected with below comment\n\n$approvalComment'
+              : 'Your account has been rejected with below comment',
+          payload: data,
+          profileData: profileData,
+          accessToken: accessToken,
         );
         return;
       }
@@ -456,6 +446,439 @@ class _LoginScreenState extends State<LoginScreen> {
     await storage.delete(key: ApiEndpoints.refreshTokenKey);
     await storage.delete(key: ApiEndpoints.isGatPramukhKey);
     await storage.delete(key: ApiEndpoints.gatPramukhNameKey);
+  }
+
+  String _normalizeDigits(String value) => value.replaceAll(RegExp(r'\D'), '');
+
+  dynamic _pickRejectedField(
+    Map<String, dynamic> payload,
+    Map<String, dynamic> profileData,
+    List<String> keys,
+  ) {
+    final nested = payload['data'];
+    for (final key in keys) {
+      final fromProfile = profileData[key];
+      if (fromProfile != null && fromProfile.toString().trim().isNotEmpty) {
+        return fromProfile;
+      }
+      final fromPayload = payload[key];
+      if (fromPayload != null && fromPayload.toString().trim().isNotEmpty) {
+        return fromPayload;
+      }
+      if (nested is Map<String, dynamic>) {
+        final fromNested = nested[key];
+        if (fromNested != null && fromNested.toString().trim().isNotEmpty) {
+          return fromNested;
+        }
+      }
+      if (nested is Map) {
+        final fromNested = nested[key];
+        if (fromNested != null && fromNested.toString().trim().isNotEmpty) {
+          return fromNested;
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> _showReregisterFormDialog({
+    required Map<String, dynamic> payload,
+    required Map<String, dynamic> profileData,
+  }) async {
+    final firstNameController = TextEditingController(
+      text:
+          _pickRejectedField(payload, profileData, [
+            'first_name',
+          ])?.toString() ??
+          '',
+    );
+    final lastNameController = TextEditingController(
+      text:
+          _pickRejectedField(payload, profileData, ['last_name'])?.toString() ??
+          '',
+    );
+    final dobController = TextEditingController(
+      text:
+          _pickRejectedField(payload, profileData, [
+            'date_of_birth',
+          ])?.toString() ??
+          '',
+    );
+    final joiningYearController = TextEditingController(
+      text:
+          _pickRejectedField(payload, profileData, [
+            'joining_year',
+            'joiningYear',
+            'joined_year',
+          ])?.toString() ??
+          '',
+    );
+    final emergencyNameController = TextEditingController(
+      text:
+          _pickRejectedField(payload, profileData, [
+            'emergency_contact_name',
+          ])?.toString() ??
+          '',
+    );
+    final emergencyPhoneController = TextEditingController(
+      text:
+          _pickRejectedField(payload, profileData, [
+            'emergency_contact_phone',
+          ])?.toString() ??
+          '',
+    );
+
+    final rawGender = _pickRejectedField(payload, profileData, [
+      'gender',
+      'sex',
+    ])?.toString().trim();
+    final normalizedGender = rawGender?.toLowerCase() ?? '';
+    String selectedGender = switch (normalizedGender) {
+      'f' || 'female' => 'Female',
+      'm' || 'male' => 'Male',
+      'other' || 'o' => 'Other',
+      _ => 'Male',
+    };
+
+    final resolvedBloodGroup = _pickRejectedField(payload, profileData, [
+      'blood_group',
+    ])?.toString().trim().toUpperCase();
+    String selectedBloodGroup = _bloodGroups.contains(resolvedBloodGroup)
+        ? resolvedBloodGroup!
+        : 'O+';
+
+    DateTime? selectedDob = DateTime.tryParse(dobController.text.trim());
+
+    final formResult = await showDialog<Map<String, dynamic>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            return AlertDialog(
+              title: const Text('Re-register Details'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    PremiumInputBox(
+                      controller: firstNameController,
+                      label: 'First Name',
+                      useLightStyle: true,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'[a-zA-Z\s]'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    PremiumInputBox(
+                      controller: lastNameController,
+                      label: 'Last Name',
+                      useLightStyle: true,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'[a-zA-Z\s]'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    PremiumDropdown(
+                      label: 'Gender',
+                      value: selectedGender,
+                      options: const ['Male', 'Female', 'Other'],
+                      backgroundColor: Colors.white,
+                      labelColor: AppColors.primaryMaroon,
+                      textColor: AppColors.primaryMaroon,
+                      dropdownMenuColor: Colors.white,
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setLocalState(() {
+                          selectedGender = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    GestureDetector(
+                      onTap: () async {
+                        final now = DateTime.now();
+                        final initial =
+                            selectedDob ??
+                            DateTime(now.year - 18, now.month, now.day);
+                        final picked = await showDatePicker(
+                          context: dialogContext,
+                          initialDate: initial,
+                          firstDate: DateTime(1950),
+                          lastDate: now,
+                        );
+                        if (picked == null) return;
+                        setLocalState(() {
+                          selectedDob = picked;
+                          dobController.text =
+                              '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+                        });
+                      },
+                      child: AbsorbPointer(
+                        child: PremiumInputBox(
+                          controller: dobController,
+                          label: 'Date of Birth',
+                          useLightStyle: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    PremiumInputBox(
+                      controller: joiningYearController,
+                      label: 'Joining Year',
+                      useLightStyle: true,
+                      keyboardType: TextInputType.number,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    ),
+                    const SizedBox(height: 10),
+                    PremiumDropdown(
+                      label: 'Blood Group',
+                      value: selectedBloodGroup,
+                      options: _bloodGroups,
+                      backgroundColor: Colors.white,
+                      labelColor: AppColors.primaryMaroon,
+                      textColor: AppColors.primaryMaroon,
+                      dropdownMenuColor: Colors.white,
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setLocalState(() {
+                          selectedBloodGroup = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    PremiumInputBox(
+                      controller: emergencyNameController,
+                      label: 'Emergency Contact Name',
+                      useLightStyle: true,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'[a-zA-Z\s]'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    PremiumInputBox(
+                      controller: emergencyPhoneController,
+                      label: 'Emergency Contact Phone',
+                      useLightStyle: true,
+                      keyboardType: TextInputType.phone,
+                      maxLength: 10,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                SizedBox(
+                  width: 110,
+                  child: PremiumButton(
+                    text: 'Cancel',
+                    isEnabled: true,
+                    isLoading: false,
+                    backgroundColor: Colors.white,
+                    textColor: AppColors.primaryMaroon,
+                    onPressed: () => Navigator.pop(dialogContext),
+                  ),
+                ),
+                SizedBox(
+                  width: 190,
+                  child: PremiumButton(
+                    text: 'Update & Re-register',
+                    isEnabled: true,
+                    isLoading: false,
+                    onPressed: () {
+                      final joiningYear = int.tryParse(
+                        joiningYearController.text.trim(),
+                      );
+                      final emergencyPhone = _normalizeDigits(
+                        emergencyPhoneController.text.trim(),
+                      );
+
+                      if (joiningYearController.text.trim().isNotEmpty &&
+                          joiningYear == null) {
+                        ScaffoldMessenger.of(dialogContext).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Joining year must be a valid number.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+
+                      if (emergencyPhoneController.text.trim().isNotEmpty &&
+                          emergencyPhone.length < 10) {
+                        ScaffoldMessenger.of(dialogContext).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                              'Emergency contact phone must be at least 10 digits.',
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+
+                      Navigator.pop(dialogContext, <String, dynamic>{
+                        'first_name': firstNameController.text.trim(),
+                        'last_name': lastNameController.text.trim(),
+                        'gender': selectedGender,
+                        'date_of_birth': dobController.text.trim(),
+                        if (joiningYear != null) 'joining_year': joiningYear,
+                        'blood_group': selectedBloodGroup,
+                        'emergency_contact_name': emergencyNameController.text
+                            .trim(),
+                        'emergency_contact_phone': emergencyPhone,
+                      });
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    firstNameController.dispose();
+    lastNameController.dispose();
+    dobController.dispose();
+    joiningYearController.dispose();
+    emergencyNameController.dispose();
+    emergencyPhoneController.dispose();
+
+    return formResult;
+  }
+
+  Future<void> _showRejectedDialogWithReregister({
+    required String title,
+    required String message,
+    required Map<String, dynamic> payload,
+    required Map<String, dynamic> profileData,
+    required String accessToken,
+  }) async {
+    await _clearStoredSessionForUnapprovedUser();
+    if (!mounted) return;
+
+    final canReregister = accessToken.trim().isNotEmpty;
+
+    final dialogAction = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          if (canReregister)
+            SizedBox(
+              width: 130,
+              child: PremiumButton(
+                text: 'Re-register',
+                isEnabled: true,
+                isLoading: false,
+                onPressed: () => Navigator.pop(context, 'reregister'),
+              ),
+            ),
+          SizedBox(
+            width: 90,
+            child: PremiumButton(
+              text: 'OK',
+              isEnabled: true,
+              isLoading: false,
+              backgroundColor: Colors.white,
+              textColor: AppColors.primaryMaroon,
+              onPressed: () => Navigator.pop(context, 'ok'),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (dialogAction != 'reregister' || !canReregister) {
+      return;
+    }
+
+    final formPayload = await _showReregisterFormDialog(
+      payload: payload,
+      profileData: profileData,
+    );
+    if (formPayload == null) {
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _isLoggingIn = true;
+      });
+    }
+
+    try {
+      final reRegisterPayload = <String, dynamic>{
+        ...payload,
+        ...profileData,
+        ...formPayload,
+      };
+
+      await ApiService.requestReRegistration(
+        accessToken: accessToken,
+        userData: reRegisterPayload,
+      );
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          title: const Text('Request Submitted'),
+          content: const Text('Re sbumitted successfull'),
+          actions: [
+            SizedBox(
+              width: 90,
+              child: PremiumButton(
+                text: 'OK',
+                isEnabled: true,
+                isLoading: false,
+                backgroundColor: Colors.white,
+                textColor: AppColors.primaryMaroon,
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => AlertDialog(
+          title: const Text('Request Failed'),
+          content: Text(_friendlyErrorMessage(e)),
+          actions: [
+            SizedBox(
+              width: 90,
+              child: PremiumButton(
+                text: 'OK',
+                isEnabled: true,
+                isLoading: false,
+                backgroundColor: Colors.white,
+                textColor: AppColors.primaryMaroon,
+                onPressed: () => Navigator.pop(context),
+              ),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoggingIn = false;
+        });
+      }
+    }
   }
 
   @override

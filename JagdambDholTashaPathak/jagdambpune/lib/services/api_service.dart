@@ -911,9 +911,173 @@ class ApiService {
     }
   }
 
+  static Future<String> requestReRegistration({
+    required String accessToken,
+    Map<String, dynamic> userData = const <String, dynamic>{},
+  }) async {
+    try {
+      final normalizedToken = accessToken.trim();
+      if (normalizedToken.isEmpty) {
+        throw Exception('No access token found. Please login again.');
+      }
+
+      final uri = Uri.parse(ApiEndpoints.updateCurrentUser);
+
+      int? parseInt(dynamic value) {
+        if (value is int) return value;
+        if (value is num) return value.toInt();
+        return int.tryParse(value?.toString() ?? '');
+      }
+
+      dynamic pick(List<String> keys) {
+        for (final key in keys) {
+          final value = userData[key];
+          if (value != null) return value;
+        }
+        return null;
+      }
+
+      Future<String> setPendingStatusWithApprovalApi() async {
+        final response = await AuthorizedApiService.sendWithAutoRefresh(
+          normalizedToken,
+          (token) => http.patch(
+            Uri.parse(ApiEndpoints.userApproval),
+            headers: ApiEndpoints.authorizedHeaders(token),
+            body: jsonEncode({
+              'decision': 0,
+              'comment': 'Requesting re-review',
+            }),
+          ),
+        );
+
+        if (response == null) {
+          throw Exception('Session expired. Please login again.');
+        }
+
+        final decoded = response.body.isNotEmpty
+            ? jsonDecode(response.body)
+            : <String, dynamic>{};
+
+        if (response.statusCode == 200 || response.statusCode == 202) {
+          if (decoded is Map<String, dynamic>) {
+            final message = decoded['message']?.toString().trim();
+            if (message != null && message.isNotEmpty) {
+              return message;
+            }
+          }
+          return 'Re-review request submitted successfully.';
+        }
+
+        if (decoded is Map<String, dynamic>) {
+          final message = decoded['message']?.toString().trim();
+          if (message != null && message.isNotEmpty) {
+            throw Exception(message);
+          }
+          final detail = decoded['detail']?.toString().trim();
+          if (detail != null && detail.isNotEmpty) {
+            throw Exception(detail);
+          }
+        }
+
+        throw Exception(
+          'Failed to submit re-review request (status code ${response.statusCode})',
+        );
+      }
+
+      final payload = <String, dynamic>{
+        if ((pick(['first_name'])?.toString().trim().isNotEmpty ?? false))
+          'first_name': pick(['first_name']).toString().trim(),
+        if ((pick(['last_name'])?.toString().trim().isNotEmpty ?? false))
+          'last_name': pick(['last_name']).toString().trim(),
+        if ((pick(['gender', 'sex'])?.toString().trim().isNotEmpty ?? false))
+          'gender': pick(['gender', 'sex']).toString().trim(),
+        if ((pick(['date_of_birth'])?.toString().trim().isNotEmpty ?? false))
+          'date_of_birth': pick(['date_of_birth']).toString().trim(),
+        if (parseInt(pick(['joining_year', 'joiningYear', 'joined_year'])) !=
+            null)
+          'joining_year': parseInt(
+            pick(['joining_year', 'joiningYear', 'joined_year']),
+          ),
+        if ((pick(['blood_group'])?.toString().trim().isNotEmpty ?? false))
+          'blood_group': pick(['blood_group']).toString().trim(),
+        if ((pick(['emergency_contact_name'])?.toString().trim().isNotEmpty ??
+            false))
+          'emergency_contact_name': pick([
+            'emergency_contact_name',
+          ]).toString().trim(),
+        if ((pick(['emergency_contact_phone'])?.toString().trim().isNotEmpty ??
+            false))
+          'emergency_contact_phone': pick([
+            'emergency_contact_phone',
+          ]).toString().trim(),
+        if (parseInt(pick(['instrument_id', 'instrumentId'])) != null)
+          'instrument_id': parseInt(pick(['instrument_id', 'instrumentId'])),
+      };
+
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        normalizedToken,
+        (token) => http.patch(
+          uri,
+          headers: ApiEndpoints.authorizedHeaders(token),
+          body: jsonEncode(payload),
+        ),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (response.statusCode == 200 || response.statusCode == 202) {
+        // Validate profile update response first before touching approval status.
+        if (decoded is Map<String, dynamic>) {
+          final success = decoded['success'];
+          if (success is bool && !success) {
+            throw Exception(
+              decoded['message']?.toString().trim().isNotEmpty == true
+                  ? decoded['message'].toString().trim()
+                  : 'Failed to submit re-registration request.',
+            );
+          }
+        }
+
+        // Profile update succeeded — now set approval status back to pending (0).
+        final approvalMessage = await setPendingStatusWithApprovalApi();
+        return approvalMessage;
+      }
+
+      if (decoded is Map<String, dynamic>) {
+        final message = decoded['message']?.toString().trim();
+        if (message != null && message.isNotEmpty) {
+          throw Exception(message);
+        }
+        final detail = decoded['detail']?.toString().trim();
+        if (detail != null && detail.isNotEmpty) {
+          throw Exception(detail);
+        }
+      }
+
+      throw Exception(
+        'Failed to submit re-registration request (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Re-registration API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/login/re-register',
+        endpoint: ApiEndpoints.updateCurrentUser,
+      );
+      rethrow;
+    }
+  }
+
   static Future<String> updateUserApproval({
-    required int userId,
     required int decision,
+    int? userId,
     String? comment,
   }) async {
     try {
@@ -925,9 +1089,12 @@ class ApiService {
         throw Exception('No access token found. Please login again.');
       }
 
-      final uri = Uri.parse(ApiEndpoints.getUserApproval(userId));
+      final uri = Uri.parse(ApiEndpoints.userApproval);
 
-      final payload = <String, dynamic>{'decision': decision};
+      final payload = <String, dynamic>{
+        'decision': decision,
+        if (userId != null) 'user_id': userId,
+      };
       if (comment != null && comment.trim().isNotEmpty) {
         payload['comment'] = comment.trim();
       }
@@ -968,8 +1135,8 @@ class ApiService {
         final success = await _handleTokenRefresh();
         if (success) {
           return updateUserApproval(
-            userId: userId,
             decision: decision,
+            userId: userId,
             comment: comment,
           );
         }
@@ -984,8 +1151,8 @@ class ApiService {
         title: 'User approval API failure',
         errorMessage: e.toString(),
         stackTrace: st.toString(),
-        pageUrl: '/users/$userId/approval',
-        endpoint: ApiEndpoints.getUserApproval(userId),
+        pageUrl: '/users/approval',
+        endpoint: ApiEndpoints.userApproval,
       );
       rethrow;
     }
