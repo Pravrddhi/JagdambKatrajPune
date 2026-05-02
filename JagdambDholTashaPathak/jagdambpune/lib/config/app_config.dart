@@ -25,15 +25,35 @@ class AppConfig {
   // `const Color(...)` values.
 
   /// Primary brand colour (default: maroon).
+  ///
+  /// Used for:
+  /// - Main scaffold/app backgrounds in auth flows and splash.
+  /// - AppBar background and major header sections.
+  /// - Primary text/icon color on light surfaces.
+  /// - Borders/highlights in inputs and cards.
   static const int primaryColorValue = 0xFF702D2C;
 
   /// Accent / highlight colour (default: yellow).
+  ///
+  /// Used for:
+  /// - CTA emphasis (selected chips, important action highlights).
+  /// - Primary action contrast on maroon surfaces.
+  /// - Progress/loading accents and interactive focus visuals.
   static const int accentColorValue = 0xFFFFD600;
 
   /// Disabled / muted variant of the primary colour.
+  ///
+  /// Used for:
+  /// - Disabled buttons, secondary hints, subdued labels.
+  /// - Placeholder/less-prominent text and low-emphasis borders.
   static const int disabledColorValue = 0xFFA05252;
 
   /// App card / scaffold background colour.
+  ///
+  /// Used for:
+  /// - Light page backgrounds for content-heavy modules.
+  /// - Card containers/dialog body surfaces over brand headers.
+  /// - Neutral base to keep text readability high.
   static const int backgroundColorValue = 0xFFF5F5F5;
 
   // ── API / Backend ──────────────────────────────────────────────────────────
@@ -42,6 +62,7 @@ class AppConfig {
   /// Override at build time with: --dart-define=API_BASE_URL=https://your-api/api
   static const String defaultApiBaseUrl =
       'https://api.dholtashapathak.co.in/dholtashapathak/api';
+  // 'http://localhost:8080/dholtashapathak/api/';
 
   /// Pathak identifier sent with registration and instrument-fetch requests.
   static const String pathakId = '1';

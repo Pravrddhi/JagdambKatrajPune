@@ -1,8 +1,17 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
     id("com.google.gms.google-services")
+}
+
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -12,10 +21,13 @@ android {
 
     signingConfigs {
         create("release") {
-            keyAlias = "jagdamb-key"
-            keyPassword = "Jagdamb@2025"
-            storeFile = file("jagdamb.keystore")
-            storePassword = "Jagdamb@2025"
+            val storeFilePath = keystoreProperties["storeFile"] as String?
+            keyAlias = keystoreProperties["keyAlias"] as String?
+            keyPassword = keystoreProperties["keyPassword"] as String?
+            storePassword = keystoreProperties["storePassword"] as String?
+            if (!storeFilePath.isNullOrBlank()) {
+                storeFile = file(storeFilePath)
+            }
         }
     }
 
@@ -28,8 +40,8 @@ android {
     buildTypes {
         getByName("release") {
             signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = false
-            isShrinkResources = false
+            isMinifyEnabled = true
+            isShrinkResources = true
         }
         getByName("debug") {
             signingConfig = signingConfigs.getByName("debug")
@@ -50,8 +62,8 @@ android {
         applicationId = "com.jagdambpune.app"
         minSdk = 24
         targetSdk = flutter.targetSdkVersion
-        versionCode = 10
-        versionName = "1.0.6"
+        versionCode = 11
+        versionName = "1.0.7"
     }
 }
 

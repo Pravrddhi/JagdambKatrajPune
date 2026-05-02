@@ -204,6 +204,9 @@ class ApiEndpoints {
   /// Base endpoint to approve/reject a user (PATCH /api/users/{user_id}/approval/)
   static final String userApprovalBase = '$baseUrl/users';
 
+  /// Approve/reject endpoint for self/admin updates (PATCH /api/users/approval/)
+  static final String userApproval = '$baseUrl/users/approval/';
+
   /// Endpoint to refresh access token using refresh token
   static final String refreshToken = '$baseUrl/auth/token/refresh/';
 
@@ -213,6 +216,9 @@ class ApiEndpoints {
 
   /// Get user details
   static final String getUserDetails = '$baseUrl/profile/get-user-details/';
+
+  /// Update currently authenticated user profile (PATCH /api/user/update/)
+  static final String updateCurrentUser = '$baseUrl/user/update/';
 
   // -------------------
   // Dhol Maintenance Endpoints
@@ -304,6 +310,14 @@ class ApiEndpoints {
 
   /// Build endpoint for specific user details using id
   static String getUserById(int id) => '$userByIdBase/$id/';
+
+  /// Build endpoint to update user profile by id (PATCH /api/user/<id>/update/)
+  static String getUserUpdateById(int id) => '$userByIdBase/$id/update/';
+
+  /// Build endpoint to update user profile by identifier
+  /// (PATCH /api/user/<identifier>/update/)
+  static String getUserUpdateByIdentifier(String identifier) =>
+      '$userByIdBase/${Uri.encodeComponent(identifier)}/update/';
 
   /// Build endpoint to activate user by id
   static String getActivateUser(int id) => '$activateUserBase/$id/';
