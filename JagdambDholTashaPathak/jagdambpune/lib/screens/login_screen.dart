@@ -330,12 +330,12 @@ class _LoginScreenState extends State<LoginScreen> {
         await showDialog(
           context: context,
           barrierDismissible: false,
-          builder: (_) => AlertDialog(
+          builder: (dCtx) => AlertDialog(
             title: const Text('Pending Approval !'),
             content: const Text('Please wait till admin approves the account'),
             actions: [
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(dCtx),
                 child: const Text('OK'),
               ),
             ],
@@ -548,6 +548,7 @@ class _LoginScreenState extends State<LoginScreen> {
         : 'O+';
 
     DateTime? selectedDob = DateTime.tryParse(dobController.text.trim());
+    final Map<String, String?> errors = {};
 
     final formResult = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -555,6 +556,16 @@ class _LoginScreenState extends State<LoginScreen> {
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setLocalState) {
+            Widget errorText(String? msg) => msg != null
+                ? Padding(
+                    padding: const EdgeInsets.only(top: 4.0, left: 4.0),
+                    child: Text(
+                      msg,
+                      style: const TextStyle(color: Colors.red, fontSize: 12),
+                    ),
+                  )
+                : const SizedBox.shrink();
+
             return AlertDialog(
               title: const Text('Re-register Details'),
               content: SingleChildScrollView(
@@ -571,6 +582,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ],
                     ),
+                    errorText(errors['first_name']),
                     const SizedBox(height: 10),
                     PremiumInputBox(
                       controller: lastNameController,
@@ -582,6 +594,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ],
                     ),
+                    errorText(errors['last_name']),
                     const SizedBox(height: 10),
                     PremiumDropdown(
                       label: 'Gender',
@@ -602,20 +615,28 @@ class _LoginScreenState extends State<LoginScreen> {
                     GestureDetector(
                       onTap: () async {
                         final now = DateTime.now();
+                        final maxDob = DateTime(
+                          now.year - 16,
+                          now.month,
+                          now.day,
+                        );
                         final initial =
-                            selectedDob ??
-                            DateTime(now.year - 18, now.month, now.day);
+                            (selectedDob != null &&
+                                selectedDob!.isBefore(maxDob))
+                            ? selectedDob!
+                            : maxDob;
                         final picked = await showDatePicker(
                           context: dialogContext,
                           initialDate: initial,
                           firstDate: DateTime(1950),
-                          lastDate: now,
+                          lastDate: maxDob,
                         );
-                        if (picked == null) return;
+                        if (!dialogContext.mounted || picked == null) return;
                         setLocalState(() {
                           selectedDob = picked;
                           dobController.text =
                               '${picked.year.toString().padLeft(4, '0')}-${picked.month.toString().padLeft(2, '0')}-${picked.day.toString().padLeft(2, '0')}';
+                          errors['dob'] = null;
                         });
                       },
                       child: AbsorbPointer(
@@ -626,6 +647,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ),
                     ),
+                    errorText(errors['dob']),
                     const SizedBox(height: 10),
                     PremiumInputBox(
                       controller: joiningYearController,
@@ -634,6 +656,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       keyboardType: TextInputType.number,
                       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     ),
+                    errorText(errors['joining_year']),
                     const SizedBox(height: 10),
                     PremiumDropdown(
                       label: 'Blood Group',
@@ -661,6 +684,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                       ],
                     ),
+                    errorText(errors['emergency_name']),
                     const SizedBox(height: 10),
                     PremiumInputBox(
                       controller: emergencyPhoneController,
@@ -670,65 +694,110 @@ class _LoginScreenState extends State<LoginScreen> {
                       maxLength: 10,
                       inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     ),
+                    errorText(errors['emergency_phone']),
                   ],
                 ),
               ),
               actions: [
                 SizedBox(
-                  width: 110,
+                  width: 150,
                   child: PremiumButton(
                     text: 'Cancel',
                     isEnabled: true,
                     isLoading: false,
                     backgroundColor: Colors.white,
                     textColor: AppColors.primaryMaroon,
-                    onPressed: () => Navigator.pop(dialogContext),
+                    onPressed: () {
+                      FocusManager.instance.primaryFocus?.unfocus();
+                      Navigator.pop(dialogContext);
+                    },
                   ),
                 ),
                 SizedBox(
-                  width: 190,
+                  width: 150,
                   child: PremiumButton(
-                    text: 'Update & Re-register',
+                    text: 'Re-register',
                     isEnabled: true,
                     isLoading: false,
                     onPressed: () {
-                      final joiningYear = int.tryParse(
-                        joiningYearController.text.trim(),
-                      );
+                      FocusManager.instance.primaryFocus?.unfocus();
+                      final firstName = firstNameController.text.trim();
+                      final lastName = lastNameController.text.trim();
+                      final emergencyName = emergencyNameController.text.trim();
                       final emergencyPhone = _normalizeDigits(
                         emergencyPhoneController.text.trim(),
                       );
+                      final joiningYearText = joiningYearController.text.trim();
+                      final joiningYear = int.tryParse(joiningYearText);
+                      final now = DateTime.now();
 
-                      if (joiningYearController.text.trim().isNotEmpty &&
-                          joiningYear == null) {
-                        ScaffoldMessenger.of(dialogContext).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Joining year must be a valid number.',
-                            ),
-                          ),
-                        );
-                        return;
+                      // Collect all errors
+                      errors['first_name'] = firstName.isEmpty
+                          ? 'First name is required.'
+                          : !RegExp(r'^[a-zA-Z\s]+$').hasMatch(firstName)
+                          ? 'First name must contain only letters.'
+                          : null;
+
+                      errors['last_name'] = lastName.isEmpty
+                          ? 'Last name is required.'
+                          : !RegExp(r'^[a-zA-Z\s]+$').hasMatch(lastName)
+                          ? 'Last name must contain only letters.'
+                          : null;
+
+                      if (selectedDob == null) {
+                        errors['dob'] = 'Date of birth is required.';
+                      } else {
+                        int age = now.year - selectedDob!.year;
+                        if (now.month < selectedDob!.month ||
+                            (now.month == selectedDob!.month &&
+                                now.day < selectedDob!.day)) {
+                          age -= 1;
+                        }
+                        errors['dob'] = age < 16
+                            ? 'You must be at least 16 years old.'
+                            : null;
                       }
 
-                      if (emergencyPhoneController.text.trim().isNotEmpty &&
-                          emergencyPhone.length < 10) {
-                        ScaffoldMessenger.of(dialogContext).showSnackBar(
-                          const SnackBar(
-                            content: Text(
-                              'Emergency contact phone must be at least 10 digits.',
-                            ),
-                          ),
-                        );
-                        return;
-                      }
+                      errors['joining_year'] = joiningYearText.isEmpty
+                          ? 'Joining year is required.'
+                          : (joiningYear == null ||
+                                joiningYear < 1900 ||
+                                joiningYear > now.year)
+                          ? 'Enter a valid joining year.'
+                          : null;
+
+                      errors['emergency_name'] = emergencyName.isEmpty
+                          ? 'Emergency contact name is required.'
+                          : !RegExp(r'^[a-zA-Z\s]+$').hasMatch(emergencyName)
+                          ? 'Must contain only letters.'
+                          : emergencyName.toLowerCase() ==
+                                    '${firstName.toLowerCase()} ${lastName.toLowerCase()}'
+                                        .trim() ||
+                                emergencyName.toLowerCase() ==
+                                    firstName.toLowerCase() ||
+                                emergencyName.toLowerCase() ==
+                                    lastName.toLowerCase()
+                          ? 'Emergency contact cannot be the same person as you.'
+                          : null;
+
+                      errors['emergency_phone'] = emergencyPhone.isEmpty
+                          ? 'Emergency contact phone is required.'
+                          : !RegExp(r'^\d{10}$').hasMatch(emergencyPhone)
+                          ? 'Must be exactly 10 digits.'
+                          : emergencyPhone == _phoneController.text.trim()
+                          ? 'Emergency contact phone cannot be your own phone number.'
+                          : null;
+
+                      final hasErrors = errors.values.any((e) => e != null);
+                      setLocalState(() {});
+                      if (hasErrors) return;
 
                       Navigator.pop(dialogContext, <String, dynamic>{
                         'first_name': firstNameController.text.trim(),
                         'last_name': lastNameController.text.trim(),
                         'gender': selectedGender,
                         'date_of_birth': dobController.text.trim(),
-                        if (joiningYear != null) 'joining_year': joiningYear,
+                        'joining_year': joiningYear,
                         'blood_group': selectedBloodGroup,
                         'emergency_contact_name': emergencyNameController.text
                             .trim(),
@@ -743,13 +812,6 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       },
     );
-
-    firstNameController.dispose();
-    lastNameController.dispose();
-    dobController.dispose();
-    joiningYearController.dispose();
-    emergencyNameController.dispose();
-    emergencyPhoneController.dispose();
 
     return formResult;
   }
@@ -769,32 +831,40 @@ class _LoginScreenState extends State<LoginScreen> {
     final dialogAction = await showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: Text(title),
-        content: Text(message),
-        actions: [
-          if (canReregister)
-            SizedBox(
-              width: 130,
-              child: PremiumButton(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(message),
+            if (canReregister) ...[
+              const SizedBox(height: 16),
+              PremiumButton(
                 text: 'Re-register',
                 isEnabled: true,
                 isLoading: false,
-                onPressed: () => Navigator.pop(context, 'reregister'),
+                onPressed: () {
+                  FocusManager.instance.primaryFocus?.unfocus();
+                  Navigator.pop(dialogCtx, 'reregister');
+                },
               ),
-            ),
-          SizedBox(
-            width: 90,
-            child: PremiumButton(
+            ],
+            const SizedBox(height: 8),
+            PremiumButton(
               text: 'OK',
               isEnabled: true,
               isLoading: false,
               backgroundColor: Colors.white,
               textColor: AppColors.primaryMaroon,
-              onPressed: () => Navigator.pop(context, 'ok'),
+              onPressed: () {
+                FocusManager.instance.primaryFocus?.unfocus();
+                Navigator.pop(dialogCtx, 'ok');
+              },
             ),
-          ),
-        ],
+          ],
+        ),
+        actions: const [],
       ),
     );
 
@@ -831,9 +901,11 @@ class _LoginScreenState extends State<LoginScreen> {
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
-        builder: (_) => AlertDialog(
+        builder: (dCtx) => AlertDialog(
           title: const Text('Request Submitted'),
-          content: const Text('Re sbumitted successfull'),
+          content: const Text(
+            'Re-registration request submitted successfully.',
+          ),
           actions: [
             SizedBox(
               width: 90,
@@ -843,7 +915,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 isLoading: false,
                 backgroundColor: Colors.white,
                 textColor: AppColors.primaryMaroon,
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(dCtx),
               ),
             ),
           ],
@@ -854,7 +926,7 @@ class _LoginScreenState extends State<LoginScreen> {
       await showDialog<void>(
         context: context,
         barrierDismissible: false,
-        builder: (_) => AlertDialog(
+        builder: (dCtx) => AlertDialog(
           title: const Text('Request Failed'),
           content: Text(_friendlyErrorMessage(e)),
           actions: [
@@ -866,7 +938,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 isLoading: false,
                 backgroundColor: Colors.white,
                 textColor: AppColors.primaryMaroon,
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(dCtx),
               ),
             ),
           ],
@@ -927,183 +999,197 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     final mediaQuery = MediaQuery.of(context);
-    final formBottomPadding =
-        24.0 + mediaQuery.padding.bottom + mediaQuery.viewInsets.bottom;
+    final formBottomPadding = 24.0 + mediaQuery.padding.bottom;
 
     return Scaffold(
       backgroundColor: AppColors.primaryMaroon,
-      body: Stack(
-        children: [
-          SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  keyboardDismissBehavior:
-                      ScrollViewKeyboardDismissBehavior.onDrag,
-                  padding: EdgeInsets.fromLTRB(32, 24, 32, formBottomPadding),
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(
-                        minHeight: constraints.maxHeight - 24,
-                        maxWidth: 520,
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 24,
-                          vertical: 12,
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Image.asset(
-                              'assets/logos/splash_logo.png',
-                              height: 120,
-                              fit: BoxFit.contain,
-                            ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              'Login',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: AppColors.textLight,
-                                fontSize: 28,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 32),
-                            PremiumInputBox(
-                              controller: _pinController,
-                              label: 'Enter 6-digit PIN',
-                              isPin: true,
-                              onChanged: (_) {
-                                if (_errorMessage.isNotEmpty) {
-                                  setState(() {
-                                    _errorMessage = '';
-                                  });
-                                }
-                              },
-                            ),
-                            if (_errorMessage.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 8),
-                                child: Text(
-                                  _errorMessage,
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    color: AppColors.errorRed,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                              ),
-                            const SizedBox(height: 24),
-                            PremiumButton(
-                              text: 'Login',
-                              onPressed: _login,
-                              isLoading: _isLoggingIn,
-                              isEnabled: !_isLoggingIn,
-                            ),
-                            if (_isDeviceRegistered) ...[
-                              const SizedBox(height: 12),
-                              GestureDetector(
-                                onTap: _attemptBiometricLogin,
-                                child: const Center(
-                                  child: Wrap(
-                                    alignment: WrapAlignment.center,
-                                    crossAxisAlignment:
-                                        WrapCrossAlignment.center,
-                                    spacing: 8,
-                                    runSpacing: 4,
-                                    children: [
-                                      Icon(
-                                        Icons.fingerprint,
-                                        color: AppColors.accentYellow,
-                                        size: 32,
-                                      ),
-                                      Text(
-                                        'Login with Biometric',
-                                        textAlign: TextAlign.center,
-                                        style: TextStyle(
-                                          color: AppColors.accentYellow,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ],
-                            const SizedBox(height: 16),
-                            Center(
-                              child: GestureDetector(
-                                onTap: () {
-                                  Navigator.pushNamed(context, '/resetPin');
-                                },
-                                child: const Text(
-                                  'Reset PIN',
-                                  style: TextStyle(
-                                    color: AppColors.accentYellow,
-                                    decoration: TextDecoration.underline,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 80),
-                          ],
-                        ),
-                      ),
+      resizeToAvoidBottomInset: false,
+      bottomNavigationBar: (flags?.showRegistration ?? false)
+          ? SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Divider(
+                      color: Colors.white24,
+                      indent: 48,
+                      endIndent: 48,
+                      thickness: 1,
                     ),
-                  ),
-                );
-              },
-            ),
-          ),
-
-          if (flags?.showRegistration ?? false)
-            Positioned(
-              bottom: mediaQuery.padding.bottom + 24,
-              left: 0,
-              right: 0,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Divider(
-                    color: Colors.white24,
-                    indent: 48,
-                    endIndent: 48,
-                    thickness: 1,
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text(
-                        'New to Pathak?  ',
-                        style: TextStyle(color: Colors.white70, fontSize: 14),
-                      ),
-                      GestureDetector(
-                        onTap: () {
-                          Navigator.pushNamed(context, '/register');
-                        },
-                        child: const Text(
-                          'Register',
-                          style: TextStyle(
-                            color: AppColors.accentYellow,
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                            decoration: TextDecoration.underline,
-                            decorationColor: AppColors.accentYellow,
+                    const SizedBox(height: 12),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text(
+                          'New to Pathak?  ',
+                          style: TextStyle(color: Colors.white70, fontSize: 14),
+                        ),
+                        GestureDetector(
+                          onTap: () {
+                            Navigator.pushNamed(context, '/register');
+                          },
+                          child: const Text(
+                            'Register',
+                            style: TextStyle(
+                              color: AppColors.accentYellow,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              decoration: TextDecoration.underline,
+                              decorationColor: AppColors.accentYellow,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            )
+          : null,
+      body: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () {
+          FocusScope.of(context).unfocus();
+          if (_errorMessage.isNotEmpty) {
+            setState(() {
+              _errorMessage = '';
+            });
+          }
+        },
+        child: Stack(
+          children: [
+            SafeArea(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return SingleChildScrollView(
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: EdgeInsets.fromLTRB(32, 24, 32, formBottomPadding),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          minHeight: constraints.maxHeight - 24,
+                          maxWidth: 520,
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 24,
+                            vertical: 12,
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Image.asset(
+                                'assets/logos/splash_logo.png',
+                                height: 120,
+                                fit: BoxFit.contain,
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Login',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: AppColors.textLight,
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 32),
+                              PremiumInputBox(
+                                controller: _pinController,
+                                focusNode: _pinFocusNode,
+                                label: 'Enter 6-digit PIN',
+                                isPin: true,
+                                onChanged: (_) {
+                                  if (_errorMessage.isNotEmpty) {
+                                    setState(() {
+                                      _errorMessage = '';
+                                    });
+                                  }
+                                },
+                              ),
+                              if (_errorMessage.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 8),
+                                  child: Text(
+                                    _errorMessage,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      color: AppColors.errorRed,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ),
+                              const SizedBox(height: 24),
+                              PremiumButton(
+                                text: 'Login',
+                                onPressed: _login,
+                                isLoading: _isLoggingIn,
+                                isEnabled: !_isLoggingIn,
+                              ),
+                              if (_isDeviceRegistered) ...[
+                                const SizedBox(height: 12),
+                                GestureDetector(
+                                  onTap: _attemptBiometricLogin,
+                                  child: const Center(
+                                    child: Wrap(
+                                      alignment: WrapAlignment.center,
+                                      crossAxisAlignment:
+                                          WrapCrossAlignment.center,
+                                      spacing: 8,
+                                      runSpacing: 4,
+                                      children: [
+                                        Icon(
+                                          Icons.fingerprint,
+                                          color: AppColors.accentYellow,
+                                          size: 32,
+                                        ),
+                                        Text(
+                                          'Login with Biometric',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            color: AppColors.accentYellow,
+                                            fontSize: 14,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 16),
+                              Center(
+                                child: GestureDetector(
+                                  onTap: () {
+                                    Navigator.pushNamed(context, '/resetPin');
+                                  },
+                                  child: const Text(
+                                    'Reset PIN',
+                                    style: TextStyle(
+                                      color: AppColors.accentYellow,
+                                      decoration: TextDecoration.underline,
+                                      fontSize: 14,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 32),
+                            ],
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                ],
+                    ),
+                  );
+                },
               ),
             ),
-          if (_isLoggingIn) const LoggingInOverlay(),
-        ],
+
+            if (_isLoggingIn) const LoggingInOverlay(),
+          ],
+        ),
       ),
     );
   }
