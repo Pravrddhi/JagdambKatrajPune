@@ -289,12 +289,12 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
 
     await showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: const Text('Session Expired'),
         content: const Text('Your session has expired. Please login again.'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pop(dialogCtx),
             child: const Text('OK'),
           ),
         ],
@@ -370,12 +370,12 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
 
       await showDialog(
         context: context,
-        builder: (_) => AlertDialog(
+        builder: (dialogCtx) => AlertDialog(
           title: const Text('Success'),
           content: Text(message),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context),
+              onPressed: () => Navigator.pop(dialogCtx),
               child: const Text('OK'),
             ),
           ],
@@ -471,7 +471,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                         _isLoading = false;
                       });
                       ScaffoldMessenger.of(
-                        context,
+                        this.context,
                       ).showSnackBar(SnackBar(content: Text(message)));
                     } catch (e) {
                       if (!mounted) return;
@@ -482,7 +482,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                       }
 
                       ScaffoldMessenger.of(
-                        context,
+                        this.context,
                       ).showSnackBar(SnackBar(content: Text(e.toString())));
                       setState(() {
                         _isLoading = false;
@@ -497,8 +497,6 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         );
       },
     );
-
-    commentController.dispose();
   }
 
   void _markUserAsApprovedLocally(int userId) {
@@ -526,18 +524,18 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
   Future<void> _softDeleteUser(int userId) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: const Text('Delete User'),
         content: const Text(
           'Are you sure you want to delete this user? This action will deactivate the account.',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(dialogCtx, false),
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => Navigator.pop(dialogCtx, true),
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
             child: const Text('Delete'),
           ),
@@ -602,18 +600,18 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
   Future<void> _restoreUser(int userId) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: const Text('Restore User'),
         content: const Text(
           'Are you sure you want to restore this user account?',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(dialogCtx, false),
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () => Navigator.pop(dialogCtx, true),
             child: const Text('Restore'),
           ),
         ],
@@ -837,7 +835,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
 
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         backgroundColor: AppColors.background,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         titlePadding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
@@ -977,7 +975,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                   ),
                 ),
               TextButton(
-                onPressed: () => Navigator.pop(context),
+                onPressed: () => Navigator.pop(dialogCtx),
                 child: const Text(
                   'Close',
                   style: TextStyle(
@@ -1116,30 +1114,33 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                 if (widget.canUpdateUserGroup)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                    child: Row(
-                      children: [
-                        ChoiceChip(
-                          label: const Text('Users'),
-                          selected: _mainTab == 'users',
-                          selectedColor: AppColors.accentYellow,
-                          onSelected: (_) => _setMainTab('users'),
-                          labelStyle: const TextStyle(
-                            color: AppColors.primaryMaroon,
-                            fontWeight: FontWeight.w700,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          ChoiceChip(
+                            label: const Text('Users'),
+                            selected: _mainTab == 'users',
+                            selectedColor: AppColors.accentYellow,
+                            onSelected: (_) => _setMainTab('users'),
+                            labelStyle: const TextStyle(
+                              color: AppColors.primaryMaroon,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        ChoiceChip(
-                          label: const Text('Groups'),
-                          selected: _mainTab == 'groups',
-                          selectedColor: AppColors.accentYellow,
-                          onSelected: (_) => _setMainTab('groups'),
-                          labelStyle: const TextStyle(
-                            color: AppColors.primaryMaroon,
-                            fontWeight: FontWeight.w700,
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: const Text('Groups'),
+                            selected: _mainTab == 'groups',
+                            selectedColor: AppColors.accentYellow,
+                            onSelected: (_) => _setMainTab('groups'),
+                            labelStyle: const TextStyle(
+                              color: AppColors.primaryMaroon,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 if (_mainTab == 'groups')
@@ -1239,52 +1240,55 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                 if (_mainTab == 'users' && widget.showStatusFilters)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Row(
-                      children: [
-                        ChoiceChip(
-                          label: Text('Approved ($_approvedCount)'),
-                          selected: _statusFilter == 'approved',
-                          selectedColor: AppColors.accentYellow,
-                          onSelected: (_) => _setStatusFilter('approved'),
-                          labelStyle: const TextStyle(
-                            color: AppColors.primaryMaroon,
-                            fontWeight: FontWeight.w600,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          ChoiceChip(
+                            label: Text('Approved ($_approvedCount)'),
+                            selected: _statusFilter == 'approved',
+                            selectedColor: AppColors.accentYellow,
+                            onSelected: (_) => _setStatusFilter('approved'),
+                            labelStyle: const TextStyle(
+                              color: AppColors.primaryMaroon,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        ChoiceChip(
-                          label: Text('Pending ($_pendingCount)'),
-                          selected: _statusFilter == 'pending',
-                          selectedColor: AppColors.accentYellow,
-                          onSelected: (_) => _setStatusFilter('pending'),
-                          labelStyle: const TextStyle(
-                            color: AppColors.primaryMaroon,
-                            fontWeight: FontWeight.w600,
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: Text('Pending ($_pendingCount)'),
+                            selected: _statusFilter == 'pending',
+                            selectedColor: AppColors.accentYellow,
+                            onSelected: (_) => _setStatusFilter('pending'),
+                            labelStyle: const TextStyle(
+                              color: AppColors.primaryMaroon,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        ChoiceChip(
-                          label: Text('Rejected ($_rejectedCount)'),
-                          selected: _statusFilter == 'rejected',
-                          selectedColor: AppColors.accentYellow,
-                          onSelected: (_) => _setStatusFilter('rejected'),
-                          labelStyle: const TextStyle(
-                            color: AppColors.primaryMaroon,
-                            fontWeight: FontWeight.w600,
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: Text('Rejected ($_rejectedCount)'),
+                            selected: _statusFilter == 'rejected',
+                            selectedColor: AppColors.accentYellow,
+                            onSelected: (_) => _setStatusFilter('rejected'),
+                            labelStyle: const TextStyle(
+                              color: AppColors.primaryMaroon,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        ChoiceChip(
-                          label: Text('Deleted ($_deletedCount)'),
-                          selected: _statusFilter == 'deleted',
-                          selectedColor: AppColors.accentYellow,
-                          onSelected: (_) => _setStatusFilter('deleted'),
-                          labelStyle: const TextStyle(
-                            color: AppColors.primaryMaroon,
-                            fontWeight: FontWeight.w600,
+                          const SizedBox(width: 8),
+                          ChoiceChip(
+                            label: Text('Deleted ($_deletedCount)'),
+                            selected: _statusFilter == 'deleted',
+                            selectedColor: AppColors.accentYellow,
+                            onSelected: (_) => _setStatusFilter('deleted'),
+                            labelStyle: const TextStyle(
+                              color: AppColors.primaryMaroon,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 if (_mainTab == 'users' && widget.isPathakAdmin)

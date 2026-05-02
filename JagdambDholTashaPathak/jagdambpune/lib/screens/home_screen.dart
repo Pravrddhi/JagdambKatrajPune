@@ -294,7 +294,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           );
 
           if (!mounted) return;
-          await EmergencyContactDialog.show(context, registrationAccessToken);
+          await EmergencyContactDialog.show(
+            context,
+            registrationAccessToken,
+            userFirstName: widget.isRegistration
+                ? null
+                : _userDetails?['first_name']?.toString(),
+            userLastName: widget.isRegistration
+                ? null
+                : _userDetails?['last_name']?.toString(),
+            userPhone: widget.phoneNumber,
+          );
         }
 
         if (!mounted) return;
@@ -389,7 +399,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     // Clear first to avoid repeated popups if dialog flow is interrupted.
     await storage.write(key: _showEmergencyAfterFirstLoginKey, value: 'false');
     if (!mounted) return;
-    await EmergencyContactDialog.show(context, effectiveToken);
+    await EmergencyContactDialog.show(
+      context,
+      effectiveToken,
+      userFirstName: _userDetails?['first_name']?.toString(),
+      userLastName: _userDetails?['last_name']?.toString(),
+      userPhone: widget.phoneNumber,
+    );
   }
 
   /// Wrapper to handle loading/error state while fetching user details
