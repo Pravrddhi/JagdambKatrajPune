@@ -10,7 +10,13 @@ import '../widgets/input_box.dart'; // import your custom input box
 import '../widgets/dropdown.dart';
 
 class EmergencyContactDialog {
-  static Future<void> show(BuildContext context, String token) async {
+  static Future<void> show(
+    BuildContext context,
+    String token, {
+    String? userFirstName,
+    String? userLastName,
+    String? userPhone,
+  }) async {
     final formKey = GlobalKey<FormState>();
     TextEditingController nameController = TextEditingController();
     TextEditingController phoneController = TextEditingController();
@@ -104,6 +110,19 @@ class EmergencyContactDialog {
                               if (value == null || value.isEmpty) {
                                 return "Emergency Name is required.";
                               }
+                              final v = value.trim().toLowerCase();
+                              final fn = (userFirstName ?? '')
+                                  .trim()
+                                  .toLowerCase();
+                              final ln = (userLastName ?? '')
+                                  .trim()
+                                  .toLowerCase();
+                              final full = '$fn $ln'.trim();
+                              if ((fn.isNotEmpty && v == fn) ||
+                                  (ln.isNotEmpty && v == ln) ||
+                                  (full.isNotEmpty && v == full)) {
+                                return "Emergency contact cannot be the same person as you.";
+                              }
                               return null;
                             },
                           ),
@@ -121,6 +140,15 @@ class EmergencyContactDialog {
                             validator: (value) {
                               if (value == null || value.isEmpty) {
                                 return "Emergency Phone is required.";
+                              }
+                              if (!RegExp(r'^\d{10}$').hasMatch(value)) {
+                                return "Must be exactly 10 digits.";
+                              }
+                              final normalizedUser = (userPhone ?? '')
+                                  .replaceAll(RegExp(r'\D'), '');
+                              if (normalizedUser.isNotEmpty &&
+                                  value.trim() == normalizedUser) {
+                                return "Emergency contact phone cannot be your own phone number.";
                               }
                               return null;
                             },
