@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 class FeatureFlags {
   final bool showUpdateProfile;
   final bool showRegistration;
@@ -46,6 +48,22 @@ class FeatureFlags {
   /// (or a freshly-configured pathak where some keys are missing) still shows
   /// the expected UI.
   factory FeatureFlags.fromJson(Map<String, dynamic> json) {
+    final parsedForceUpdateAndroid = _toBool(
+      json['forceUpdateAndroid'] ??
+          json['force_update_android'] ??
+          json['android_force_update'],
+      defaultWhenNull: false,
+    );
+    final parsedForceUpdateIos = _toBool(
+      json['forceUpdateIos'] ??
+          json['force_update_ios'] ??
+          json['ios_force_update'],
+      defaultWhenNull: false,
+    );
+    final forceUpdateAndroid = kIsWeb ? false : parsedForceUpdateAndroid;
+    final forceUpdateIos = kIsWeb ? false : parsedForceUpdateIos;
+    final hasAnyForceUpdate = forceUpdateAndroid || forceUpdateIos;
+
     return FeatureFlags(
       showUpdateProfile: _toBool(
         json['showUpdateProfile'] ?? json['show_update_profile'],
@@ -90,47 +108,47 @@ class FeatureFlags {
         json['showMirvnukLiveTracking'] ?? json['show_mirvnuk_live_tracking'],
         defaultWhenNull: false,
       ),
-      forceUpdateAndroid: _toBool(
-        json['forceUpdateAndroid'] ??
-            json['force_update_android'] ??
-            json['android_force_update'],
-        defaultWhenNull: false,
-      ),
-      forceUpdateIos: _toBool(
-        json['forceUpdateIos'] ??
-            json['force_update_ios'] ??
-            json['ios_force_update'],
-        defaultWhenNull: false,
-      ),
-      minAndroidVersion: _toNullableString(
-        json['minAndroidVersion'] ??
-            json['min_android_version'] ??
-            json['android_min_version'] ??
-            json['required_android_version'],
-      ),
-      minIosVersion: _toNullableString(
-        json['minIosVersion'] ??
-            json['min_ios_version'] ??
-            json['ios_min_version'] ??
-            json['required_ios_version'],
-      ),
-      androidStoreUrl: _toNullableString(
-        json['androidStoreUrl'] ??
-            json['android_store_url'] ??
-            json['play_store_url'] ??
-            json['android_app_url'],
-      ),
-      iosStoreUrl: _toNullableString(
-        json['iosStoreUrl'] ??
-            json['ios_store_url'] ??
-            json['app_store_url'] ??
-            json['ios_app_url'],
-      ),
-      updateMessage: _toNullableString(
-        json['updateMessage'] ??
-            json['update_message'] ??
-            json['force_update_message'],
-      ),
+      forceUpdateAndroid: forceUpdateAndroid,
+      forceUpdateIos: forceUpdateIos,
+      minAndroidVersion: hasAnyForceUpdate
+          ? _toNullableString(
+              json['minAndroidVersion'] ??
+                  json['min_android_version'] ??
+                  json['android_min_version'] ??
+                  json['required_android_version'],
+            )
+          : null,
+      minIosVersion: hasAnyForceUpdate
+          ? _toNullableString(
+              json['minIosVersion'] ??
+                  json['min_ios_version'] ??
+                  json['ios_min_version'] ??
+                  json['required_ios_version'],
+            )
+          : null,
+      androidStoreUrl: hasAnyForceUpdate
+          ? _toNullableString(
+              json['androidStoreUrl'] ??
+                  json['android_store_url'] ??
+                  json['play_store_url'] ??
+                  json['android_app_url'],
+            )
+          : null,
+      iosStoreUrl: hasAnyForceUpdate
+          ? _toNullableString(
+              json['iosStoreUrl'] ??
+                  json['ios_store_url'] ??
+                  json['app_store_url'] ??
+                  json['ios_app_url'],
+            )
+          : null,
+      updateMessage: hasAnyForceUpdate
+          ? _toNullableString(
+              json['updateMessage'] ??
+                  json['update_message'] ??
+                  json['force_update_message'],
+            )
+          : null,
     );
   }
 
