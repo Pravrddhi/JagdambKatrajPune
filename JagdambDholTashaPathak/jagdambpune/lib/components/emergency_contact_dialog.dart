@@ -10,12 +10,13 @@ import '../widgets/input_box.dart'; // import your custom input box
 import '../widgets/dropdown.dart';
 
 class EmergencyContactDialog {
-  static Future<void> show(
+  static Future<Map<String, dynamic>?> show(
     BuildContext context,
     String token, {
     String? userFirstName,
     String? userLastName,
     String? userPhone,
+    bool collectOnly = false,
   }) async {
     final formKey = GlobalKey<FormState>();
     TextEditingController nameController = TextEditingController();
@@ -34,7 +35,7 @@ class EmergencyContactDialog {
       "AB-",
     ];
 
-    await showDialog(
+    return await showDialog<Map<String, dynamic>>(
       context: context,
       barrierDismissible: false,
       builder: (BuildContext context) {
@@ -179,7 +180,21 @@ class EmergencyContactDialog {
                     onPressed: isLoading
                         ? null
                         : () async {
-                            if (formKey.currentState!.validate()) {
+                            final selectedGroup = selectedBloodGroup;
+                            if (formKey.currentState!.validate() &&
+                                selectedGroup != null) {
+                              if (collectOnly) {
+                                Navigator.pop(context, <String, dynamic>{
+                                  'emergency_contact_name': nameController.text
+                                      .trim(),
+                                  'emergency_contact_phone': phoneController
+                                      .text
+                                      .trim(),
+                                  'blood_group': selectedGroup,
+                                });
+                                return;
+                              }
+
                               setState(() {
                                 isLoading = true;
                               });
@@ -187,7 +202,7 @@ class EmergencyContactDialog {
                               bool success = await _submitEmergencyContact(
                                 nameController.text.trim(),
                                 phoneController.text.trim(),
-                                selectedBloodGroup!,
+                                selectedGroup,
                                 token,
                               );
 
@@ -215,6 +230,12 @@ class EmergencyContactDialog {
                                   ),
                                 );
                               }
+                            } else if (selectedGroup == null) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Please select blood group.'),
+                                ),
+                              );
                             }
                           },
                     style: ElevatedButton.styleFrom(
@@ -244,6 +265,15 @@ class EmergencyContactDialog {
         );
       },
     );
+  }
+
+  static Future<bool> submitEmergencyContact({
+    required String name,
+    required String phone,
+    required String bloodGroup,
+    required String token,
+  }) {
+    return _submitEmergencyContact(name, phone, bloodGroup, token);
   }
 
   // API call with token

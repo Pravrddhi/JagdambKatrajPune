@@ -22,8 +22,9 @@ class FeatureFlagsProvider with ChangeNotifier {
   Future<void> fetchFeatureFlags({bool force = false}) async {
     if (_isLoading) return;
 
-    if (!force && _lastFetchedAt != null) {
-      final age = DateTime.now().difference(_lastFetchedAt!);
+    final lastFetchedAt = _lastFetchedAt;
+    if (!force && lastFetchedAt != null) {
+      final age = DateTime.now().difference(lastFetchedAt);
       if (age < _minRefreshInterval) return;
     }
 

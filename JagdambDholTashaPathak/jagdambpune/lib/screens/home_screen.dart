@@ -24,6 +24,7 @@ import '../models/maintenance_models.dart';
 import '../components/maintenance_completion_dialog.dart';
 import 'attendance_module_screen.dart';
 import 'dhol_maintenance_screen.dart';
+import 'admin_operations_screen.dart';
 
 const storage = FlutterSecureStorage();
 
@@ -32,6 +33,8 @@ class HomeScreen extends StatefulWidget {
   final String phoneNumber;
   final bool isRegistration;
   final bool? hasFcmToken;
+  final Map<String, dynamic>? initialPermissions;
+  final bool? initialVadak;
 
   const HomeScreen({
     super.key,
@@ -39,6 +42,8 @@ class HomeScreen extends StatefulWidget {
     required this.phoneNumber,
     required this.isRegistration,
     this.hasFcmToken,
+    this.initialPermissions,
+    this.initialVadak,
   });
 
   @override
@@ -78,12 +83,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   int _pushSetupRetryCount = 0;
 
   static const int _maxPushSetupRetries = 3;
-  static const Set<String> _fixedGroups = <String>{
-    'pathak_admin',
-    'vadak',
-    'maintance_admin',
-  };
-
   @override
   void initState() {
     super.initState();
@@ -279,7 +278,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             .ignore();
       },
     );
-    _notificationSocketService!.connect(normalized);
+    _notificationSocketService?.connect(normalized);
   }
 
   /// Initialize user info depending on registration status
@@ -297,12 +296,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           await EmergencyContactDialog.show(
             context,
             registrationAccessToken,
-            userFirstName: widget.isRegistration
-                ? null
-                : _userDetails?['first_name']?.toString(),
-            userLastName: widget.isRegistration
-                ? null
-                : _userDetails?['last_name']?.toString(),
+            userFirstName: null,
+            userLastName: null,
             userPhone: widget.phoneNumber,
           );
         }
@@ -317,14 +312,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         if (!mounted) return;
 
         if (accessToken.isNotEmpty) {
-          final effectiveHomeToken = registrationAccessToken.isNotEmpty
-              ? registrationAccessToken
-              : accessToken;
+          final effectiveHomeToken = accessToken.trim().isNotEmpty
+              ? accessToken.trim()
+              : registrationAccessToken;
           accessToken = effectiveHomeToken;
 
           await storage.write(
             key: ApiEndpoints.accessTokenKey,
             value: effectiveHomeToken,
+          );
+
+          await storage.write(
+            key: _showEmergencyAfterFirstLoginKey,
+            value: 'false',
           );
 
           final loaded = await _loadUserDetails(effectiveHomeToken);
@@ -450,11 +450,24 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       // Normalize joined year key from possible backend variants.
       mergedUserData['joining_year'] ??=
           mergedUserData['joiningYear'] ?? mergedUserData['joined_year'];
+      final initialPermissions = widget.initialPermissions;
+      if (mergedUserData['permissions'] == null && initialPermissions != null) {
+        mergedUserData['permissions'] = Map<String, dynamic>.from(
+          initialPermissions,
+        );
+      }
       if ((mergedUserData['joining_year'] == null ||
               mergedUserData['joining_year'].toString().trim().isEmpty) &&
           storedJoiningYear != null &&
           storedJoiningYear.trim().isNotEmpty) {
         mergedUserData['joining_year'] = storedJoiningYear.trim();
+      }
+      // Always OR with initialVadak: if login said vadak=true, keep it true
+      // even if the profile API returns vadak=false or omits it.
+      if (widget.initialVadak == true) {
+        mergedUserData['vadak'] = true;
+      } else {
+        mergedUserData['vadak'] ??= widget.initialVadak;
       }
 
       if (!mounted) return false;
@@ -599,7 +612,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
 
     try {
-      final currentUserId = _currentUserId;
       final dayScopedRequests =
           await MaintenanceService.fetchCompletionRequests(eventId: event.id);
       final userScopedDayRequests = _filterCompletionRequestsForCurrentUser(
@@ -633,18 +645,51 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       }
 
       final requests = await MaintenanceService.fetchInventoryRequests();
-      final eventScopedRequests = requests
-          .where((request) => request.matchesMaintenanceEvent(event))
+      final eventScopedRequests = requests.where((request) {
+        if (request.maintenanceEventId != null) {
+          return request.maintenanceEventId == event.id;
+        }
+
+        final linkedEventDay = request.linkedEventDay;
+        final eventDay = event.parsedEventDate;
+        if (linkedEventDay != null && eventDay != null) {
+          return linkedEventDay == eventDay;
+        }
+
+        return false;
+      }).toList();
+
+      final userScopedStockRequests = eventScopedRequests
+          .where(_isInventoryRequestOwnedByCurrentUser)
           .toList();
 
-      final userScopedStockRequests = currentUserId == null
-          ? eventScopedRequests
-          : eventScopedRequests
-                .where((request) => request.requestedBy == currentUserId)
-                .toList();
+      final hasPendingStockRequest = userScopedStockRequests.any(
+        _isPendingInventoryRequest,
+      );
+      if (hasPendingStockRequest) {
+        if (!mounted) return;
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) {
+            return AlertDialog(
+              title: const Text('Pending Stock Request'),
+              content: const Text(
+                'You have pending stock approval request(s). Submit maintenance completion only after stock approval.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
+            );
+          },
+        );
+        return;
+      }
 
       final approvedRequests = userScopedStockRequests
-          .where((req) => req.status.toLowerCase() == 'approved')
+          .where((req) => req.normalizedStatus == 'approved')
           .toList();
 
       final usedItems = buildCompletionUsedItems(approvedRequests);
@@ -940,113 +985,72 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return normalized == 'true' || normalized == '1' || normalized == 'yes';
   }
 
-  String _normalizeRole(dynamic value) {
-    return value
-            ?.toString()
-            .trim()
-            .toLowerCase()
-            .replaceAll('-', '_')
-            .replaceAll(' ', '_') ??
-        '';
-  }
+  Map<String, dynamic> get _permissions {
+    final details = _userDetails;
+    if (details == null) return <String, dynamic>{};
 
-  Set<String> _normalizedGroups(Map<String, dynamic>? details) {
-    final resolved = <String>{};
-    if (details == null) return resolved;
+    final topLevel = details['permissions'];
+    if (topLevel is Map<String, dynamic>) return topLevel;
+    if (topLevel is Map) return Map<String, dynamic>.from(topLevel);
 
     final nested = details['data'];
-    final groupSources = <dynamic>[
-      details['groups'],
-      details['group'],
-      if (nested is Map<String, dynamic>) ...[
-        nested['groups'],
-        nested['group'],
-      ],
-      if (nested is Map) ...[nested['groups'], nested['group']],
-    ];
-    for (final source in groupSources) {
-      if (source is String) {
-        final normalized = _normalizeRole(source);
-        if (_fixedGroups.contains(normalized)) {
-          resolved.add(normalized);
-        }
-        continue;
+    if (nested is Map<String, dynamic>) {
+      final nestedPermissions = nested['permissions'];
+      if (nestedPermissions is Map<String, dynamic>) return nestedPermissions;
+      if (nestedPermissions is Map) {
+        return Map<String, dynamic>.from(nestedPermissions);
       }
-      if (source is! List) continue;
-      for (final group in source) {
-        final candidates = <dynamic>[
-          group,
-          if (group is Map<String, dynamic>) ...[
-            group['name'],
-            group['group'],
-            group['group_name'],
-            group['role'],
-            group['role_name'],
-            group['code'],
-            group['slug'],
-          ],
-          if (group is Map) ...[
-            group['name'],
-            group['group'],
-            group['group_name'],
-            group['role'],
-            group['role_name'],
-            group['code'],
-            group['slug'],
-          ],
-        ];
-
-        for (final candidate in candidates) {
-          final normalized = _normalizeRole(candidate);
-          if (_fixedGroups.contains(normalized)) {
-            resolved.add(normalized);
-          }
-        }
+    }
+    if (nested is Map) {
+      final nestedPermissions = nested['permissions'];
+      if (nestedPermissions is Map<String, dynamic>) return nestedPermissions;
+      if (nestedPermissions is Map) {
+        return Map<String, dynamic>.from(nestedPermissions);
       }
     }
 
-    final roleCandidates = <dynamic>[
-      details['role'],
-      details['user_role'],
-      details['role_name'],
-      details['userRole'],
-      details['userType'],
-      details['user_type'],
-      details['type'],
-      details['group'],
-      details['group_name'],
-    ];
-    for (final candidate in roleCandidates) {
-      final normalized = _normalizeRole(candidate);
-      if (_fixedGroups.contains(normalized)) {
-        resolved.add(normalized);
-      }
-    }
-
-    return resolved;
+    return <String, dynamic>{};
   }
 
-  bool _hasAnyGroup(Set<String> groups, Iterable<String> expected) {
-    for (final value in expected) {
-      if (groups.contains(value)) {
-        return true;
-      }
+  bool _permissionBool(String key, {bool fallback = false}) {
+    final permissions = _permissions;
+    if (permissions.containsKey(key)) {
+      return _parseBool(permissions[key]);
     }
-    return false;
+    return fallback;
+  }
+
+  bool _permissionIsGatOnly(String key) {
+    final permissions = _permissions;
+    if (!permissions.containsKey(key)) return false;
+    final normalized = permissions[key]?.toString().trim().toLowerCase();
+    return normalized == 'gat_only';
   }
 
   bool get _isPathakAdminOnly {
-    final details = _userDetails;
-    final groups = _normalizedGroups(details);
-    final hasPathakAdminRole = groups.contains('pathak_admin');
-
-    return hasPathakAdminRole ||
-        _parseBool(details?['is_pathak_admin']) ||
-        _parseBool(details?['isPathakAdmin']);
+    return _permissionBool(
+      'user_approval',
+      fallback: _permissionBool(
+        'attendance_settings',
+        fallback: _permissionBool(
+          'document_approval',
+          fallback: _permissionBool(
+            'manage_terms',
+            fallback: _permissionBool('add_asign_gat'),
+          ),
+        ),
+      ),
+    );
   }
 
   bool get _isPathakAdmin {
-    return _isPathakAdminOnly;
+    return _isPathakAdminOnly ||
+        _permissionBool('update_maintance_stock') ||
+        _permissionBool('maintance_stock_approval') ||
+        _permissionBool('maintance_create_event') ||
+        _permissionBool('maintance_analysis') ||
+        _permissionBool('maintance_analysis_by_user') ||
+        _canApproveMaintenanceCompletions;
   }
 
   bool get _isGatPramukh {
@@ -1150,6 +1154,38 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return requests.where(_isCompletionRequestOwnedByCurrentUser).toList();
   }
 
+  bool _isInventoryRequestOwnedByCurrentUser(InventoryRequestItem request) {
+    final currentUserId = _currentUserId;
+    if (currentUserId != null && request.requestedBy == currentUserId) {
+      return true;
+    }
+
+    final normalizedCurrentUserName = _currentUserName.trim().toLowerCase();
+    final normalizedRequestedByName = request.requestedByName
+        .trim()
+        .toLowerCase();
+    if (normalizedCurrentUserName.isEmpty ||
+        normalizedRequestedByName.isEmpty) {
+      return false;
+    }
+
+    return normalizedCurrentUserName == normalizedRequestedByName;
+  }
+
+  bool _isPendingInventoryRequest(InventoryRequestItem request) {
+    final normalizedStatus = request.normalizedStatus.trim().toLowerCase();
+    if (normalizedStatus == 'pending' ||
+        normalizedStatus.startsWith('pending') ||
+        normalizedStatus.contains('pending')) {
+      return true;
+    }
+
+    final rawStatus = request.status.trim().toLowerCase();
+    return rawStatus == 'pending' ||
+        rawStatus.startsWith('pending') ||
+        rawStatus.contains('pending');
+  }
+
   String? get _currentGatName {
     final details = _userDetails;
     if (details == null) return null;
@@ -1187,53 +1223,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   bool get _canOpenMirvnukForm {
-    final details = _userDetails;
-    if (details == null) return false;
-
-    final groups = _normalizedGroups(details);
-    final hasPrivilegedRole = _hasAnyGroup(groups, const <String>[
-      'pathak_admin',
-      'maintance_admin',
-    ]);
-
-    if (hasPrivilegedRole || _isGatPramukh) {
+    if (_isPathakAdmin || _isGatPramukh) {
       return true;
     }
-
-    return !groups.contains('vadak');
+    return _permissionBool('send_notification');
   }
 
   bool get _canSendNotification {
-    return _isPathakAdmin || _isGatPramukh;
+    return _permissionBool(
+      'send_notification',
+      fallback: _isPathakAdmin || _isGatPramukh,
+    );
   }
 
   bool get _canGenerateAttendanceQr {
-    return _isPathakAdmin;
+    return _permissionBool(
+      'generate_attendance_qr',
+      fallback: _permissionBool(
+        'attendance_settings',
+        fallback: _isPathakAdmin,
+      ),
+    );
   }
 
   bool get _canSetAttendanceLocation {
-    return _isPathakAdminOnly;
+    return _permissionBool('attendance_settings', fallback: _isPathakAdminOnly);
   }
 
   bool get _canViewAttendanceByUser {
     return _isPathakAdmin || _isGatPramukh;
   }
 
-  bool get _isMaintanceAdmin {
-    final details = _userDetails;
-    if (details == null) return false;
-
-    final groups = _normalizedGroups(details);
-    final hasMaintenanceRole = groups.contains('maintance_admin');
-
-    if (hasMaintenanceRole) return true;
-
-    return _parseBool(details['is_maintance_admin']) ||
-        _parseBool(details['is_maintaince_admin']) ||
-        _parseBool(details['is_maintenance_admin']) ||
-        _parseBool(details['isMaintenanceAdmin']) ||
-        _parseBool(details['isMaintainceAdmin']) ||
-        _parseBool(details['isMaintanceAdmin']);
+  bool get _canViewDocumentApprovals {
+    return _permissionBool('document_approval', fallback: _isPathakAdmin);
   }
 
   bool get _canAccessAttendance {
@@ -1245,23 +1267,40 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   bool get _canManageMaintenanceInventory {
-    return _isMaintanceAdmin || _isPathakAdminOnly;
+    return _permissionBool('update_maintance_stock');
   }
 
   bool get _canCreateMaintenanceEvents {
-    return _isMaintanceAdmin || _isPathakAdminOnly;
+    return _permissionBool('maintance_create_event');
   }
 
   bool get _canApproveMaintenanceCompletions {
-    return _isPathakAdminOnly || _isGatPramukh;
+    return _permissionBool('maintenance_approval', fallback: _isGatPramukh) ||
+        _permissionIsGatOnly('maintenance_approval');
   }
 
   bool get _canApproveMaintenanceEntries {
-    return _isMaintanceAdmin || _isPathakAdminOnly || _isGatPramukh;
+    return _permissionBool('maintance_stock_approval');
+  }
+
+  bool get _canViewMaintenanceAnalysis {
+    return _permissionBool('maintance_analysis') ||
+        _permissionBool('maintance_analysis_by_user');
   }
 
   bool get _isAdminFabUser {
-    return _isPathakAdmin || _isMaintanceAdmin;
+    return _permissionBool('attendance_settings') ||
+        _permissionBool('user_approval') ||
+        _permissionBool('update_maintance_stock') ||
+        _permissionBool('maintance_stock_approval') ||
+        _permissionBool('maintance_create_event') ||
+        _permissionBool('maintance_analysis') ||
+        _permissionBool('maintance_analysis_by_user') ||
+        _canApproveMaintenanceEntries ||
+        _canApproveMaintenanceCompletions ||
+        _permissionBool('document_approval') ||
+        _permissionBool('manage_terms') ||
+        _isPathakAdmin;
   }
 
   bool get _showMaintenanceFabAction {
@@ -1314,6 +1353,49 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _fabAnimationController.reverse();
       }
     });
+  }
+
+  Future<void> _openAdminOperationsFromFab({required int initialTabIndex}) {
+    final showStatusFilters = _isPathakAdmin || !_isGatPramukh;
+
+    return Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => AdminOperationsScreen(
+          initialTabIndex: initialTabIndex,
+          canGenerateAttendanceQr: _canGenerateAttendanceQr,
+          canSetAttendanceLocation: _canSetAttendanceLocation,
+          canViewAttendanceByUser: _canViewAttendanceByUser,
+          isPathakAdmin: _isPathakAdmin,
+          canViewDocumentApprovals: _canViewDocumentApprovals,
+          canManageMaintenanceInventory: _canManageMaintenanceInventory,
+          canApproveMaintenanceEntries: _canApproveMaintenanceEntries,
+          canCreateMaintenanceEvents: _canCreateMaintenanceEvents,
+          canApproveMaintenanceCompletions: _canApproveMaintenanceCompletions,
+          canViewMaintenanceAnalysis: _canViewMaintenanceAnalysis,
+          isPathakAdminApprover:
+              _isPathakAdminOnly || _permissionBool('maintenance_approval'),
+          approverGatId: _currentUserGatId,
+          currentUserId: _currentUserId,
+          currentUserName:
+              '${_userDetails?['first_name'] ?? ''} ${_userDetails?['last_name'] ?? ''}'
+                  .trim(),
+          userInstrument: _userDetails?['instrument']?.toString(),
+          canManageTerms: _permissionBool(
+            'manage_terms',
+            fallback: _isPathakAdminOnly,
+          ),
+          showUsersStatusFilters: showStatusFilters,
+          canUpdateUserGroup: _permissionBool(
+            'user_approval',
+            fallback: _isPathakAdminOnly,
+          ),
+          isGatPramukh: _isGatPramukh,
+          gatPramukhName:
+              _userDetails?['gat_pramukh_name']?.toString() ??
+              _userDetails?['gatPramukhName']?.toString(),
+        ),
+      ),
+    );
   }
 
   Future<void> _openNotificationDetails(AppNotification item) async {
@@ -1713,7 +1795,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             child: _errorMessage != null
                 ? Center(
                     child: Text(
-                      _errorMessage!,
+                      _errorMessage ?? '',
                       style: const TextStyle(color: AppColors.accentYellow),
                     ),
                   )
@@ -1867,6 +1949,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 isCompact: isCompact,
                                 onPressed: () async {
                                   _toggleFabMenu();
+                                  if (_isAdminFabUser) {
+                                    await _openAdminOperationsFromFab(
+                                      initialTabIndex: 3,
+                                    );
+                                    return;
+                                  }
                                   await Navigator.of(context).push(
                                     MaterialPageRoute<void>(
                                       builder: (_) => DholMaintenanceScreen(
@@ -1879,7 +1967,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                         canApproveCompletionRequests:
                                             _canApproveMaintenanceCompletions,
                                         isPathakAdminApprover:
-                                            _isPathakAdminOnly,
+                                            _isPathakAdminOnly ||
+                                            _permissionBool(
+                                              'maintenance_approval',
+                                            ),
                                         approverGatId: _currentUserGatId,
                                         currentUserId: _currentUserId,
                                         currentUserName:
@@ -1908,6 +1999,12 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 isCompact: isCompact,
                                 onPressed: () async {
                                   _toggleFabMenu();
+                                  if (_isAdminFabUser) {
+                                    await _openAdminOperationsFromFab(
+                                      initialTabIndex: 0,
+                                    );
+                                    return;
+                                  }
                                   await Navigator.of(context).push(
                                     MaterialPageRoute<void>(
                                       builder: (_) => AttendanceModuleScreen(
@@ -1960,6 +2057,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 isCompact: isCompact,
                                 onPressed: () async {
                                   _toggleFabMenu();
+                                  if (_isAdminFabUser) {
+                                    await _openAdminOperationsFromFab(
+                                      initialTabIndex: 3,
+                                    );
+                                    await _refreshEventsSection();
+                                    return;
+                                  }
                                   await Navigator.of(context).push(
                                     MaterialPageRoute<void>(
                                       builder: (_) => DholMaintenanceScreen(
@@ -1972,7 +2076,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                         canApproveCompletionRequests:
                                             _canApproveMaintenanceCompletions,
                                         isPathakAdminApprover:
-                                            _isPathakAdminOnly,
+                                            _isPathakAdminOnly ||
+                                            _permissionBool(
+                                              'maintenance_approval',
+                                            ),
                                         approverGatId: _currentUserGatId,
                                         currentUserId: _currentUserId,
                                         currentUserName:

@@ -61,8 +61,8 @@ class AppConfig {
   /// Default API base URL.
   /// Override at build time with: --dart-define=API_BASE_URL=https://your-api/api
   static const String defaultApiBaseUrl =
-      'https://api.dholtashapathak.co.in/dholtashapathak/api';
-  // 'http://localhost:8080/dholtashapathak/api/';
+      // 'https://api.dholtashapathak.co.in/dholtashapathak/api';
+  'http://dev.dholtashapathak.co.in:8080/dholtashapathak/api';
 
   /// Pathak identifier sent with registration and instrument-fetch requests.
   static const String pathakId = '1';

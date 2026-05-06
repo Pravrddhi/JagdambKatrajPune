@@ -77,6 +77,11 @@ class ProfileScreen extends StatelessWidget {
               entry.key == 'groups' ||
               entry.key == 'group' ||
               entry.key == 'role' ||
+              entry.key == 'permissions' ||
+              entry.key == 'vadak' ||
+              entry.key == 'is_vadak' ||
+              entry.key == 'isVadak' ||
+              entry.key == 'status' ||
               entry.key == 'is_gat_pramukh' ||
               entry.key == 'has_fcm_token' ||
               entry.key == 'hasFcmToken' ||

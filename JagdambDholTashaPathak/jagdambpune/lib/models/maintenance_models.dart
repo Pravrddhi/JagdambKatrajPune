@@ -138,6 +138,24 @@ class InventoryRequestItem {
 
   DateTime? get linkedEventDay => _normalizeDate(maintenanceEventDate);
 
+  String get normalizedStatus {
+    final rawStatus = status.trim().toLowerCase();
+    if (rawStatus == 'approved' || rawStatus == 'rejected') {
+      return rawStatus;
+    }
+
+    // Some responses may keep status as pending even after approval metadata is set.
+    if ((approvedBy != null && approvedBy! > 0) ||
+        approvedAt.trim().isNotEmpty) {
+      return 'approved';
+    }
+
+    if (rawStatus.isEmpty) {
+      return 'pending';
+    }
+    return rawStatus;
+  }
+
   bool matchesEventDate(String eventDate) {
     final eventDay = _normalizeDate(eventDate);
     final requestDate = requestDay;
@@ -546,6 +564,17 @@ class CompletionUsedItem {
       quantityBeforeUpdate: _toInt(json['quantity_before_update']),
       quantityAfterUpdate: _toInt(json['quantity_after_update']),
     );
+  }
+
+  String get normalizedDisplayStatus {
+    final rawStatus = status.trim().toLowerCase();
+    if (rawStatus == 'approved' || rawStatus == 'rejected') {
+      return rawStatus;
+    }
+
+    // Completion submit uses approved stock requests only.
+    // If backend sends pending/empty here, show approved in UI.
+    return 'approved';
   }
 }
 

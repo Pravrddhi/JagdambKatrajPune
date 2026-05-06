@@ -35,6 +35,8 @@ class _EventUsageCategorySummary {
 }
 
 class DholMaintenanceScreen extends StatefulWidget {
+  final String? initialAdminSection;
+  final String? embeddedAdminSection;
   final bool canManageInventory;
   final bool canApproveEntries;
   final bool canCreateMaintenanceEvents;
@@ -49,6 +51,8 @@ class DholMaintenanceScreen extends StatefulWidget {
 
   const DholMaintenanceScreen({
     super.key,
+    this.initialAdminSection,
+    this.embeddedAdminSection,
     required this.canManageInventory,
     required this.canApproveEntries,
     required this.canCreateMaintenanceEvents,
@@ -142,7 +146,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       '${_statePrefix}show_legacy_entries';
 
   bool get _showAdminCompletionTab {
-    return widget.canManageInventory && widget.canApproveCompletionRequests;
+    return widget.canApproveCompletionRequests;
   }
 
   int _approvalsTabIndex() => _allCategoryTabs.length;
@@ -198,8 +202,10 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     await _restoreUiState();
     if (!mounted) return;
     await _initialLoad();
+    if (!mounted) return;
     _startLiveRefresh();
     await _openCreateMaintenanceDayOnStartIfNeeded();
+    if (!mounted) return;
     await _openCompletionForEventOnStartIfNeeded();
   }
 
@@ -544,7 +550,11 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   }
 
   Future<void> _refreshEntriesSilently() async {
-    final items = await _withApiLoader(MaintenanceService.fetchEntries);
+    final items = await _withApiLoader(
+      () => MaintenanceService.fetchEntries(
+        gatId: !widget.isPathakAdminApprover ? widget.approverGatId : null,
+      ),
+    );
     if (!mounted) return;
     setState(() {
       _entries = items;
@@ -569,6 +579,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         _loadCompletionRequests(),
         _loadAnalysis(),
       ]);
+      if (!mounted) return;
       _applyAdminDefaultTabIfNeeded();
     } else {
       await Future.wait<void>([
@@ -586,9 +597,17 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
 
     _hasAppliedAdminDefaultTab = true;
-    final pendingRequests = _requests
-        .where((item) => item.status.toLowerCase() == 'pending')
-        .length;
+    final requestedSection = widget.initialAdminSection?.trim().toLowerCase();
+    if (requestedSection == 'approvals') {
+      _tabController.animateTo(_approvalsTabIndex());
+      return;
+    }
+    if (requestedSection == 'analysis') {
+      _tabController.animateTo(_analysisTabIndex());
+      return;
+    }
+
+    final pendingRequests = _requests.where(_isPendingInventoryRequest).length;
     final pendingEntries = _entries
         .where((item) => item.status.toLowerCase() == 'pending')
         .length;
@@ -624,9 +643,11 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     } catch (e) {
       _showSnack(e.toString());
     } finally {
-      setState(() {
-        _isLoadingInventory = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoadingInventory = false;
+        });
+      }
     }
   }
 
@@ -646,9 +667,11 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     } catch (e) {
       _showSnack(e.toString());
     } finally {
-      setState(() {
-        _isLoadingRequests = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoadingRequests = false;
+        });
+      }
     }
   }
 
@@ -658,7 +681,11 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     });
 
     try {
-      final items = await _withApiLoader(MaintenanceService.fetchEntries);
+      final items = await _withApiLoader(
+        () => MaintenanceService.fetchEntries(
+          gatId: !widget.isPathakAdminApprover ? widget.approverGatId : null,
+        ),
+      );
       if (!mounted) return;
       setState(() {
         _entries = items;
@@ -666,9 +693,11 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     } catch (e) {
       _showSnack(e.toString());
     } finally {
-      setState(() {
-        _isLoadingEntries = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoadingEntries = false;
+        });
+      }
     }
   }
 
@@ -841,6 +870,14 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final quantityController = TextEditingController();
     final otherCategoryController = TextEditingController();
 
+    void disposeControllers() {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        nameController.dispose();
+        quantityController.dispose();
+        otherCategoryController.dispose();
+      });
+    }
+
     if (preselectedCategory != null) {
       selectedCategory = preselectedCategory;
     } else {
@@ -854,81 +891,92 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           builder: (context, setState) {
             return AlertDialog(
               title: const Text('Create Stock'),
-              content: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (preselectedCategory == null)
-                      DropdownButtonFormField<String>(
-                        initialValue: selectedCategory,
-                        items: MaintenanceService.inventoryCategories
-                            .map(
-                              (cat) => DropdownMenuItem(
-                                value: cat,
-                                child: Text(
-                                  cat[0].toUpperCase() + cat.substring(1),
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (val) {
-                          if (val != null) {
-                            setState(() {
-                              selectedCategory = val;
-                            });
-                          }
-                        },
-                        decoration: const InputDecoration(
-                          labelText: 'Category',
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: 460,
+                  maxHeight: 420,
+                ),
+                child: Form(
+                  key: formKey,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (preselectedCategory == null)
+                          DropdownButtonFormField<String>(
+                            initialValue: selectedCategory,
+                            isExpanded: true,
+                            items: MaintenanceService.inventoryCategories
+                                .map(
+                                  (cat) => DropdownMenuItem(
+                                    value: cat,
+                                    child: Text(
+                                      cat[0].toUpperCase() + cat.substring(1),
+                                    ),
+                                  ),
+                                )
+                                .toList(),
+                            onChanged: (val) {
+                              if (val != null) {
+                                setState(() {
+                                  selectedCategory = val;
+                                });
+                              }
+                            },
+                            decoration: const InputDecoration(
+                              labelText: 'Category',
+                            ),
+                          ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: nameController,
+                          decoration: const InputDecoration(
+                            labelText: 'Item Name',
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Item name is required';
+                            }
+                            return null;
+                          },
                         ),
-                      ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: nameController,
-                      decoration: const InputDecoration(labelText: 'Item Name'),
-                      validator: (value) {
-                        if (value == null || value.trim().isEmpty) {
-                          return 'Item name is required';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    if (selectedCategory == 'others')
-                      TextFormField(
-                        controller: otherCategoryController,
-                        decoration: const InputDecoration(
-                          labelText: 'Category Name',
+                        const SizedBox(height: 12),
+                        if (selectedCategory == 'others')
+                          TextFormField(
+                            controller: otherCategoryController,
+                            decoration: const InputDecoration(
+                              labelText: 'Category Name',
+                            ),
+                            validator: (value) {
+                              if (value == null || value.trim().isEmpty) {
+                                return 'Category name is required for Others';
+                              }
+                              return null;
+                            },
+                          )
+                        else
+                          const SizedBox.shrink(),
+                        if (selectedCategory == 'others')
+                          const SizedBox(height: 12)
+                        else
+                          const SizedBox.shrink(),
+                        TextFormField(
+                          controller: quantityController,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(
+                            labelText: 'Initial Quantity',
+                          ),
+                          validator: (value) {
+                            final qty = int.tryParse(value ?? '');
+                            if (qty == null || qty <= 0) {
+                              return 'Enter a valid quantity';
+                            }
+                            return null;
+                          },
                         ),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Category name is required for Others';
-                          }
-                          return null;
-                        },
-                      )
-                    else
-                      const SizedBox.shrink(),
-                    if (selectedCategory == 'others')
-                      const SizedBox(height: 12)
-                    else
-                      const SizedBox.shrink(),
-                    TextFormField(
-                      controller: quantityController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Initial Quantity',
-                      ),
-                      validator: (value) {
-                        final qty = int.tryParse(value ?? '');
-                        if (qty == null || qty <= 0) {
-                          return 'Enter a valid quantity';
-                        }
-                        return null;
-                      },
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
               actions: [
@@ -958,9 +1006,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     );
 
     if (shouldSubmit != true) {
-      nameController.dispose();
-      quantityController.dispose();
-      otherCategoryController.dispose();
+      disposeControllers();
       return;
     }
 
@@ -979,9 +1025,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     } catch (e) {
       _showSnack(e.toString());
     } finally {
-      nameController.dispose();
-      quantityController.dispose();
-      otherCategoryController.dispose();
+      disposeControllers();
     }
   }
 
@@ -1583,6 +1627,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final descriptionController = TextEditingController();
     List<Map<String, dynamic>> availableGats = <Map<String, dynamic>>[];
     int? selectedGatId;
+    var isSubmitting = false;
 
     try {
       availableGats = await _withApiLoader(ApiService.fetchGats);
@@ -1599,7 +1644,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       context: context,
       builder: (context) {
         return StatefulBuilder(
-          builder: (context, setState) {
+          builder: (context, setDialogState) {
             return AlertDialog(
               title: const Text('Create Maintenance Day'),
               content: Form(
@@ -1638,12 +1683,14 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                           ),
                           DropdownMenuItem(value: 'gat', child: Text('Gat')),
                         ],
-                        onChanged: (value) {
-                          if (value == null) return;
-                          setState(() {
-                            selectedScope = value;
-                          });
-                        },
+                        onChanged: isSubmitting
+                            ? null
+                            : (value) {
+                                if (value == null) return;
+                                setDialogState(() {
+                                  selectedScope = value;
+                                });
+                              },
                       ),
                       if (selectedScope == 'gat') ...[
                         const SizedBox(height: 12),
@@ -1670,11 +1717,13 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                               .where((item) => item.value != null)
                               .cast<DropdownMenuItem<int>>()
                               .toList(),
-                          onChanged: (value) {
-                            setState(() {
-                              selectedGatId = value;
-                            });
-                          },
+                          onChanged: isSubmitting
+                              ? null
+                              : (value) {
+                                  setDialogState(() {
+                                    selectedGatId = value;
+                                  });
+                                },
                           validator: (value) {
                             if (selectedScope == 'gat') {
                               if (value == null || value <= 0) {
@@ -1698,23 +1747,25 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                       ],
                       const SizedBox(height: 12),
                       InkWell(
-                        onTap: () async {
-                          final picked = await showDatePicker(
-                            context: context,
-                            initialDate: selectedDate,
-                            firstDate: DateTime.now().subtract(
-                              const Duration(days: 1),
-                            ),
-                            lastDate: DateTime.now().add(
-                              const Duration(days: 365),
-                            ),
-                          );
-                          if (picked != null) {
-                            setState(() {
-                              selectedDate = picked;
-                            });
-                          }
-                        },
+                        onTap: isSubmitting
+                            ? null
+                            : () async {
+                                final picked = await showDatePicker(
+                                  context: context,
+                                  initialDate: selectedDate,
+                                  firstDate: DateTime.now().subtract(
+                                    const Duration(days: 1),
+                                  ),
+                                  lastDate: DateTime.now().add(
+                                    const Duration(days: 365),
+                                  ),
+                                );
+                                if (picked != null) {
+                                  setDialogState(() {
+                                    selectedDate = picked;
+                                  });
+                                }
+                              },
                         child: InputDecorator(
                           decoration: const InputDecoration(
                             labelText: 'Event Date',
@@ -1731,22 +1782,67 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(context).pop(false),
                   style: TextButton.styleFrom(
                     foregroundColor: AppColors.primaryMaroon,
                   ),
                   child: const Text('Cancel'),
                 ),
                 ElevatedButton(
-                  onPressed: () {
-                    if (formKey.currentState?.validate() ?? false) {
-                      Navigator.of(context).pop(true);
-                    }
-                  },
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          if (!(formKey.currentState?.validate() ?? false)) {
+                            return;
+                          }
+
+                          setDialogState(() {
+                            isSubmitting = true;
+                          });
+
+                          try {
+                            final dateString =
+                                '${selectedDate.year.toString().padLeft(4, '0')}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}';
+                            final response = await _withApiLoader(
+                              () => MaintenanceService.createMaintenanceEvent(
+                                title: titleController.text.trim(),
+                                description: descriptionController.text.trim(),
+                                eventDate: dateString,
+                                scope: selectedScope,
+                                assignedGatId: selectedScope == 'gat'
+                                    ? selectedGatId
+                                    : null,
+                              ),
+                            );
+                            _showSnack(
+                              response['message']?.toString() ??
+                                  'Maintenance event created successfully.',
+                            );
+                            await _loadEvents();
+                            if (context.mounted) {
+                              Navigator.of(context).pop(true);
+                            }
+                          } catch (e) {
+                            _showSnack(e.toString());
+                            if (context.mounted) {
+                              setDialogState(() {
+                                isSubmitting = false;
+                              });
+                            }
+                          }
+                        },
                   style: ElevatedButton.styleFrom(
                     foregroundColor: AppColors.primaryMaroon,
                   ),
-                  child: const Text('Create'),
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Create'),
                 ),
               ],
             );
@@ -1762,26 +1858,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
 
     try {
-      final dateString =
-          '${selectedDate.year.toString().padLeft(4, '0')}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}';
-      final response = await _withApiLoader(
-        () => MaintenanceService.createMaintenanceEvent(
-          title: titleController.text.trim(),
-          description: descriptionController.text.trim(),
-          eventDate: dateString,
-          scope: selectedScope,
-          assignedGatId: selectedScope == 'gat' ? selectedGatId : null,
-        ),
-      );
-      _showSnack(
-        response['message']?.toString() ??
-            'Maintenance event created successfully.',
-      );
-      await _loadEvents();
       return true;
-    } catch (e) {
-      _showSnack(e.toString());
-      return false;
     } finally {
       titleController.dispose();
       descriptionController.dispose();
@@ -1828,21 +1905,40 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       return;
     }
 
-    final eventScopedRequests = _requests
-        .where((request) => request.matchesMaintenanceEvent(event))
+    final userScopedStockRequests = _requests
+        .where(_isInventoryRequestOwnedByCurrentUser)
         .toList();
 
-    final currentUserId = widget.currentUserId;
-    final userScopedStockRequests = currentUserId == null
-        ? eventScopedRequests
-        : eventScopedRequests
-              .where((request) => request.requestedBy == currentUserId)
-              .toList();
+    final hasPendingStockRequest = userScopedStockRequests.any(
+      _isPendingInventoryRequest,
+    );
+    if (hasPendingStockRequest) {
+      _showSnack(
+        'You have pending stock approval request(s). Submit maintenance completion only after stock approval.',
+      );
+      return;
+    }
+
+    final eventScopedApprovedRequests = userScopedStockRequests.where((
+      request,
+    ) {
+      if (request.maintenanceEventId != null) {
+        return request.maintenanceEventId == event.id;
+      }
+
+      final linkedEventDay = request.linkedEventDay;
+      final eventDay = event.parsedEventDate;
+      if (linkedEventDay != null && eventDay != null) {
+        return linkedEventDay == eventDay;
+      }
+
+      return false;
+    }).toList();
 
     // Stock usage is optional. If the user has approved stock requests for this
     // maintenance day, include only those as used_items.
-    final approvedRequests = userScopedStockRequests
-        .where((req) => req.status.toLowerCase() == 'approved')
+    final approvedRequests = eventScopedApprovedRequests
+        .where((req) => req.normalizedStatus == 'approved')
         .toList();
 
     final usedItems = buildCompletionUsedItems(approvedRequests);
@@ -2080,6 +2176,20 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     return normalizedCurrentName == normalizedRequestedByName;
   }
 
+  bool _isPendingInventoryRequest(InventoryRequestItem item) {
+    final normalizedStatus = item.normalizedStatus.trim().toLowerCase();
+    if (normalizedStatus == 'pending' ||
+        normalizedStatus.startsWith('pending') ||
+        normalizedStatus.contains('pending')) {
+      return true;
+    }
+
+    final rawStatus = item.status.trim().toLowerCase();
+    return rawStatus == 'pending' ||
+        rawStatus.startsWith('pending') ||
+        rawStatus.contains('pending');
+  }
+
   Future<bool> _isStockRequestBlockedByCompletion({int? eventId}) async {
     if (eventId == null) {
       return false;
@@ -2206,7 +2316,19 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
 
   void _showSnack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
+
+    // On web, async callbacks can fire while this route is no longer current.
+    // Avoid touching Scaffold/Overlay in that state to prevent engine asserts.
+    if (kIsWeb) {
+      final route = ModalRoute.of(context);
+      if (route != null && !route.isCurrent) {
+        return;
+      }
+    }
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger
       ..hideCurrentSnackBar()
       ..showSnackBar(SnackBar(content: Text(message)));
   }
@@ -2322,6 +2444,23 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
               ),
             ),
           ),
+          if (widget.canManageInventory &&
+              widget.embeddedAdminSection == 'approvals')
+            Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: () =>
+                      _openInventoryForm(preselectedCategory: category),
+                  icon: const Icon(Icons.add_circle_outline),
+                  label: const Text('Add Stock'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                ),
+              ),
+            ),
           const SizedBox(height: 12),
           if (items.isEmpty)
             const Padding(
@@ -2474,9 +2613,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                             ),
                           ),
                           Chip(
-                            label: Text(item.status.toUpperCase()),
+                            label: Text(item.normalizedStatus.toUpperCase()),
                             labelStyle: TextStyle(
-                              color: _statusColor(item.status),
+                              color: _statusColor(item.normalizedStatus),
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -2531,8 +2670,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           else
             ..._requests
                 .where(
-                  (r) =>
-                      r.status.toLowerCase().startsWith(_requestStatusFilter),
+                  (r) => r.normalizedStatus.startsWith(_requestStatusFilter),
                 )
                 .map(
                   (item) => Card(
@@ -2554,9 +2692,11 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                                 ),
                               ),
                               Chip(
-                                label: Text(item.status.toUpperCase()),
+                                label: Text(
+                                  item.normalizedStatus.toUpperCase(),
+                                ),
                                 labelStyle: TextStyle(
-                                  color: _statusColor(item.status),
+                                  color: _statusColor(item.normalizedStatus),
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
@@ -2593,7 +2733,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                             ),
                           ],
                           const SizedBox(height: 8),
-                          if (item.status.toLowerCase() == 'pending')
+                          if (_isPendingInventoryRequest(item))
                             Wrap(
                               alignment: WrapAlignment.end,
                               spacing: 8,
@@ -2631,6 +2771,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final userCompletionRequests = _filterCompletionsForCurrentUser(
       _completionRequests,
     );
+    final hasPendingStockRequestForUser = _requests
+        .where(_isInventoryRequestOwnedByCurrentUser)
+        .any(_isPendingInventoryRequest);
 
     return RefreshIndicator(
       onRefresh: _loadEvents,
@@ -2823,6 +2966,15 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                                   ),
                                   icon: const Icon(Icons.check_circle_outline),
                                   label: const Text('Approved'),
+                                )
+                              : hasPendingStockRequestForUser
+                              ? OutlinedButton.icon(
+                                  onPressed: null,
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.orange,
+                                  ),
+                                  icon: const Icon(Icons.inventory_2_outlined),
+                                  label: const Text('Stock Request Pending'),
                                 )
                               : OutlinedButton.icon(
                                   onPressed: () =>
@@ -3057,7 +3209,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                           (usedItem) => Padding(
                             padding: const EdgeInsets.only(bottom: 4),
                             child: Text(
-                              '- ${usedItem.inventoryItemName.isNotEmpty ? usedItem.inventoryItemName : 'Item #${usedItem.inventoryItem}'} x${usedItem.quantityUsed} (${usedItem.status})',
+                              '- ${usedItem.inventoryItemName.isNotEmpty ? usedItem.inventoryItemName : 'Item #${usedItem.inventoryItem}'} x${usedItem.quantityUsed} (${usedItem.normalizedDisplayStatus})',
                             ),
                           ),
                         ),
@@ -3662,6 +3814,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   @override
   Widget build(BuildContext context) {
     final isAdmin = widget.canManageInventory;
+    final embeddedAdminSection = widget.embeddedAdminSection
+        ?.trim()
+        .toLowerCase();
     final isRequestApprover = widget.canManageInventory;
     final canApproveCompletion = widget.canApproveCompletionRequests;
     final pendingApprovalsCount = _requests
@@ -3740,6 +3895,114 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
             _buildCompletionRequestsTab(),
           ];
 
+    if (embeddedAdminSection == 'approvals') {
+      final showStockApprovalRequests = widget.canApproveEntries;
+      final showInventoryManagement = widget.canManageInventory;
+      final approvalTabs = <Tab>[
+        if (showInventoryManagement)
+          ..._allCategoryTabs.map(
+            (c) => Tab(text: c[0].toUpperCase() + c.substring(1)),
+          ),
+        if (showStockApprovalRequests)
+          Tab(
+            text: pendingApprovalsCount > 0
+                ? 'Approvals ($pendingApprovalsCount)'
+                : 'Approvals',
+          ),
+        if (_showAdminCompletionTab)
+          Tab(
+            text: pendingCompletionCount > 0
+                ? 'Completion ($pendingCompletionCount)'
+                : 'Completion',
+          ),
+        if (_showLegacyEntriesTab)
+          Tab(
+            text: pendingEntriesCount > 0
+                ? 'Entries ($pendingEntriesCount)'
+                : 'Entries',
+          ),
+      ];
+
+      final approvalViews = <Widget>[
+        if (showInventoryManagement)
+          ..._allCategoryTabs.map((c) => _buildCategoryTab(c)),
+        if (showStockApprovalRequests) _buildRequestsTab(),
+        if (_showAdminCompletionTab) _buildCompletionRequestsTab(),
+        if (_showLegacyEntriesTab) _buildEntriesTab(),
+      ];
+
+      if (approvalTabs.isEmpty || approvalViews.isEmpty) {
+        return Container(
+          color: AppColors.background,
+          alignment: Alignment.center,
+          child: const Text(
+            'You do not have access to maintenance approvals.',
+            style: TextStyle(
+              color: AppColors.primaryMaroon,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        );
+      }
+
+      return DefaultTabController(
+        length: approvalTabs.length,
+        child: Container(
+          color: AppColors.background,
+          child: Column(
+            children: [
+              Material(
+                color: AppColors.primaryMaroon,
+                child: TabBar(
+                  isScrollable: true,
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 14),
+                  labelColor: AppColors.accentYellow,
+                  unselectedLabelColor: Colors.white70,
+                  indicatorColor: AppColors.accentYellow,
+                  tabs: approvalTabs,
+                ),
+              ),
+              if (widget.canCreateMaintenanceEvents)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: ElevatedButton.icon(
+                      onPressed: _openCreateEventForm,
+                      style: ElevatedButton.styleFrom(
+                        foregroundColor: AppColors.primaryMaroon,
+                      ),
+                      icon: const Icon(Icons.add_circle_outline),
+                      label: const Text('Create Maintenance Day'),
+                    ),
+                  ),
+                ),
+              if (_isGatPramukhCompletionApprover)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'You are gat pramukh of this gat.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.primaryMaroon.withValues(alpha: 0.85),
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              Expanded(child: TabBarView(children: approvalViews)),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (embeddedAdminSection == 'analysis') {
+      return Container(color: AppColors.background, child: _buildAnalysisTab());
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Dhol Maintenance'),
@@ -3791,29 +4054,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           tabs: tabs,
         ),
       ),
-      floatingActionButton: isAdmin
-          ? AnimatedBuilder(
-              animation: _tabController,
-              builder: (context, _) {
-                if (_tabController.index >= _allCategoryTabs.length) {
-                  return const SizedBox.shrink();
-                }
-
-                final category = _allCategoryTabs[_tabController.index];
-                return FloatingActionButton.extended(
-                  heroTag: 'add_stock_fab',
-                  onPressed: () =>
-                      _openInventoryForm(preselectedCategory: category),
-                  backgroundColor: AppColors.primaryMaroon,
-                  foregroundColor: Colors.white,
-                  icon: const Icon(Icons.add),
-                  label: Text(
-                    'Create ${category[0].toUpperCase()}${category.substring(1)} Stock',
-                  ),
-                );
-              },
-            )
-          : null,
+      floatingActionButton: null,
       body: Stack(
         children: [
           Container(

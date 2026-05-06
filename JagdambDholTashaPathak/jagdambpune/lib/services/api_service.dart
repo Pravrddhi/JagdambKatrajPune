@@ -779,7 +779,7 @@ class ApiService {
     }
   }
 
-  static Future<List<User>> fetchAllUsers() async {
+  static Future<Map<String, dynamic>> fetchAllUsersWithSummary() async {
     try {
       String? storedAccessToken = await _storage.read(
         key: ApiEndpoints.accessTokenKey,
@@ -803,32 +803,56 @@ class ApiService {
         final dynamic decoded = jsonDecode(response.body);
 
         if (decoded is List) {
-          return decoded
-              .whereType<Map>()
-              .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
-              .toList();
+          return <String, dynamic>{
+            'users': decoded
+                .whereType<Map>()
+                .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
+                .toList(),
+            'summary': null,
+          };
         }
 
         if (decoded is Map<String, dynamic>) {
           if (decoded['users'] is List) {
-            return (decoded['users'] as List)
-                .whereType<Map>()
-                .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
-                .toList();
+            return <String, dynamic>{
+              'users': (decoded['users'] as List)
+                  .whereType<Map>()
+                  .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
+                  .toList(),
+              'summary': decoded['summary'] is Map<String, dynamic>
+                  ? Map<String, dynamic>.from(decoded['summary'])
+                  : (decoded['summary'] is Map
+                        ? Map<String, dynamic>.from(decoded['summary'] as Map)
+                        : null),
+            };
           }
 
           if (decoded['data'] is List) {
-            return (decoded['data'] as List)
-                .whereType<Map>()
-                .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
-                .toList();
+            return <String, dynamic>{
+              'users': (decoded['data'] as List)
+                  .whereType<Map>()
+                  .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
+                  .toList(),
+              'summary': decoded['summary'] is Map<String, dynamic>
+                  ? Map<String, dynamic>.from(decoded['summary'])
+                  : (decoded['summary'] is Map
+                        ? Map<String, dynamic>.from(decoded['summary'] as Map)
+                        : null),
+            };
           }
 
           // Some backends return a single user object for list endpoint.
           if (decoded['id'] != null &&
               decoded['first_name'] != null &&
               decoded['last_name'] != null) {
-            return [User.fromJson(decoded)];
+            return <String, dynamic>{
+              'users': [User.fromJson(decoded)],
+              'summary': decoded['summary'] is Map<String, dynamic>
+                  ? Map<String, dynamic>.from(decoded['summary'])
+                  : (decoded['summary'] is Map
+                        ? Map<String, dynamic>.from(decoded['summary'] as Map)
+                        : null),
+            };
           }
         }
 
@@ -836,7 +860,7 @@ class ApiService {
       } else if (response.statusCode == 401) {
         final success = await _handleTokenRefresh();
         if (success) {
-          return fetchAllUsers();
+          return fetchAllUsersWithSummary();
         }
         throw Exception('Session expired. Please login again.');
       } else {
@@ -854,6 +878,15 @@ class ApiService {
       );
       rethrow;
     }
+  }
+
+  static Future<List<User>> fetchAllUsers() async {
+    final response = await fetchAllUsersWithSummary();
+    final users = response['users'];
+    if (users is List<User>) {
+      return users;
+    }
+    return <User>[];
   }
 
   static Future<User> fetchUserById(int userId) async {
