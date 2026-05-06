@@ -54,8 +54,6 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
   bool _isGenerating = false;
   bool _isDownloadingQr = false;
-  bool _isGettingLocation = false;
-  bool _isSettingLocation = false;
   bool _isLoadingConfiguredLocation = false;
   String? _qrPayload;
   String? _qrExpiry;
@@ -69,7 +67,6 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   int _configuredAllowedBeforeMinutes = 15;
   int _configuredAllowedAfterMinutes = 15;
   double _configuredMinimumPresentHours = 4.0;
-  bool _isSavingSettings = false;
 
   bool _isMarking = false;
   bool _hasMarkedFromCurrentScan = false;
@@ -690,6 +687,15 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     return hours.toStringAsFixed(1);
   }
 
+  TimeOfDay? _parseTimeOfDay(String hhmm) {
+    final parts = hhmm.split(':');
+    if (parts.length < 2) return null;
+    final hour = int.tryParse(parts[0]);
+    final minute = int.tryParse(parts[1]);
+    if (hour == null || minute == null) return null;
+    return TimeOfDay(hour: hour, minute: minute);
+  }
+
   String get _minimumPresentHoursLabel {
     final hours = _configuredMinimumPresentHours;
     if (hours == hours.roundToDouble()) {
@@ -824,62 +830,6 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       if (mounted) {
         setState(() {
           _isLoadingConfiguredLocation = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _setAttendanceLocation() async {
-    if (_isSettingLocation || _isGettingLocation) return;
-
-    setState(() {
-      _isGettingLocation = true;
-    });
-
-    double? lat;
-    double? lng;
-    try {
-      final position = await AttendanceService.getCurrentPosition();
-      lat = position.latitude;
-      lng = position.longitude;
-    } catch (e) {
-      _showSnack(e.toString().replaceFirst('Exception: ', ''));
-      if (mounted) {
-        setState(() {
-          _isGettingLocation = false;
-        });
-      }
-      return;
-    }
-
-    setState(() {
-      _isGettingLocation = false;
-      _isSettingLocation = true;
-    });
-
-    try {
-      final response = await AttendanceService.setAttendanceLocation(
-        latitude: lat,
-        longitude: lng,
-        radiusMeters: 100,
-      );
-
-      setState(() {
-        _configuredLat = lat;
-        _configuredLng = lng;
-        _configuredRadiusMeters =
-            int.tryParse(response['radius_meters']?.toString() ?? '') ?? 100;
-      });
-
-      _showSnack(
-        response['message']?.toString() ?? 'Attendance location updated.',
-      );
-    } catch (e) {
-      _showSnack(e.toString().replaceFirst('Exception: ', ''));
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isSettingLocation = false;
         });
       }
     }
@@ -2164,324 +2114,14 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     );
   }
 
-  Future<void> _openAttendanceSettingsDialog() async {
-    final radiusCtrl = TextEditingController(
-      text: _configuredRadiusMeters.toString(),
-    );
-    final allowedBeforeCtrl = TextEditingController(
-      text: _configuredAllowedBeforeMinutes.toString(),
-    );
-    final allowedAfterCtrl = TextEditingController(
-      text: _configuredAllowedAfterMinutes.toString(),
-    );
-    final minimumPresentHoursCtrl = TextEditingController(
-      text: _minimumPresentHoursLabel,
-    );
-    TimeOfDay? checkIn = _configuredCheckInTime != null
-        ? _parseTimeOfDay(_configuredCheckInTime!)
-        : null;
-    TimeOfDay? checkOut = _configuredCheckOutTime != null
-        ? _parseTimeOfDay(_configuredCheckOutTime!)
-        : null;
-
-    final settingsResult = await showDialog<Map<String, dynamic>>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) {
-          return AlertDialog(
-            title: const Text(
-              'Attendance Settings',
-              style: TextStyle(color: AppColors.primaryMaroon),
-            ),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // --- Check-in Time ---
-                  const Text(
-                    'Check-in Time',
-                    style: TextStyle(
-                      color: AppColors.primaryMaroon,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.primaryMaroon,
-                      side: BorderSide(
-                        color: AppColors.primaryMaroon.withValues(alpha: 0.35),
-                      ),
-                    ),
-                    onPressed: () async {
-                      final picked = await showTimePicker(
-                        context: ctx,
-                        initialTime:
-                            checkIn ?? const TimeOfDay(hour: 9, minute: 0),
-                      );
-                      if (picked != null) {
-                        setDialogState(() => checkIn = picked);
-                      }
-                    },
-                    icon: const Icon(Icons.access_time),
-                    label: Text(
-                      checkIn != null
-                          ? checkIn!.format(ctx)
-                          : 'Select check-in time',
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  // --- Check-out Time ---
-                  const Text(
-                    'Check-out Time',
-                    style: TextStyle(
-                      color: AppColors.primaryMaroon,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.primaryMaroon,
-                      side: BorderSide(
-                        color: AppColors.primaryMaroon.withValues(alpha: 0.35),
-                      ),
-                    ),
-                    onPressed: () async {
-                      final picked = await showTimePicker(
-                        context: ctx,
-                        initialTime:
-                            checkOut ?? const TimeOfDay(hour: 18, minute: 0),
-                      );
-                      if (picked != null) {
-                        setDialogState(() => checkOut = picked);
-                      }
-                    },
-                    icon: const Icon(Icons.access_time_filled),
-                    label: Text(
-                      checkOut != null
-                          ? checkOut!.format(ctx)
-                          : 'Select check-out time',
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  // --- Allowed before check-in ---
-                  const Text(
-                    'Allowed Attendance Before Check-in (minutes)',
-                    style: TextStyle(
-                      color: AppColors.primaryMaroon,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Before this, attendance cannot be marked.',
-                    style: TextStyle(fontSize: 11, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: allowedBeforeCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      hintText: 'e.g. 15',
-                      suffixText: 'min',
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  // --- Allowed after check-in (late) ---
-                  const Text(
-                    'Allowed Attendance After Check-in (minutes)',
-                    style: TextStyle(
-                      color: AppColors.primaryMaroon,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'After this, attendance will be marked as late.',
-                    style: TextStyle(fontSize: 11, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: allowedAfterCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      hintText: 'e.g. 15',
-                      suffixText: 'min',
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  const Text(
-                    'Minimum Hours For Present',
-                    style: TextStyle(
-                      color: AppColors.primaryMaroon,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'If user stays for less than this duration between check-in and check-out, mark absent.',
-                    style: TextStyle(fontSize: 11, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: minimumPresentHoursCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      hintText: 'e.g. 4',
-                      suffixText: 'hours',
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  // --- Radius ---
-                  const Text(
-                    'Attendance Radius (meters)',
-                    style: TextStyle(
-                      color: AppColors.primaryMaroon,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Members must be within this radius to scan QR.',
-                    style: TextStyle(fontSize: 11, color: Colors.grey),
-                  ),
-                  const SizedBox(height: 6),
-                  TextField(
-                    controller: radiusCtrl,
-                    keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(
-                      border: OutlineInputBorder(),
-                      hintText: 'e.g. 100',
-                      suffixText: 'm',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryMaroon,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: () {
-                  final radius =
-                      int.tryParse(radiusCtrl.text.trim()) ??
-                      _configuredRadiusMeters;
-                  final allowedBefore =
-                      int.tryParse(allowedBeforeCtrl.text.trim()) ??
-                      _configuredAllowedBeforeMinutes;
-                  final allowedAfter =
-                      int.tryParse(allowedAfterCtrl.text.trim()) ??
-                      _configuredAllowedAfterMinutes;
-                  final minimumPresentHours =
-                      double.tryParse(minimumPresentHoursCtrl.text.trim()) ??
-                      _configuredMinimumPresentHours;
-                  final checkInStr = checkIn != null
-                      ? '${checkIn!.hour.toString().padLeft(2, '0')}:${checkIn!.minute.toString().padLeft(2, '0')}'
-                      : null;
-                  final checkOutStr = checkOut != null
-                      ? '${checkOut!.hour.toString().padLeft(2, '0')}:${checkOut!.minute.toString().padLeft(2, '0')}'
-                      : null;
-
-                  Navigator.pop(ctx, <String, dynamic>{
-                    'radius': radius,
-                    'allowedBefore': allowedBefore,
-                    'allowedAfter': allowedAfter,
-                    'minimumPresentHours': minimumPresentHours,
-                    'checkInStr': checkInStr,
-                    'checkOutStr': checkOutStr,
-                  });
-                },
-                child: const Text('Save'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-
-    final lat = _configuredLat;
-    final lng = _configuredLng;
-    if (settingsResult != null && (lat == null || lng == null)) {
-      _showSnack('Set current location first before saving settings.');
-    } else if (settingsResult != null && lat != null && lng != null) {
-      final radius = settingsResult['radius'] as int;
-      final allowedBefore = settingsResult['allowedBefore'] as int;
-      final allowedAfter = settingsResult['allowedAfter'] as int;
-      final minimumPresentHours =
-          settingsResult['minimumPresentHours'] as double;
-      final checkInStr = settingsResult['checkInStr'] as String?;
-      final checkOutStr = settingsResult['checkOutStr'] as String?;
-
-      if (mounted) {
-        setState(() => _isSavingSettings = true);
-      }
-      try {
-        final response = await AttendanceService.setAttendanceLocation(
-          latitude: lat,
-          longitude: lng,
-          radiusMeters: radius,
-          checkInTime: checkInStr,
-          checkOutTime: checkOutStr,
-          allowedBeforeMinutes: allowedBefore,
-          allowedAfterMinutes: allowedAfter,
-          minimumPresentHours: minimumPresentHours,
-        );
-        if (mounted) {
-          setState(() {
-            _configuredRadiusMeters = radius;
-            _configuredAllowedBeforeMinutes = allowedBefore;
-            _configuredAllowedAfterMinutes = allowedAfter;
-            _configuredMinimumPresentHours = minimumPresentHours;
-            _configuredCheckInTime = checkInStr;
-            _configuredCheckOutTime = checkOutStr;
-          });
-        }
-        _showSnack(response['message']?.toString() ?? 'Settings saved.');
-      } catch (e) {
-        _showSnack(e.toString().replaceFirst('Exception: ', ''));
-      } finally {
-        if (mounted) setState(() => _isSavingSettings = false);
-      }
-    }
-
-    radiusCtrl.dispose();
-    allowedBeforeCtrl.dispose();
-    allowedAfterCtrl.dispose();
-    minimumPresentHoursCtrl.dispose();
-  }
-
-  TimeOfDay? _parseTimeOfDay(String hhmm) {
-    final parts = hhmm.split(':');
-    if (parts.length < 2) return null;
-    final h = int.tryParse(parts[0]);
-    final m = int.tryParse(parts[1]);
-    if (h == null || m == null) return null;
-    return TimeOfDay(hour: h, minute: m);
-  }
-
   Widget _buildGenerateTab() {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            widget.canSetAttendanceLocation
-                ? 'Only Pathak Admin can set the attendance location. Other users can generate QR only from the configured location.'
-                : 'QR can be generated only at the location configured by Pathak Admin, within the allowed radius.',
+          const Text(
+            'QR can be generated only at the location configured by Pathak Admin, within the allowed radius.',
             style: const TextStyle(
               color: AppColors.primaryMaroon,
               fontSize: 13,
@@ -2542,67 +2182,6 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                     ],
                   ),
           ),
-          // --- Admin-only: set location + settings ---
-          if (widget.canSetAttendanceLocation) ...[
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: (_isSettingLocation || _isGettingLocation)
-                  ? null
-                  : _setAttendanceLocation,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primaryMaroon,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-              ),
-              icon: (_isSettingLocation || _isGettingLocation)
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                  : const Icon(Icons.location_on),
-              label: Text(
-                _configuredLat == null || _configuredLng == null
-                    ? ((_isSettingLocation || _isGettingLocation)
-                          ? 'Setting Location...'
-                          : 'Set Current Location')
-                    : ((_isSettingLocation || _isGettingLocation)
-                          ? 'Updating Location...'
-                          : 'Update With Current Location'),
-              ),
-            ),
-            const SizedBox(height: 8),
-            OutlinedButton.icon(
-              onPressed: _isSavingSettings
-                  ? null
-                  : _openAttendanceSettingsDialog,
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.primaryMaroon,
-                side: const BorderSide(color: AppColors.primaryMaroon),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-              ),
-              icon: _isSavingSettings
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.settings),
-              label: const Text('Attendance Settings'),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Set check-in time, attendance window, minimum present hours, and radius.',
-              style: TextStyle(
-                color: AppColors.primaryMaroon,
-                fontSize: 12,
-                height: 1.35,
-              ),
-            ),
-          ],
           const SizedBox(height: 12),
           ElevatedButton.icon(
             onPressed:

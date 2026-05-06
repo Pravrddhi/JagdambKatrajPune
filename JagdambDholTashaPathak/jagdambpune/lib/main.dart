@@ -284,11 +284,12 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         ? flags.forceUpdateAndroid
         : flags.forceUpdateIos;
     final storeUrl = isAndroid ? flags.androidStoreUrl : flags.iosStoreUrl;
+    final appVersion = _appVersion;
 
     final requiresByVersion =
         minVersion != null &&
-        _appVersion != null &&
-        _compareVersions(_appVersion!, minVersion) < 0;
+        appVersion != null &&
+        _compareVersions(appVersion, minVersion) < 0;
     final requiresUpdate = forceFlag || requiresByVersion;
 
     if (!requiresUpdate) return;

@@ -166,31 +166,36 @@ class NotificationProvider with ChangeNotifier {
     try {
       final raw = await _storage.read(key: _lastRefreshTimeKey);
       if (raw == null || raw.isEmpty) {
-        _lastRefreshTime = DateTime.now();
+        final now = DateTime.now();
+        _lastRefreshTime = now;
         await _storage.write(
           key: _lastRefreshTimeKey,
-          value: _lastRefreshTime!.toIso8601String(),
+          value: now.toIso8601String(),
         );
         return;
       }
 
       _lastRefreshTime = DateTime.tryParse(raw);
       if (_lastRefreshTime == null) {
-        _lastRefreshTime = DateTime.now();
+        final now = DateTime.now();
+        _lastRefreshTime = now;
         await _storage.write(
           key: _lastRefreshTimeKey,
-          value: _lastRefreshTime!.toIso8601String(),
+          value: now.toIso8601String(),
         );
         return;
       }
 
-      if (DateTime.now().difference(_lastRefreshTime!) >= _cacheRefreshWindow) {
+      final lastRefreshTime = _lastRefreshTime;
+      if (lastRefreshTime != null &&
+          DateTime.now().difference(lastRefreshTime) >= _cacheRefreshWindow) {
         _readNotificationIds.clear();
         await _storage.delete(key: _readNotificationIdsKey);
-        _lastRefreshTime = DateTime.now();
+        final now = DateTime.now();
+        _lastRefreshTime = now;
         await _storage.write(
           key: _lastRefreshTimeKey,
-          value: _lastRefreshTime!.toIso8601String(),
+          value: now.toIso8601String(),
         );
       }
     } catch (_) {

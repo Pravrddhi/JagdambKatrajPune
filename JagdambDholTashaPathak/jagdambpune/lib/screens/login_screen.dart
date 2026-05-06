@@ -280,6 +280,8 @@ class _LoginScreenState extends State<LoginScreen> {
           profileData['refresh_token']?.toString() ??
           '';
       final hasFcmToken = _extractHasFcmToken(data);
+      final permissionsPayload = data['permissions'];
+      final isVadak = _toNullableBool(data['vadak']);
 
       if (accessToken.isEmpty) {
         setState(() {
@@ -394,6 +396,12 @@ class _LoginScreenState extends State<LoginScreen> {
         );
       }
 
+      final initialPermissions = permissionsPayload is Map<String, dynamic>
+          ? permissionsPayload
+          : (permissionsPayload is Map
+                ? Map<String, dynamic>.from(permissionsPayload)
+                : null);
+
       // Re-fetch feature flags now that the auth token is stored so the
       // drawer correctly reflects this user's configuration.
       if (mounted) {
@@ -419,6 +427,8 @@ class _LoginScreenState extends State<LoginScreen> {
             phoneNumber: '',
             isRegistration: false,
             hasFcmToken: hasFcmToken,
+            initialPermissions: initialPermissions,
+            initialVadak: isVadak,
           ),
         ),
       );
@@ -543,8 +553,8 @@ class _LoginScreenState extends State<LoginScreen> {
     final resolvedBloodGroup = _pickRejectedField(payload, profileData, [
       'blood_group',
     ])?.toString().trim().toUpperCase();
-    String selectedBloodGroup = _bloodGroups.contains(resolvedBloodGroup)
-        ? resolvedBloodGroup!
+    String selectedBloodGroup = _bloodGroups.contains(resolvedBloodGroup ?? '')
+        ? (resolvedBloodGroup ?? 'O+')
         : 'O+';
 
     DateTime? selectedDob = DateTime.tryParse(dobController.text.trim());
@@ -620,10 +630,10 @@ class _LoginScreenState extends State<LoginScreen> {
                           now.month,
                           now.day,
                         );
+                        final currentDob = selectedDob;
                         final initial =
-                            (selectedDob != null &&
-                                selectedDob!.isBefore(maxDob))
-                            ? selectedDob!
+                            (currentDob != null && currentDob.isBefore(maxDob))
+                            ? currentDob
                             : maxDob;
                         final picked = await showDatePicker(
                           context: dialogContext,
@@ -744,13 +754,13 @@ class _LoginScreenState extends State<LoginScreen> {
                           ? 'Last name must contain only letters.'
                           : null;
 
-                      if (selectedDob == null) {
+                      final dob = selectedDob;
+                      if (dob == null) {
                         errors['dob'] = 'Date of birth is required.';
                       } else {
-                        int age = now.year - selectedDob!.year;
-                        if (now.month < selectedDob!.month ||
-                            (now.month == selectedDob!.month &&
-                                now.day < selectedDob!.day)) {
+                        int age = now.year - dob.year;
+                        if (now.month < dob.month ||
+                            (now.month == dob.month && now.day < dob.day)) {
                           age -= 1;
                         }
                         errors['dob'] = age < 16

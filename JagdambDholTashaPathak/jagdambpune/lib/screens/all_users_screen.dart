@@ -25,19 +25,17 @@ class AllUsersScreen extends StatefulWidget {
 }
 
 class _AllUsersScreenState extends State<AllUsersScreen> {
-  String _mainTab = 'users';
   List<User> _users = [];
   List<User> _filteredUsers = [];
-  List<String> _availableGroups = [];
   List<String> _gatFilterOptions = ['all'];
+  List<String> _yearFilterOptions = ['all'];
   Map<String, String> _gatAliasToCanonical = {};
   String _statusFilter = 'approved';
   String _selectedGatName = 'all';
+  String _selectedJoinedYear = 'all';
 
   bool _isLoading = true;
-  bool _isLoadingGroups = false;
   String? _errorMessage;
-  String? _groupsErrorMessage;
 
   final TextEditingController _searchController = TextEditingController();
 
@@ -100,9 +98,52 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         _errorMessage = null;
       });
 
-      final users = await ApiService.fetchAllUsers();
+      final usersResponse = await ApiService.fetchAllUsersWithSummary();
+      final users = (usersResponse['users'] as List<User>?) ?? <User>[];
+      final summary = usersResponse['summary'] as Map<String, dynamic>?;
       List<String> gatOptions = _gatFilterOptions;
+      List<String> yearOptions = ['all'];
       Map<String, String> gatAliasToCanonical = <String, String>{};
+
+      final numericYears = <int>{};
+      final nonNumericYears = <String>{};
+      for (final user in users) {
+        final yearText = user.joiningYear?.trim();
+        if (yearText == null || yearText.isEmpty) continue;
+        final parsedYear = int.tryParse(yearText);
+        if (parsedYear != null) {
+          numericYears.add(parsedYear);
+        } else {
+          nonNumericYears.add(yearText);
+        }
+      }
+
+      final resolvedYearOptions = <String>[];
+      final summaryMinYear = int.tryParse('${summary?['min_year'] ?? ''}');
+      final summaryMaxYear = int.tryParse('${summary?['max_year'] ?? ''}');
+      final minYear =
+          summaryMinYear ??
+          (numericYears.isNotEmpty
+              ? numericYears.reduce((a, b) => a < b ? a : b)
+              : null);
+      final maxYear =
+          summaryMaxYear ??
+          (numericYears.isNotEmpty
+              ? numericYears.reduce((a, b) => a > b ? a : b)
+              : null);
+
+      if (minYear != null && maxYear != null && maxYear >= minYear) {
+        for (var year = maxYear; year >= minYear; year--) {
+          resolvedYearOptions.add(year.toString());
+        }
+      }
+
+      if (nonNumericYears.isNotEmpty) {
+        final extras = nonNumericYears.toList()..sort((a, b) => b.compareTo(a));
+        resolvedYearOptions.addAll(extras);
+      }
+
+      yearOptions = ['all', ...resolvedYearOptions];
 
       if (widget.isPathakAdmin) {
         try {
@@ -151,10 +192,15 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         _users = users;
         _filteredUsers = users;
         _gatFilterOptions = gatOptions;
+        _yearFilterOptions = yearOptions;
         _gatAliasToCanonical = gatAliasToCanonical;
         if (_selectedGatName != 'all' &&
             !_gatFilterOptions.contains(_selectedGatName)) {
           _selectedGatName = 'all';
+        }
+        if (_selectedJoinedYear != 'all' &&
+            !_yearFilterOptions.contains(_selectedJoinedYear)) {
+          _selectedJoinedYear = 'all';
         }
         _isLoading = false;
       });
@@ -169,45 +215,6 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         _errorMessage = ApiEndpoints.genericApiFailureMessage;
         _isLoading = false;
       });
-    }
-  }
-
-  Future<void> _loadGroups() async {
-    if (!widget.canUpdateUserGroup) return;
-
-    setState(() {
-      _isLoadingGroups = true;
-      _groupsErrorMessage = null;
-    });
-
-    try {
-      final groups = await ApiService.fetchGroups();
-      if (!mounted) return;
-      setState(() {
-        _availableGroups = groups;
-        _isLoadingGroups = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      if (_isSessionExpiredError(e)) {
-        await _redirectToLoginWithMessage();
-        return;
-      }
-
-      setState(() {
-        _groupsErrorMessage = _cleanErrorMessage(e);
-        _isLoadingGroups = false;
-      });
-    }
-  }
-
-  void _setMainTab(String tab) {
-    if (_mainTab == tab) return;
-    setState(() {
-      _mainTab = tab;
-    });
-    if (tab == 'groups' && _availableGroups.isEmpty && !_isLoadingGroups) {
-      _loadGroups();
     }
   }
 
@@ -236,6 +243,11 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
             _selectedGatName == 'all' ||
             normalizedUserGat == normalizedSelectedGat;
 
+        final userJoiningYear = user.joiningYear?.trim() ?? '';
+        final matchesJoinedYear =
+            _selectedJoinedYear == 'all' ||
+            userJoiningYear == _selectedJoinedYear;
+
         final shouldApplyGatPramukhScope =
             widget.isGatPramukh && !widget.isPathakAdmin;
         final normalizedLoggedInGatPramukh = _normalizeText(
@@ -250,6 +262,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         return matchesSearch &&
             matchesStatus &&
             matchesGat &&
+            matchesJoinedYear &&
             matchesGatPramukhScope;
       }).toList();
     });
@@ -268,6 +281,14 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
       return;
     }
     _selectedGatName = gatName;
+    _applyFilters();
+  }
+
+  void _setJoinedYearFilter(String? year) {
+    if (year == null || _selectedJoinedYear == year) {
+      return;
+    }
+    _selectedJoinedYear = year;
     _applyFilters();
   }
 
@@ -661,175 +682,6 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
     }
   }
 
-  Future<void> _showUpdateGroupDialog(User user, int userId) async {
-    if (!widget.canUpdateUserGroup) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Only pathak_admin can update user group.'),
-        ),
-      );
-      return;
-    }
-
-    if (_availableGroups.isEmpty) {
-      await _loadGroups();
-    }
-    if (!mounted) return;
-
-    if (_availableGroups.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            _groupsErrorMessage?.isNotEmpty == true
-                ? _groupsErrorMessage!
-                : 'No groups available.',
-          ),
-        ),
-      );
-      return;
-    }
-
-    final currentGroup = user.groups.isNotEmpty
-        ? user.groups.first.trim()
-        : (user.role ?? '').trim();
-    String selectedGroup = _availableGroups.contains(currentGroup)
-        ? currentGroup
-        : _availableGroups.first;
-    bool isSubmitting = false;
-
-    await showDialog(
-      context: context,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            final hasGroupChanged =
-                selectedGroup.trim().toLowerCase() !=
-                currentGroup.toLowerCase();
-            return AlertDialog(
-              title: const Text('Update User Group'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'User: ${_fullName(user)}',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 12),
-                  DropdownButtonFormField<String>(
-                    value: selectedGroup,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Group',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: _availableGroups
-                        .map(
-                          (group) => DropdownMenuItem<String>(
-                            value: group,
-                            child: Text(group),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: isSubmitting
-                        ? null
-                        : (value) {
-                            if (value == null) return;
-                            setDialogState(() {
-                              selectedGroup = value;
-                            });
-                          },
-                  ),
-                  if (!hasGroupChanged)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 8),
-                      child: Text(
-                        'Selected group is same as current group.',
-                        style: TextStyle(
-                          color: AppColors.disabled,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: isSubmitting
-                      ? null
-                      : () => Navigator.pop(dialogContext),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: isSubmitting
-                      ? null
-                      : () async {
-                          if (!hasGroupChanged) {
-                            ScaffoldMessenger.of(this.context).showSnackBar(
-                              const SnackBar(
-                                content: Text(
-                                  'Please select a different group to update.',
-                                ),
-                              ),
-                            );
-                            return;
-                          }
-                          setDialogState(() {
-                            isSubmitting = true;
-                          });
-                          try {
-                            final message = await ApiService.updateUserGroup(
-                              userId: userId,
-                              groupName: selectedGroup,
-                            );
-                            if (!mounted) return;
-                            Navigator.pop(dialogContext);
-                            // Also close the underlying user details popup.
-                            Navigator.of(this.context).pop();
-                            setState(() {
-                              _users = _users.map<User>((entry) {
-                                if (entry.id != userId) return entry;
-                                return entry.copyWith(
-                                  role: selectedGroup,
-                                  groups: <String>[selectedGroup],
-                                );
-                              }).toList();
-                            });
-                            _applyFilters();
-                            ScaffoldMessenger.of(
-                              this.context,
-                            ).showSnackBar(SnackBar(content: Text(message)));
-                          } catch (e) {
-                            if (!mounted) return;
-                            if (_isSessionExpiredError(e)) {
-                              Navigator.pop(dialogContext);
-                              await _redirectToLoginWithMessage();
-                              return;
-                            }
-                            setDialogState(() {
-                              isSubmitting = false;
-                            });
-                            ScaffoldMessenger.of(this.context).showSnackBar(
-                              SnackBar(content: Text(_cleanErrorMessage(e))),
-                            );
-                          }
-                        },
-                  child: isSubmitting
-                      ? const SizedBox(
-                          height: 16,
-                          width: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Update'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
   void _showUserDetails(User user, {int? fallbackUserId}) {
     final effectiveUserId = user.id ?? fallbackUserId;
 
@@ -878,14 +730,11 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
               _detailCard(
                 children: [
                   _row('Phone', user.phoneNumber),
-                  _row(
-                    'Role',
-                    user.groups.isNotEmpty ? user.groups.join(', ') : user.role,
-                  ),
+                  _row('Role', user.role),
                   _row('Status', _statusLabel(user)),
                   _row('Instrument', user.instrument),
                   _row('Joined Year', user.joiningYear),
-                  _row('Sex', user.sex),
+                  _row('Gender', user.sex),
                   _row('Blood Group', user.bloodGroup),
                 ],
               ),
@@ -907,19 +756,6 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              if (widget.canUpdateUserGroup && !_isSoftDeleted(user))
-                TextButton(
-                  onPressed: effectiveUserId == null
-                      ? null
-                      : () => _showUpdateGroupDialog(user, effectiveUserId),
-                  child: const Text(
-                    'Update Group',
-                    style: TextStyle(
-                      color: AppColors.primaryMaroon,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
               if (widget.isPathakAdmin && _isSoftDeleted(user))
                 TextButton(
                   onPressed: effectiveUserId == null
@@ -1111,133 +947,53 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
             )
           : Column(
               children: [
-                if (widget.canUpdateUserGroup)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          ChoiceChip(
-                            label: const Text('Users'),
-                            selected: _mainTab == 'users',
-                            selectedColor: AppColors.accentYellow,
-                            onSelected: (_) => _setMainTab('users'),
-                            labelStyle: const TextStyle(
-                              color: AppColors.primaryMaroon,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          ChoiceChip(
-                            label: const Text('Groups'),
-                            selected: _mainTab == 'groups',
-                            selectedColor: AppColors.accentYellow,
-                            onSelected: (_) => _setMainTab('groups'),
-                            labelStyle: const TextStyle(
-                              color: AppColors.primaryMaroon,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.primaryMaroon.withAlpha(16),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
                     ),
-                  ),
-                if (_mainTab == 'groups')
-                  Expanded(
-                    child: _isLoadingGroups
-                        ? const Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.primaryMaroon,
-                            ),
-                          )
-                        : _groupsErrorMessage != null
-                        ? Center(
-                            child: Text(
-                              _groupsErrorMessage!,
-                              style: const TextStyle(
-                                color: AppColors.primaryMaroon,
-                              ),
-                            ),
-                          )
-                        : _availableGroups.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'No groups found',
-                              style: TextStyle(
-                                color: AppColors.primaryMaroon,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          )
-                        : ListView.builder(
-                            itemCount: _availableGroups.length,
-                            itemBuilder: (context, index) {
-                              final group = _availableGroups[index];
-                              return ListTile(
-                                leading: const Icon(
-                                  Icons.group,
-                                  color: AppColors.primaryMaroon,
-                                ),
-                                title: Text(
-                                  group,
-                                  style: const TextStyle(
-                                    color: AppColors.primaryMaroon,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                  )
-                else
-                  Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(14),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.primaryMaroon.withAlpha(16),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
-                          ),
-                        ],
+                    child: TextField(
+                      controller: _searchController,
+                      style: const TextStyle(
+                        color: AppColors.primaryMaroon,
+                        fontWeight: FontWeight.w500,
                       ),
-                      child: TextField(
-                        controller: _searchController,
-                        style: const TextStyle(
+                      decoration: InputDecoration(
+                        hintText: 'Search by name...',
+                        hintStyle: const TextStyle(color: AppColors.disabled),
+                        prefixIcon: const Icon(
+                          Icons.search,
                           color: AppColors.primaryMaroon,
-                          fontWeight: FontWeight.w500,
                         ),
-                        decoration: InputDecoration(
-                          hintText: 'Search by name...',
-                          hintStyle: const TextStyle(color: AppColors.disabled),
-                          prefixIcon: const Icon(
-                            Icons.search,
-                            color: AppColors.primaryMaroon,
+                        filled: true,
+                        fillColor: Colors.white,
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide(
+                            color: AppColors.primaryMaroon.withAlpha(28),
                           ),
-                          filled: true,
-                          fillColor: Colors.white,
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: BorderSide(
-                              color: AppColors.primaryMaroon.withAlpha(28),
-                            ),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(14),
-                            borderSide: const BorderSide(
-                              color: AppColors.accentYellow,
-                              width: 1.6,
-                            ),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: const BorderSide(
+                            color: AppColors.accentYellow,
+                            width: 1.6,
                           ),
                         ),
                       ),
                     ),
                   ),
-                if (_mainTab == 'users' && widget.showStatusFilters)
+                ),
+                if (widget.showStatusFilters)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: SingleChildScrollView(
@@ -1291,124 +1047,176 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                       ),
                     ),
                   ),
-                if (_mainTab == 'users' && widget.isPathakAdmin)
+                if (widget.isPathakAdmin)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(14),
-                        boxShadow: [
-                          BoxShadow(
-                            color: AppColors.primaryMaroon.withAlpha(16),
-                            blurRadius: 8,
-                            offset: const Offset(0, 3),
-                          ),
-                        ],
-                      ),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          value: _gatFilterOptions.contains(_selectedGatName)
-                              ? _selectedGatName
-                              : 'all',
-                          isExpanded: true,
-                          icon: const Icon(
-                            Icons.keyboard_arrow_down,
-                            color: AppColors.primaryMaroon,
-                          ),
-                          style: const TextStyle(
-                            color: AppColors.primaryMaroon,
-                            fontWeight: FontWeight.w500,
-                          ),
-                          items: _gatFilterOptions
-                              .map(
-                                (gat) => DropdownMenuItem<String>(
-                                  value: gat,
-                                  child: Text(gat == 'all' ? 'All Gats' : gat),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.primaryMaroon.withAlpha(16),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 3),
                                 ),
-                              )
-                              .toList(),
-                          onChanged: _setGatFilter,
-                        ),
-                      ),
-                    ),
-                  ),
-                if (_mainTab == 'users') const SizedBox(height: 10),
-                if (_mainTab == 'users')
-                  Expanded(
-                    child: _filteredUsers.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'No users found',
-                              style: TextStyle(
-                                color: AppColors.primaryMaroon,
-                                fontWeight: FontWeight.w600,
+                              ],
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value:
+                                    _gatFilterOptions.contains(_selectedGatName)
+                                    ? _selectedGatName
+                                    : 'all',
+                                isExpanded: true,
+                                icon: const Icon(
+                                  Icons.keyboard_arrow_down,
+                                  color: AppColors.primaryMaroon,
+                                ),
+                                style: const TextStyle(
+                                  color: AppColors.primaryMaroon,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                items: _gatFilterOptions
+                                    .map(
+                                      (gat) => DropdownMenuItem<String>(
+                                        value: gat,
+                                        child: Text(
+                                          gat == 'all' ? 'All Gats' : gat,
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: _setGatFilter,
                               ),
                             ),
-                          )
-                        : ListView.builder(
-                            itemCount: _filteredUsers.length,
-                            itemBuilder: (context, index) {
-                              final user = _filteredUsers[index];
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: AppColors.primaryMaroon.withAlpha(16),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 3),
+                                ),
+                              ],
+                            ),
+                            child: DropdownButtonHideUnderline(
+                              child: DropdownButton<String>(
+                                value:
+                                    _yearFilterOptions.contains(
+                                      _selectedJoinedYear,
+                                    )
+                                    ? _selectedJoinedYear
+                                    : 'all',
+                                isExpanded: true,
+                                icon: const Icon(
+                                  Icons.keyboard_arrow_down,
+                                  color: AppColors.primaryMaroon,
+                                ),
+                                style: const TextStyle(
+                                  color: AppColors.primaryMaroon,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                items: _yearFilterOptions
+                                    .map(
+                                      (year) => DropdownMenuItem<String>(
+                                        value: year,
+                                        child: Text(
+                                          year == 'all' ? 'All Years' : year,
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: _setJoinedYearFilter,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: _filteredUsers.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'No users found',
+                            style: TextStyle(
+                              color: AppColors.primaryMaroon,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: _filteredUsers.length,
+                          itemBuilder: (context, index) {
+                            final user = _filteredUsers[index];
 
-                              return Card(
-                                color: Colors.white,
-                                elevation: 5,
-                                margin: const EdgeInsets.symmetric(
+                            return Card(
+                              color: Colors.white,
+                              elevation: 5,
+                              margin: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: ListTile(
+                                onTap: () => _openUserDetails(user),
+                                contentPadding: const EdgeInsets.symmetric(
                                   horizontal: 16,
                                   vertical: 8,
                                 ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16),
-                                ),
-                                child: ListTile(
-                                  onTap: () => _openUserDetails(user),
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 8,
-                                  ),
-                                  leading: CircleAvatar(
-                                    backgroundColor: AppColors.accentYellow,
-                                    child: Text(
-                                      _userInitial(user),
-                                      style: const TextStyle(
-                                        color: AppColors.primaryMaroon,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                  title: Text(
-                                    _fullName(user),
+                                leading: CircleAvatar(
+                                  backgroundColor: AppColors.accentYellow,
+                                  child: Text(
+                                    _userInitial(user),
                                     style: const TextStyle(
                                       color: AppColors.primaryMaroon,
-                                      fontWeight: FontWeight.w600,
+                                      fontWeight: FontWeight.bold,
                                     ),
-                                  ),
-                                  subtitle: Padding(
-                                    padding: const EdgeInsets.only(top: 6),
-                                    child: Text(
-                                      (user.groups.isEmpty &&
-                                              (user.role == null ||
-                                                  user.role!.trim().isEmpty))
-                                          ? 'Tap to view details'
-                                          : (user.groups.isNotEmpty
-                                                ? user.groups.join(', ')
-                                                : user.role!),
-                                      style: const TextStyle(
-                                        color: AppColors.disabled,
-                                      ),
-                                    ),
-                                  ),
-                                  trailing: const Icon(
-                                    Icons.chevron_right,
-                                    color: AppColors.primaryMaroon,
                                   ),
                                 ),
-                              );
-                            },
-                          ),
-                  ),
+                                title: Text(
+                                  _fullName(user),
+                                  style: const TextStyle(
+                                    color: AppColors.primaryMaroon,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                subtitle: Padding(
+                                  padding: const EdgeInsets.only(top: 6),
+                                  child: Text(
+                                    (user.role == null ||
+                                            user.role!.trim().isEmpty)
+                                        ? 'Tap to view details'
+                                        : user.role!,
+                                    style: const TextStyle(
+                                      color: AppColors.disabled,
+                                    ),
+                                  ),
+                                ),
+                                trailing: const Icon(
+                                  Icons.chevron_right,
+                                  color: AppColors.primaryMaroon,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
               ],
             ),
     );
