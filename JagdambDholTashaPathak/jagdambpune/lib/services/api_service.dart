@@ -19,6 +19,7 @@ class ApiService {
     'pan_card',
     'personal_photo',
     'agreement_document',
+    'id_card',
   };
   static final Map<String, Future<void>> _inFlightNotificationRequests =
       <String, Future<void>>{};
@@ -32,6 +33,19 @@ class ApiService {
         bytes[0] == 0xFF &&
         bytes[1] == 0xD8 &&
         bytes[2] == 0xFF;
+  }
+
+  static bool _isPngBytes(Uint8List bytes) {
+    // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+    return bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47 &&
+        bytes[4] == 0x0D &&
+        bytes[5] == 0x0A &&
+        bytes[6] == 0x1A &&
+        bytes[7] == 0x0A;
   }
 
   static Future<FeatureFlags> fetchFeatureFlags() async {
@@ -395,40 +409,36 @@ class ApiService {
       final normalizedFileName = fileName.trim();
       final lowerFileName = normalizedFileName.toLowerCase();
 
-      debugPrint(
-        '[uploadDocument] START — type=$normalizedType file=$normalizedFileName size=${fileBytes.length}B',
-      );
-
       if (!_allowedDocumentTypes.contains(normalizedType)) {
-        debugPrint(
-          '[uploadDocument] ERROR — invalid document type: $normalizedType',
-        );
         throw Exception('Invalid document type.');
       }
-      if (!(lowerFileName.endsWith('.jpg') ||
-          lowerFileName.endsWith('.jpeg'))) {
-        debugPrint(
-          '[uploadDocument] ERROR — disallowed file extension: $normalizedFileName',
-        );
-        throw Exception('Only .jpg and .jpeg files are allowed.');
-      }
-      if (!_isJpegBytes(fileBytes)) {
-        debugPrint('[uploadDocument] ERROR — file bytes are not JPEG');
-        throw Exception(
-          'Selected image is not a valid JPEG. Please capture/select a JPG/JPEG image.',
-        );
+      final isPngType = normalizedType == 'id_card';
+      if (isPngType) {
+        if (!lowerFileName.endsWith('.png')) {
+          throw Exception('ID card must be a PNG file.');
+        }
+        if (!_isPngBytes(fileBytes)) {
+          throw Exception('ID card image is not a valid PNG.');
+        }
+      } else {
+        if (!(lowerFileName.endsWith('.jpg') ||
+            lowerFileName.endsWith('.jpeg'))) {
+          throw Exception('Only .jpg and .jpeg files are allowed.');
+        }
+        if (!_isJpegBytes(fileBytes)) {
+          throw Exception(
+            'Selected image is not a valid JPEG. Please capture/select a JPG/JPEG image.',
+          );
+        }
       }
 
       final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
       if (token == null || token.trim().isEmpty) {
-        debugPrint('[uploadDocument] ERROR — no access token in storage');
         throw Exception('Session expired. Please login again.');
       }
-      debugPrint('[uploadDocument] token present (${token.length} chars)');
 
       Future<http.Response> sendRequest(String accessToken) async {
         final url = ApiEndpoints.uploadDocument;
-        debugPrint('[uploadDocument] POST $url');
         final request = http.MultipartRequest('POST', Uri.parse(url))
           ..headers['Authorization'] = 'Bearer $accessToken'
           ..fields['document_type'] = normalizedType
@@ -437,7 +447,9 @@ class ApiService {
               'document_file',
               fileBytes,
               filename: normalizedFileName,
-              contentType: MediaType('image', 'jpeg'),
+              contentType: isPngType
+                  ? MediaType('image', 'png')
+                  : MediaType('image', 'jpeg'),
             ),
           );
 
@@ -448,24 +460,16 @@ class ApiService {
       }
 
       var response = await sendRequest(token);
-      debugPrint('[uploadDocument] response status=${response.statusCode}');
-      debugPrint('[uploadDocument] response body=${response.body}');
 
       if (response.statusCode == 401) {
-        debugPrint('[uploadDocument] 401 — attempting token refresh');
         final refreshed = await AuthService.refreshAccessToken();
         if (refreshed) {
           final refreshedToken = await _storage.read(
             key: ApiEndpoints.accessTokenKey,
           );
           if (refreshedToken != null && refreshedToken.trim().isNotEmpty) {
-            debugPrint('[uploadDocument] retrying with refreshed token');
             response = await sendRequest(refreshedToken);
-            debugPrint('[uploadDocument] retry status=${response.statusCode}');
-            debugPrint('[uploadDocument] retry body=${response.body}');
           }
-        } else {
-          debugPrint('[uploadDocument] token refresh failed');
         }
       }
 
@@ -475,8 +479,6 @@ class ApiService {
           final raw = jsonDecode(response.body);
           decoded = raw is Map<String, dynamic> ? raw : <String, dynamic>{};
         } catch (jsonError) {
-          debugPrint('[uploadDocument] JSON parse error: $jsonError');
-          debugPrint('[uploadDocument] raw body was: ${response.body}');
           throw Exception(
             'Server returned an unexpected response (status ${response.statusCode}). '
             'Raw: ${response.body.length > 300 ? response.body.substring(0, 300) : response.body}',
@@ -486,10 +488,7 @@ class ApiService {
         decoded = <String, dynamic>{};
       }
 
-      debugPrint('[uploadDocument] decoded=$decoded');
-
       if (response.statusCode == 201) {
-        debugPrint('[uploadDocument] SUCCESS');
         return decoded;
       }
 
@@ -516,7 +515,6 @@ class ApiService {
         'Failed to upload document (status code ${response.statusCode})',
       );
     } on TimeoutException catch (e, st) {
-      debugPrint('[uploadDocument] TIMEOUT: $e');
       await BugReportService.reportApiFailure(
         title: 'Upload document API timeout',
         errorMessage: e.toString(),
@@ -528,8 +526,6 @@ class ApiService {
         'Upload timed out. Please try again with a smaller JPG image.',
       );
     } catch (e, st) {
-      debugPrint('[uploadDocument] EXCEPTION: $e');
-      debugPrint('[uploadDocument] STACKTRACE: $st');
       await BugReportService.reportApiFailure(
         title: 'Upload document API failure',
         errorMessage: e.toString(),

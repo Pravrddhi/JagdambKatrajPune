@@ -154,25 +154,17 @@ class AppDrawer extends StatelessWidget {
   void _navigateToMaintenance(BuildContext context) {
     Navigator.pop(context);
     final nested = userDetails?['data'];
-    final showAdminFunctionsInDrawer = _isAdminLike;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => DholMaintenanceScreen(
-          canManageInventory: showAdminFunctionsInDrawer
-              ? _canManageMaintenanceInventory
-              : false,
-          canApproveEntries: showAdminFunctionsInDrawer
-              ? _canApproveMaintenanceEntries
-              : false,
-          canCreateMaintenanceEvents: showAdminFunctionsInDrawer
-              ? _canCreateMaintenanceEvents
-              : false,
-          canApproveCompletionRequests: showAdminFunctionsInDrawer
-              ? _canApproveMaintenanceCompletions
-              : false,
-          isPathakAdminApprover:
-              _isPathakAdminOnly || _permissionBool('maintenance_approval'),
+          // Direct drawer maintenance is always user-mode.
+          // Admin maintenance actions are available in Admin > Maintenance tabs.
+          canManageInventory: false,
+          canApproveEntries: false,
+          canCreateMaintenanceEvents: false,
+          canApproveCompletionRequests: false,
+          isPathakAdminApprover: false,
           approverGatId: int.tryParse(
             userDetails?['gat_id']?.toString() ??
                 userDetails?['gatId']?.toString() ??
@@ -216,7 +208,10 @@ class AppDrawer extends StatelessWidget {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => const DocumentCenterScreen(isPathakAdmin: false),
+        builder: (context) => DocumentCenterScreen(
+          isPathakAdmin: false,
+          userDetails: userDetails,
+        ),
       ),
     );
   }

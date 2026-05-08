@@ -1958,19 +1958,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   await Navigator.of(context).push(
                                     MaterialPageRoute<void>(
                                       builder: (_) => DholMaintenanceScreen(
-                                        canManageInventory:
-                                            _canManageMaintenanceInventory,
-                                        canApproveEntries:
-                                            _canApproveMaintenanceEntries,
-                                        canCreateMaintenanceEvents:
-                                            _canCreateMaintenanceEvents,
-                                        canApproveCompletionRequests:
-                                            _canApproveMaintenanceCompletions,
-                                        isPathakAdminApprover:
-                                            _isPathakAdminOnly ||
-                                            _permissionBool(
-                                              'maintenance_approval',
-                                            ),
+                                        // Home maintenance shortcut is always user-mode.
+                                        // Admin actions are available in Admin Operations.
+                                        canManageInventory: false,
+                                        canApproveEntries: false,
+                                        canCreateMaintenanceEvents: false,
+                                        canApproveCompletionRequests: false,
+                                        isPathakAdminApprover: false,
                                         approverGatId: _currentUserGatId,
                                         currentUserId: _currentUserId,
                                         currentUserName:
@@ -2067,19 +2061,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   await Navigator.of(context).push(
                                     MaterialPageRoute<void>(
                                       builder: (_) => DholMaintenanceScreen(
-                                        canManageInventory:
-                                            _canManageMaintenanceInventory,
-                                        canApproveEntries:
-                                            _canApproveMaintenanceEntries,
-                                        canCreateMaintenanceEvents:
-                                            _canCreateMaintenanceEvents,
-                                        canApproveCompletionRequests:
-                                            _canApproveMaintenanceCompletions,
-                                        isPathakAdminApprover:
-                                            _isPathakAdminOnly ||
-                                            _permissionBool(
-                                              'maintenance_approval',
-                                            ),
+                                        // Home maintenance shortcut is always user-mode.
+                                        // Admin actions are available in Admin Operations.
+                                        canManageInventory: false,
+                                        canApproveEntries: false,
+                                        canCreateMaintenanceEvents: false,
+                                        canApproveCompletionRequests: false,
+                                        isPathakAdminApprover: false,
                                         approverGatId: _currentUserGatId,
                                         currentUserId: _currentUserId,
                                         currentUserName:
@@ -2088,7 +2076,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                         userInstrument:
                                             _userDetails?['instrument']
                                                 ?.toString(),
-                                        openCreateMaintenanceDayOnStart: true,
+                                        openCreateMaintenanceDayOnStart: false,
                                       ),
                                     ),
                                   );

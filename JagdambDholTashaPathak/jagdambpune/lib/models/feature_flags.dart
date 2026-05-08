@@ -9,6 +9,7 @@ class FeatureFlags {
   final bool showFinance;
   final bool showDocuments;
   final bool showMirvnukLiveTracking;
+  final bool showAdminItems;
   final bool forceUpdateAndroid;
   final bool forceUpdateIos;
   final String? minAndroidVersion;
@@ -26,6 +27,7 @@ class FeatureFlags {
     required this.showFinance,
     required this.showDocuments,
     required this.showMirvnukLiveTracking,
+    required this.showAdminItems,
     required this.forceUpdateAndroid,
     required this.forceUpdateIos,
     this.minAndroidVersion,
@@ -106,6 +108,10 @@ class FeatureFlags {
       ),
       showMirvnukLiveTracking: _toBool(
         json['showMirvnukLiveTracking'] ?? json['show_mirvnuk_live_tracking'],
+        defaultWhenNull: false,
+      ),
+      showAdminItems: _toBool(
+        json['showAdminItems'] ?? json['show_admin_items'],
         defaultWhenNull: false,
       ),
       forceUpdateAndroid: forceUpdateAndroid,
