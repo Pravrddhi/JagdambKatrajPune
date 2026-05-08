@@ -57,6 +57,8 @@ class ApiEndpoints {
   static const String pinKey = 'pin';
   static const String isGatPramukhKey = 'is_gat_pramukh';
   static const String gatPramukhNameKey = 'gat_pramukh_name';
+  static const String gatIdKey = 'gat_id';
+  static const String gatNameKey = 'gat_name';
 
   // -------------------
   // Authentication Endpoints
@@ -113,6 +115,33 @@ class ApiEndpoints {
   /// Update FCM token for push notifications
   static final String updateFCMToken =
       '$baseUrl/notifications/update-fcm-token/';
+
+  /// List active ID card template images
+  static final String idTemplateImages = '$baseUrl/id-template-images/';
+
+  /// List / create user items (jacket, instrument, uniform, shela, id_card, other)
+  static final String userItems = '$baseUrl/user-items/';
+
+  /// User's action inbox — items requiring their attention (pending_accept, admin_assigned, approved)
+  static final String userItemsPending = '$baseUrl/user-items/pending/';
+
+  /// List / create item catalog entries
+  static final String itemCatalog = '$baseUrl/item-catalog/';
+
+  /// Detail / partial-update / delete a specific user item
+  static String userItemDetail(int itemId) => '$baseUrl/user-items/$itemId/';
+
+  /// Perform lifecycle action on a user item
+  static String userItemAction(int itemId) =>
+      '$baseUrl/user-items/$itemId/action/';
+
+  /// Confirm item receipt for current user
+  static String userItemConfirm(int itemId) =>
+      '$baseUrl/user-items/$itemId/confirm/';
+
+  /// Detail / partial-update / delete a specific catalog item
+  static String itemCatalogDetail(int catalogId) =>
+      '$baseUrl/item-catalog/$catalogId/';
 
   /// Create a new event
   static final String createEvent = '$baseUrl/events/create/';

@@ -2317,6 +2317,16 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   void _showSnack(String message) {
     if (!mounted) return;
 
+    final normalized = message.toLowerCase();
+    final isMaintenanceAnalysisAccessMessage =
+        normalized.contains('maintenance analysis') &&
+        normalized.contains('pathak admin') &&
+        (normalized.contains('maintenance admin') ||
+            normalized.contains('maintacne admin'));
+    if (isMaintenanceAnalysisAccessMessage) {
+      return;
+    }
+
     // On web, async callbacks can fire while this route is no longer current.
     // Avoid touching Scaffold/Overlay in that state to prevent engine asserts.
     if (kIsWeb) {

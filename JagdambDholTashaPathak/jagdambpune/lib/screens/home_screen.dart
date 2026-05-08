@@ -21,6 +21,7 @@ import '../services/fcm_service.dart';
 import '../services/notification_socket_service.dart';
 import '../services/maintenance_service.dart';
 import '../models/maintenance_models.dart';
+import '../services/api_service.dart';
 import '../components/maintenance_completion_dialog.dart';
 import 'attendance_module_screen.dart';
 import 'dhol_maintenance_screen.dart';
@@ -431,6 +432,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final storedGatPramukhName = await storage.read(
         key: ApiEndpoints.gatPramukhNameKey,
       );
+      final storedGatId = await storage.read(key: ApiEndpoints.gatIdKey);
+      final storedGatName = await storage.read(key: ApiEndpoints.gatNameKey);
       final storedJoiningYear = await storage.read(key: 'joining_year');
 
       final mergedUserData = Map<String, dynamic>.from(userData);
@@ -446,6 +449,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           storedGatPramukhName != null &&
           storedGatPramukhName.trim().isNotEmpty) {
         mergedUserData['gat_pramukh_name'] = storedGatPramukhName.trim();
+      }
+      if ((mergedUserData['gat_id'] == null ||
+              mergedUserData['gat_id'].toString().trim().isEmpty) &&
+          storedGatId != null &&
+          storedGatId.trim().isNotEmpty) {
+        mergedUserData['gat_id'] = storedGatId.trim();
+      }
+      if ((mergedUserData['gat_name'] == null ||
+              mergedUserData['gat_name'].toString().trim().isEmpty) &&
+          storedGatName != null &&
+          storedGatName.trim().isNotEmpty) {
+        mergedUserData['gat_name'] = storedGatName.trim();
       }
       // Normalize joined year key from possible backend variants.
       mergedUserData['joining_year'] ??=
@@ -1958,19 +1973,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   await Navigator.of(context).push(
                                     MaterialPageRoute<void>(
                                       builder: (_) => DholMaintenanceScreen(
-                                        canManageInventory:
-                                            _canManageMaintenanceInventory,
-                                        canApproveEntries:
-                                            _canApproveMaintenanceEntries,
-                                        canCreateMaintenanceEvents:
-                                            _canCreateMaintenanceEvents,
-                                        canApproveCompletionRequests:
-                                            _canApproveMaintenanceCompletions,
-                                        isPathakAdminApprover:
-                                            _isPathakAdminOnly ||
-                                            _permissionBool(
-                                              'maintenance_approval',
-                                            ),
+                                        // Home maintenance shortcut is always user-mode.
+                                        // Admin actions are available in Admin Operations.
+                                        canManageInventory: false,
+                                        canApproveEntries: false,
+                                        canCreateMaintenanceEvents: false,
+                                        canApproveCompletionRequests: false,
+                                        isPathakAdminApprover: false,
                                         approverGatId: _currentUserGatId,
                                         currentUserId: _currentUserId,
                                         currentUserName:
@@ -2067,19 +2076,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   await Navigator.of(context).push(
                                     MaterialPageRoute<void>(
                                       builder: (_) => DholMaintenanceScreen(
-                                        canManageInventory:
-                                            _canManageMaintenanceInventory,
-                                        canApproveEntries:
-                                            _canApproveMaintenanceEntries,
-                                        canCreateMaintenanceEvents:
-                                            _canCreateMaintenanceEvents,
-                                        canApproveCompletionRequests:
-                                            _canApproveMaintenanceCompletions,
-                                        isPathakAdminApprover:
-                                            _isPathakAdminOnly ||
-                                            _permissionBool(
-                                              'maintenance_approval',
-                                            ),
+                                        // Home maintenance shortcut is always user-mode.
+                                        // Admin actions are available in Admin Operations.
+                                        canManageInventory: false,
+                                        canApproveEntries: false,
+                                        canCreateMaintenanceEvents: false,
+                                        canApproveCompletionRequests: false,
+                                        isPathakAdminApprover: false,
                                         approverGatId: _currentUserGatId,
                                         currentUserId: _currentUserId,
                                         currentUserName:
@@ -2088,7 +2091,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                         userInstrument:
                                             _userDetails?['instrument']
                                                 ?.toString(),
-                                        openCreateMaintenanceDayOnStart: true,
+                                        openCreateMaintenanceDayOnStart: false,
                                       ),
                                     ),
                                   );
@@ -2110,7 +2113,67 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                 isCompact: isCompact,
                                 onPressed: () async {
                                   _toggleFabMenu();
-                                  await NotificationForm.open(context);
+                                  int? targetGatId = _isGatPramukh
+                                      ? _currentUserGatId
+                                      : null;
+                                  String? targetGatName = _isGatPramukh
+                                      ? _currentGatName
+                                      : null;
+
+                                  // Gat pramukh must always send to their gat.
+                                  // If the gat info is not yet in user details
+                                  // (e.g. after a previous session), fetch it.
+                                  if (_isGatPramukh && targetGatId == null) {
+                                    try {
+                                      final gatData =
+                                          await ApiService.fetchMyGat();
+                                      final id = int.tryParse(
+                                        gatData['id']?.toString() ??
+                                            gatData['gat_id']?.toString() ??
+                                            '',
+                                      );
+                                      final name =
+                                          gatData['name']?.toString() ??
+                                          gatData['gat_name']?.toString();
+                                      if (id != null) {
+                                        targetGatId = id;
+                                        targetGatName = name;
+                                        // Cache so subsequent opens work too.
+                                        if (mounted) {
+                                          setState(() {
+                                            _userDetails?['gat_id'] = id
+                                                .toString();
+                                            if (name != null) {
+                                              _userDetails?['gat_name'] = name;
+                                            }
+                                          });
+                                        }
+                                      }
+                                    } catch (_) {
+                                      // ignore — will show the error below
+                                    }
+                                    if (targetGatId == null && mounted) {
+                                      // ignore: use_build_context_synchronously
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'Could not load your gat info. Please try again.',
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
+                                  }
+
+                                  if (!mounted) return;
+                                  // ignore: use_build_context_synchronously
+                                  await NotificationForm.open(
+                                    context,
+                                    targetGatId: targetGatId,
+                                    targetGatName: targetGatName,
+                                  );
                                 },
                               ),
                             ),
