@@ -1,7 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
-import '../providers/feature_flags_provider.dart';
 import '../theme/app_colors.dart';
 import '../utils/animated_navigation.dart'; // ✅ Reusable animation
 import '../screens/document_center_screen.dart';
@@ -90,16 +88,13 @@ class AppDrawer extends StatelessWidget {
         userDetails?['gatName']?.toString() ??
         userDetails?['gat']?.toString();
 
-    final showAutoAssignGat =
-        context.read<FeatureFlagsProvider>().flags?.showAutoAssignGat ?? false;
-
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => GatDetailsScreen(
           selectedGatId: _isPathakAdmin ? null : selectedGatId,
           selectedGatName: _isPathakAdmin ? null : selectedGatName,
-          showAutoAssignAction: _canAddAssignGat && showAutoAssignGat,
+          showAutoAssignAction: _canAddAssignGat,
           isPathakAdmin: _isPathakAdmin,
           canCreateGat: _canAddAssignGat,
           useMyGatEndpoint: !_isPathakAdmin,
@@ -388,8 +383,6 @@ class AppDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final flags = context.watch<FeatureFlagsProvider>().flags;
-
     return Drawer(
       backgroundColor: AppColors.background,
       child: Column(
@@ -437,7 +430,7 @@ class AppDrawer extends StatelessWidget {
               onTap: () => _navigateToAdminOperations(context),
             ),
           // Show Gat Details for pathak_admin and My Gat for all other logged-in users.
-          if (userDetails != null && (flags?.showGat ?? true))
+          if (userDetails != null)
             ListTile(
               leading: const Icon(Icons.groups, color: AppColors.primaryMaroon),
               title: Text(
@@ -446,40 +439,37 @@ class AppDrawer extends StatelessWidget {
               ),
               onTap: () => _navigateToGatDetails(context),
             ),
-          if (flags?.showAttendance ?? true)
-            ListTile(
-              leading: const Icon(
-                Icons.fact_check,
-                color: AppColors.primaryMaroon,
-              ),
-              title: const Text(
-                'Attendance',
-                style: TextStyle(color: AppColors.primaryMaroon),
-              ),
-              onTap: () => _navigateToAttendance(context),
+          ListTile(
+            leading: const Icon(
+              Icons.fact_check,
+              color: AppColors.primaryMaroon,
             ),
-          if (flags?.showMaintenance ?? true)
-            ListTile(
-              leading: const Icon(
-                Icons.build_circle,
-                color: AppColors.primaryMaroon,
-              ),
-              title: const Text(
-                'Maintenance',
-                style: TextStyle(color: AppColors.primaryMaroon),
-              ),
-              onTap: () => _navigateToMaintenance(context),
+            title: const Text(
+              'Attendance',
+              style: TextStyle(color: AppColors.primaryMaroon),
             ),
-          if (flags?.showDocuments ?? false)
-            ListTile(
-              leading: const Icon(Icons.badge, color: AppColors.primaryMaroon),
-              title: const Text(
-                'Documents',
-                style: TextStyle(color: AppColors.primaryMaroon),
-              ),
-              onTap: () => _navigateToDocuments(context),
+            onTap: () => _navigateToAttendance(context),
+          ),
+          ListTile(
+            leading: const Icon(
+              Icons.build_circle,
+              color: AppColors.primaryMaroon,
             ),
-          if (_isPathakAdmin && (flags?.showFinance ?? true))
+            title: const Text(
+              'Maintenance',
+              style: TextStyle(color: AppColors.primaryMaroon),
+            ),
+            onTap: () => _navigateToMaintenance(context),
+          ),
+          ListTile(
+            leading: const Icon(Icons.badge, color: AppColors.primaryMaroon),
+            title: const Text(
+              'Documents',
+              style: TextStyle(color: AppColors.primaryMaroon),
+            ),
+            onTap: () => _navigateToDocuments(context),
+          ),
+          if (_isPathakAdmin)
             ListTile(
               leading: const Icon(
                 Icons.account_balance_wallet,

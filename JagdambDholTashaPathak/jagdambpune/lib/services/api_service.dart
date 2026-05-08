@@ -1529,24 +1529,40 @@ class ApiService {
     required String message,
     String? type,
     String? targetType,
-    int? targetRole,
     int? targetUser,
     int? targetGat,
   }) async {
     final normalizedTitle = title.trim();
     final normalizedMessage = message.trim();
     final normalizedType = type?.trim();
-    var normalizedTargetType = targetType?.trim();
-    // Backend contract: gat-targeted notifications use target_type='user'
-    // with target_gat=<id>.
-    if (targetGat != null &&
-        (normalizedTargetType == null ||
-            normalizedTargetType.isEmpty ||
-            normalizedTargetType == 'gat')) {
-      normalizedTargetType = 'user';
+    var normalizedTargetType = targetType?.trim().toLowerCase();
+
+    if (normalizedTargetType == null || normalizedTargetType.isEmpty) {
+      if (targetUser != null) {
+        normalizedTargetType = 'user';
+      } else if (targetGat != null) {
+        normalizedTargetType = 'gat';
+      } else {
+        normalizedTargetType = 'all';
+      }
     }
+
+    if (normalizedTargetType != 'all' &&
+        normalizedTargetType != 'gat' &&
+        normalizedTargetType != 'user') {
+      throw Exception('Invalid target_type. Use all, gat, or user.');
+    }
+
+    if (normalizedTargetType == 'gat' && targetGat == null) {
+      throw Exception('target_gat is required when target_type is gat.');
+    }
+
+    if (normalizedTargetType == 'user' && targetUser == null) {
+      throw Exception('target_user is required when target_type is user.');
+    }
+
     final fingerprint =
-        '${normalizedTitle.toLowerCase()}::${normalizedMessage.toLowerCase()}::${normalizedType ?? ''}::${normalizedTargetType ?? ''}::${targetRole ?? ''}::${targetUser ?? ''}::${targetGat ?? ''}';
+        '${normalizedTitle.toLowerCase()}::${normalizedMessage.toLowerCase()}::${normalizedType ?? ''}::$normalizedTargetType::${targetUser ?? ''}::${targetGat ?? ''}';
 
     final existingRequest = _inFlightNotificationRequests[fingerprint];
     if (existingRequest != null) {
@@ -1567,7 +1583,6 @@ class ApiService {
       message: normalizedMessage,
       type: normalizedType,
       targetType: normalizedTargetType,
-      targetRole: targetRole,
       targetUser: targetUser,
       targetGat: targetGat,
     );
@@ -1587,7 +1602,6 @@ class ApiService {
     required String message,
     String? type,
     String? targetType,
-    int? targetRole,
     int? targetUser,
     int? targetGat,
   }) async {
@@ -1636,9 +1650,6 @@ class ApiService {
         if (effectiveTargetType != null && effectiveTargetType.isNotEmpty) {
           payload['target_type'] = effectiveTargetType;
         }
-        if (targetRole != null) {
-          payload['target_role'] = targetRole;
-        }
         if (targetUser != null) {
           payload['target_user'] = targetUser;
         }
@@ -1648,66 +1659,47 @@ class ApiService {
         return payload;
       }
 
-      final payloadAttempts = <Map<String, dynamic>>[buildPayload()];
+      final response = await sendPayload(buildPayload());
 
-      String? lastError;
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
 
-      for (final payload in payloadAttempts) {
-        final response = await sendPayload(payload);
-
-        if (response == null) {
-          throw Exception('Session expired. Please login again.');
-        }
-
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          if (response.body.trim().isEmpty) {
-            return;
-          }
-
-          final decoded = jsonDecode(response.body);
-          if (decoded is Map<String, dynamic>) {
-            final status = decoded['status'];
-            if (status == null || status == true || status == 'success') {
-              return;
-            }
-            final err = extractErrorMessage(decoded);
-            throw Exception(err);
-          }
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (response.body.trim().isEmpty) {
           return;
         }
 
-        if (response.statusCode == 401) {
-          throw Exception('Session expired. Please login again.');
-        }
-
-        if (response.statusCode == 400) {
-          try {
-            final decoded = jsonDecode(response.body);
-            if (decoded is Map<String, dynamic>) {
-              lastError = extractErrorMessage(decoded);
-            }
-          } catch (_) {
-            lastError = 'Bad request';
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          final status = decoded['status'];
+          if (status == null || status == true || status == 'success') {
+            return;
           }
-          // Try next payload variant if available.
-          continue;
+          final err = extractErrorMessage(decoded);
+          throw Exception(err);
         }
-
-        if (response.statusCode == 429) {
-          final dynamic decoded = response.body.isNotEmpty
-              ? jsonDecode(response.body)
-              : <String, dynamic>{};
-          if (decoded is Map<String, dynamic>) {
-            throw Exception(extractErrorMessage(decoded));
-          }
-        }
-
-        throw Exception(
-          'Failed to send notification (status code ${response.statusCode})',
-        );
+        return;
       }
 
-      throw Exception(lastError ?? 'Failed to send notification (Bad Request)');
+      if (response.statusCode == 401) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      if (response.statusCode == 400 ||
+          response.statusCode == 403 ||
+          response.statusCode == 429) {
+        final dynamic decoded = response.body.isNotEmpty
+            ? jsonDecode(response.body)
+            : <String, dynamic>{};
+        if (decoded is Map<String, dynamic>) {
+          throw Exception(extractErrorMessage(decoded));
+        }
+      }
+
+      throw Exception(
+        'Failed to send notification (status code ${response.statusCode})',
+      );
     } catch (e, st) {
       await BugReportService.reportApiFailure(
         title: 'Create notification API failure',

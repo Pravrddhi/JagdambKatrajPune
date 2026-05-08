@@ -385,6 +385,20 @@ class _LoginScreenState extends State<LoginScreen> {
             data['gat_pramukh_name']?.toString() ??
             '',
       );
+      final gatIdValue =
+          profileData['gat_id']?.toString() ?? data['gat_id']?.toString() ?? '';
+      if (gatIdValue.isNotEmpty) {
+        await storage.write(key: ApiEndpoints.gatIdKey, value: gatIdValue);
+      }
+      final gatNameValue =
+          profileData['gat_name']?.toString() ??
+          profileData['gat']?.toString() ??
+          data['gat_name']?.toString() ??
+          data['gat']?.toString() ??
+          '';
+      if (gatNameValue.isNotEmpty) {
+        await storage.write(key: ApiEndpoints.gatNameKey, value: gatNameValue);
+      }
       final joiningYearValue =
           profileData['joining_year'] ??
           profileData['joiningYear'] ??

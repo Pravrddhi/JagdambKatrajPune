@@ -57,6 +57,8 @@ class ApiEndpoints {
   static const String pinKey = 'pin';
   static const String isGatPramukhKey = 'is_gat_pramukh';
   static const String gatPramukhNameKey = 'gat_pramukh_name';
+  static const String gatIdKey = 'gat_id';
+  static const String gatNameKey = 'gat_name';
 
   // -------------------
   // Authentication Endpoints
