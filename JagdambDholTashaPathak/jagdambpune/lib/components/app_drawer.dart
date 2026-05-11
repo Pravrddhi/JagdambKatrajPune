@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../theme/app_colors.dart';
 import '../utils/animated_navigation.dart'; // ✅ Reusable animation
@@ -8,6 +9,7 @@ import '../screens/coming_soon_screen.dart';
 import '../screens/attendance_module_screen.dart';
 import '../screens/dhol_maintenance_screen.dart';
 import '../screens/admin_operations_screen.dart';
+import '../providers/request_counts_provider.dart';
 
 class AppDrawer extends StatelessWidget {
   final String? firstName;
@@ -383,6 +385,25 @@ class AppDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Get the request counts provider and fetch counts on drawer open
+    final requestCountsProvider = Provider.of<RequestCountsProvider>(
+      context,
+      listen: false,
+    );
+
+    // Schedule fetch after frame to avoid blocking UI
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!requestCountsProvider.isLoading) {
+        requestCountsProvider.fetchRequestCounts(
+          isPathakAdmin: _isPathakAdmin,
+          canViewDocumentApprovals: _canViewDocumentApprovals,
+          canManageMaintenanceInventory: _canManageMaintenanceInventory,
+          canApproveMaintenanceEntries: _canApproveMaintenanceEntries,
+          canApproveMaintenanceCompletions: _canApproveMaintenanceCompletions,
+        );
+      }
+    });
+
     return Drawer(
       backgroundColor: AppColors.background,
       child: Column(
@@ -418,16 +439,16 @@ class AppDrawer extends StatelessWidget {
             onTap: () => _navigateToProfile(context),
           ),
           if (!_isVadak && _isAdminLike)
-            ListTile(
-              leading: const Icon(
-                Icons.admin_panel_settings,
-                color: AppColors.primaryMaroon,
-              ),
-              title: const Text(
-                'Admin',
-                style: TextStyle(color: AppColors.primaryMaroon),
-              ),
-              onTap: () => _navigateToAdminOperations(context),
+            Consumer<RequestCountsProvider>(
+              builder: (context, provider, _) {
+                return _buildDrawerItemWithBadge(
+                  context,
+                  icon: Icons.admin_panel_settings,
+                  title: 'Admin',
+                  count: provider.counts.total,
+                  onTap: () => _navigateToAdminOperations(context),
+                );
+              },
             ),
           // Show Gat Details for pathak_admin and My Gat for all other logged-in users.
           if (userDetails != null)
@@ -450,40 +471,79 @@ class AppDrawer extends StatelessWidget {
             ),
             onTap: () => _navigateToAttendance(context),
           ),
-          ListTile(
-            leading: const Icon(
-              Icons.build_circle,
-              color: AppColors.primaryMaroon,
-            ),
-            title: const Text(
-              'Maintenance',
-              style: TextStyle(color: AppColors.primaryMaroon),
-            ),
-            onTap: () => _navigateToMaintenance(context),
+          Consumer<RequestCountsProvider>(
+            builder: (context, provider, _) {
+              final maintenanceCount =
+                  provider.counts.maintenanceRequests +
+                  provider.counts.completionRequests;
+              return _buildDrawerItemWithBadge(
+                context,
+                icon: Icons.build_circle,
+                title: 'Maintenance',
+                count: maintenanceCount,
+                onTap: () => _navigateToMaintenance(context),
+              );
+            },
           ),
-          ListTile(
-            leading: const Icon(Icons.badge, color: AppColors.primaryMaroon),
-            title: const Text(
-              'Documents',
-              style: TextStyle(color: AppColors.primaryMaroon),
-            ),
-            onTap: () => _navigateToDocuments(context),
+          Consumer<RequestCountsProvider>(
+            builder: (context, provider, _) {
+              return _buildDrawerItemWithBadge(
+                context,
+                icon: Icons.badge,
+                title: 'Documents',
+                count: provider.counts.documentApprovals,
+                onTap: () => _navigateToDocuments(context),
+              );
+            },
           ),
           if (_isPathakAdmin)
-            ListTile(
-              leading: const Icon(
-                Icons.account_balance_wallet,
-                color: AppColors.primaryMaroon,
-              ),
-              title: const Text(
-                'Finance',
-                style: TextStyle(color: AppColors.primaryMaroon),
-              ),
+            _buildDrawerItemWithBadge(
+              context,
+              icon: Icons.account_balance_wallet,
+              title: 'Finance',
+              count: 0,
               onTap: () => _navigateToComingSoon(context, 'Finance'),
             ),
           const Spacer(),
         ],
       ),
+    );
+  }
+
+  /// Build a drawer item with an optional count badge
+  Widget _buildDrawerItemWithBadge(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required int count,
+    required VoidCallback onTap,
+  }) {
+    return ListTile(
+      leading: Icon(icon, color: AppColors.primaryMaroon),
+      title: Row(
+        children: [
+          Text(title, style: const TextStyle(color: AppColors.primaryMaroon)),
+          if (count > 0) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.errorRed,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                count.toString(),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+      onTap: onTap,
     );
   }
 }

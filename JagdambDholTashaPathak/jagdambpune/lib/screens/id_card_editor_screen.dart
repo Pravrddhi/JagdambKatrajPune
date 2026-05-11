@@ -36,6 +36,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
 
   final ImagePicker _picker = ImagePicker();
   final TextEditingController _nameController = TextEditingController();
+  final FocusNode _nameFocusNode = FocusNode();
   final GlobalKey _cardRepaintKey = GlobalKey();
 
   File? _selectedImageFile;
@@ -45,6 +46,8 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   bool _isResizingFrame = false;
   bool _isSubmitting = false;
   bool _isCapturing = false;
+  bool _showMarathiKeyboard = false;
+  bool _marathiKeyboardShift = false;
   String? _idCardDocumentStatus;
   String? _idCardRejectionReason;
   String? _idCardDocumentUrl;
@@ -66,14 +69,29 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   static const double _cornerResizeBoost = 5.00;
   double _imageScale = _minImageScale;
   double _baseImageScale = _minImageScale;
-  double _frameWidthFactor = 0.480;
-  double _frameLeftFactor = 0.260;
-  double _frameTopFactor = 0.340;
-  double _frameHeightFactor = 0.320;
+  double _frameWidthFactor = 0.400;
+  double _frameLeftFactor = 0.296;
+  double _frameTopFactor = 0.355;
+  double _frameHeightFactor = 0.312;
   Offset _imageOffset = Offset.zero;
   Offset _baseImageOffset = Offset.zero;
   Size _photoFrameSize = Size.zero;
   static const double _positionStep = 8.0;
+  // SHREE-DEV7-3690 is a legacy mapped font. We input latin keys so
+  // the font can render Marathi glyphs in the preview/template.
+  static const List<List<String>> _marathiKeyboardRowsLower = <List<String>>[
+    <String>['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
+    <String>['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
+    <String>['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'],
+    <String>['z', 'x', 'c', 'v', 'b', 'n', 'm'],
+  ];
+
+  static const List<List<String>> _marathiKeyboardRowsUpper = <List<String>>[
+    <String>['!', '@', '#', r'$', '%', '^', '&', '*', '(', ')'],
+    <String>['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+    <String>['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
+    <String>['Z', 'X', 'C', 'V', 'B', 'N', 'M'],
+  ];
 
   double _safeFactor(
     double? value, {
@@ -403,7 +421,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
         return;
       }
 
-      // On web: Image.network handles loading (avoids CORS fetch restrictions).
+      // On web: use URL rendering only.
       // On mobile: fetch bytes with auth headers for protected media URLs.
       if (kIsWeb) {
         if (!mounted) return;
@@ -489,9 +507,28 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
                     nested['instrumentName'])
               : null);
 
-      final normalized = candidate?.toString().trim().toLowerCase() ?? '';
-      if (normalized == 'dhol' || normalized == 'tasha') {
-        return normalized;
+      String normalizedCandidate(dynamic value) {
+        if (value == null) return '';
+        if (value is Map<String, dynamic>) {
+          final nestedValue =
+              value['name'] ?? value['instrument'] ?? value['instrument_name'];
+          return nestedValue?.toString().trim().toLowerCase() ?? '';
+        }
+        if (value is Map) {
+          final nestedValue =
+              value['name'] ?? value['instrument'] ?? value['instrument_name'];
+          return nestedValue?.toString().trim().toLowerCase() ?? '';
+        }
+        return value.toString().trim().toLowerCase();
+      }
+
+      final normalized = normalizedCandidate(candidate);
+      final compact = normalized.replaceAll(RegExp(r'[^a-z\u0900-\u097F]'), '');
+
+      if (compact == 'dhol') return 'dhol';
+      if (compact == 'tasha') return 'tasha';
+      if (compact == 'dhwaj' || compact == 'dhvaj' || compact == 'ध्वज') {
+        return 'dhwaj';
       }
     }
     return _defaultTemplateType;
@@ -616,6 +653,168 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
     return value.isEmpty ? '--' : value.toUpperCase();
   }
 
+  bool _hasExactlyTwoWords(String value) {
+    final words = value
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((word) => word.isNotEmpty)
+        .toList();
+    return words.length == 2;
+  }
+
+  void _insertAtCursor(String input) {
+    if (_isSubmitting) return;
+
+    final current = _nameController.value;
+    final selection = current.selection;
+    final text = current.text;
+
+    final start = selection.start >= 0 ? selection.start : text.length;
+    final end = selection.end >= 0 ? selection.end : text.length;
+    final selectionStart = start <= end ? start : end;
+    final selectionEnd = start <= end ? end : start;
+
+    final nextText = text.replaceRange(selectionStart, selectionEnd, input);
+    if (nextText.length > 32) return;
+
+    final caret = selectionStart + input.length;
+    _nameController.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: caret),
+    );
+    if (mounted) {
+      FocusScope.of(context).requestFocus(_nameFocusNode);
+    }
+    setState(() {});
+  }
+
+  void _backspaceAtCursor() {
+    if (_isSubmitting) return;
+
+    final current = _nameController.value;
+    final selection = current.selection;
+    final text = current.text;
+    if (text.isEmpty) return;
+
+    final start = selection.start >= 0 ? selection.start : text.length;
+    final end = selection.end >= 0 ? selection.end : text.length;
+    final selectionStart = start <= end ? start : end;
+    final selectionEnd = start <= end ? end : start;
+
+    if (selectionStart != selectionEnd) {
+      final nextText = text.replaceRange(selectionStart, selectionEnd, '');
+      _nameController.value = TextEditingValue(
+        text: nextText,
+        selection: TextSelection.collapsed(offset: selectionStart),
+      );
+      setState(() {});
+      return;
+    }
+
+    if (selectionStart <= 0) return;
+
+    final deleteFrom = selectionStart - 1;
+    final nextText = text.replaceRange(deleteFrom, selectionStart, '');
+    _nameController.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection.collapsed(offset: deleteFrom),
+    );
+    setState(() {});
+  }
+
+  Widget _buildMarathiKeyboard() {
+    final rows = _marathiKeyboardShift
+        ? _marathiKeyboardRowsUpper
+        : _marathiKeyboardRowsLower;
+
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.black12),
+      ),
+      child: Column(
+        children: [
+          for (final row in rows)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                alignment: WrapAlignment.center,
+                children: row
+                    .map(
+                      (letter) => SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: OutlinedButton(
+                          onPressed: () => _insertAtCursor(letter),
+                          style: OutlinedButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            side: const BorderSide(color: Colors.black26),
+                          ),
+                          child: Text(
+                            letter,
+                            style: const TextStyle(
+                              fontFamily: 'ShreeDev7_3690',
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _marathiKeyboardShift = !_marathiKeyboardShift;
+                    });
+                  },
+                  icon: Icon(
+                    _marathiKeyboardShift
+                        ? Icons.keyboard_capslock
+                        : Icons.keyboard_capslock_outlined,
+                    size: 18,
+                  ),
+                  label: Text(_marathiKeyboardShift ? 'Shift On' : 'Shift'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _insertAtCursor(' '),
+                  icon: const Icon(Icons.space_bar, size: 18),
+                  label: const Text('Space'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _backspaceAtCursor,
+                  icon: const Icon(Icons.backspace_outlined, size: 18),
+                  label: const Text('Backspace'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Use keyboard mapping for SHREE-DEV7 Marathi typing',
+            style: TextStyle(fontSize: 11, color: Colors.black54),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _pickImage(ImageSource source) async {
     setState(() {
       _isPickingImage = true;
@@ -704,11 +903,23 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   Future<void> _submitForReview({bool fromDialog = false}) async {
     if (_isSubmitting) return;
 
-    if (_nameController.text.trim().isEmpty) {
+    final normalizedName = _nameController.text.trim();
+
+    if (normalizedName.isEmpty) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
           const SnackBar(content: Text('Please enter your name in Marathi.')),
+        );
+      return;
+    }
+    if (!_hasExactlyTwoWords(normalizedName)) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Please enter only first name and last name.'),
+          ),
         );
       return;
     }
@@ -885,6 +1096,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   @override
   void dispose() {
     _nameController.dispose();
+    _nameFocusNode.dispose();
     super.dispose();
   }
 
@@ -977,20 +1189,46 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   }
 
   Widget _buildNameField() {
-    return TextField(
-      controller: _nameController,
-      textCapitalization: TextCapitalization.words,
-      enabled: !_isIdCardLocked,
-      inputFormatters: [LengthLimitingTextInputFormatter(32)],
-      onChanged: (_) {
-        setState(() {});
-      },
-      decoration: InputDecoration(
-        labelText: 'Name in Marathi',
-        hintText: 'उदा. मेघलाल महेंद्र सावंत',
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-        prefixIcon: const Icon(Icons.badge_outlined),
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: _nameController,
+          focusNode: _nameFocusNode,
+          textCapitalization: TextCapitalization.words,
+          enabled: !_isSubmitting,
+          style: const TextStyle(fontFamily: 'ShreeDev7_3690', fontSize: 18),
+          inputFormatters: [LengthLimitingTextInputFormatter(32)],
+          onChanged: (_) {
+            setState(() {});
+          },
+          decoration: InputDecoration(
+            labelText: 'Name (Shree Font)',
+            hintText: 'पहिले नाव आणि आडनाव',
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            prefixIcon: const Icon(Icons.badge_outlined),
+            suffixIcon: IconButton(
+              tooltip: _showMarathiKeyboard
+                  ? 'Hide Marathi keyboard'
+                  : 'Show Marathi keyboard',
+              icon: Icon(
+                _showMarathiKeyboard ? Icons.keyboard_hide : Icons.keyboard,
+              ),
+              onPressed: _isSubmitting
+                  ? null
+                  : () {
+                      setState(() {
+                        _showMarathiKeyboard = !_showMarathiKeyboard;
+                      });
+                      if (_showMarathiKeyboard && mounted) {
+                        FocusScope.of(context).requestFocus(_nameFocusNode);
+                      }
+                    },
+            ),
+          ),
+        ),
+        if (_showMarathiKeyboard) _buildMarathiKeyboard(),
+      ],
     );
   }
 
@@ -1050,11 +1288,11 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
                                 : _nameController.text.trim(),
                             textAlign: TextAlign.center,
                             maxLines: 1,
-                            style: const TextStyle(fontFamily: 'Shreelipi4642')
+                            style: const TextStyle(fontFamily: 'ShreeDev7_3690')
                                 .merge(
                                   TextStyle(
                                     color: Colors.white,
-                                    fontSize: width * 0.062,
+                                    fontSize: 24.47,
                                     fontWeight: FontWeight.w700,
                                     letterSpacing: 0.2,
                                     height: 1.1,
@@ -1077,7 +1315,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
                       ),
                       Positioned(
                         left: width * 0.52,
-                        top: height * 0.774,
+                        top: height * 0.806,
                         child: Text(
                           _bloodGroup,
                           textAlign: TextAlign.left,
@@ -1399,7 +1637,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
       );
     }
 
-    // Web: use Image.network (img tag bypasses CORS restrictions).
+    // Web: use URL rendering.
     if (kIsWeb) {
       final url = _templateImageUrl;
       if (url == null || url.isEmpty) {

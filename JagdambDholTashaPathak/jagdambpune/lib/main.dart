@@ -13,6 +13,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'firebase_options.dart';
 import 'providers/feature_flags_provider.dart';
 import 'providers/notification_provider.dart';
+import 'providers/request_counts_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/registration_screen.dart';
 import 'screens/reset_pin.dart';
@@ -136,6 +137,7 @@ Future<void> main() async {
       providers: [
         ChangeNotifierProvider(create: (_) => FeatureFlagsProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
+        ChangeNotifierProvider(create: (_) => RequestCountsProvider()),
       ],
       child: const MyApp(),
     ),

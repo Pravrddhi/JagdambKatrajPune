@@ -4,9 +4,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image/image.dart' as img;
+import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../config/api_endpoints.dart';
+import '../providers/feature_flags_provider.dart';
 import '../services/api_service.dart';
 import 'id_card_editor_screen.dart';
 import '../theme/app_colors.dart';
@@ -928,7 +930,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
     );
   }
 
-  Widget _buildMyDocumentsSection() {
+  Widget _buildMyDocumentsSection({required bool showIdCardTab}) {
     if (_isLoadingMyDocuments) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 24),
@@ -1117,7 +1119,9 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
                   if (status == 'rejected' && docType == 'id_card') ...[
                     const SizedBox(height: 10),
                     Text(
-                      'Use the ID Card tab to submit your ID card again.',
+                      showIdCardTab
+                          ? 'Use the ID Card tab to submit your ID card again.'
+                          : 'ID Card resubmission is currently unavailable.',
                       style: TextStyle(
                         color: Colors.red.shade700,
                         fontSize: 12,
@@ -1188,7 +1192,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
     );
   }
 
-  Widget _buildDocumentsContent() {
+  Widget _buildDocumentsContent({required bool showIdCardTab}) {
     return SafeArea(
       child: SingleChildScrollView(
         controller: _scrollController,
@@ -1197,7 +1201,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (!widget.isPathakAdmin) ...[
-              _buildMyDocumentsSection(),
+              _buildMyDocumentsSection(showIdCardTab: showIdCardTab),
               const SizedBox(height: 16),
             ],
             _SectionCard(
@@ -1398,6 +1402,9 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
 
   @override
   Widget build(BuildContext context) {
+    final showIdCardTab =
+        context.watch<FeatureFlagsProvider>().flags?.showIdCard ?? false;
+
     if (widget.isPathakAdmin) {
       return Scaffold(
         backgroundColor: AppColors.background,
@@ -1406,7 +1413,19 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
           backgroundColor: AppColors.primaryMaroon,
           foregroundColor: AppColors.textLight,
         ),
-        body: _buildDocumentsContent(),
+        body: _buildDocumentsContent(showIdCardTab: showIdCardTab),
+      );
+    }
+
+    if (!showIdCardTab) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        appBar: AppBar(
+          title: const Text('Document Center'),
+          backgroundColor: AppColors.primaryMaroon,
+          foregroundColor: AppColors.textLight,
+        ),
+        body: _buildDocumentsContent(showIdCardTab: false),
       );
     }
 
@@ -1430,7 +1449,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
       body: TabBarView(
         controller: _userTabController,
         children: [
-          _buildDocumentsContent(),
+          _buildDocumentsContent(showIdCardTab: true),
           IDCardEditorScreen(
             refreshTick: _idCardRefreshTick,
             userDetails: widget.userDetails,
