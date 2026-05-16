@@ -10,8 +10,12 @@ class NotificationSocketService {
 
   /// Called when a notification event is received.
   /// [notificationData] is the parsed notification object from the WebSocket
-  /// message when `type == "notification.created"`, or `null` when called on
-  /// reconnect (meaning a full refresh is needed).
+  /// message when `type == "notification.created"`.
+  ///
+  /// A `null` value means a full refresh is needed instead of applying an
+  /// incremental update. This can be emitted in multiple situations, such as
+  /// on initial connection, on reconnect, or when an incoming socket message
+  /// cannot be handled as a specific notification event.
   final void Function(Map<String, dynamic>? notificationData)
   onNotificationEvent;
 
