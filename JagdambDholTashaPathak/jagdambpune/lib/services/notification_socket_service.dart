@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../config/api_endpoints.dart';
@@ -9,7 +8,12 @@ import '../config/api_endpoints.dart';
 class NotificationSocketService {
   NotificationSocketService({required this.onNotificationEvent});
 
-  final VoidCallback onNotificationEvent;
+  /// Called when a notification event is received.
+  /// [notificationData] is the parsed notification object from the WebSocket
+  /// message when `type == "notification.created"`, or `null` when called on
+  /// reconnect (meaning a full refresh is needed).
+  final void Function(Map<String, dynamic>? notificationData)
+  onNotificationEvent;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
@@ -46,17 +50,26 @@ class NotificationSocketService {
       _channel = WebSocketChannel.connect(uri);
       // WebSocketChannel.connect may expose connection failures through
       // channel.ready. Handle it to avoid unhandled async exceptions.
-      _channel!.ready.catchError((_) {
-        _scheduleReconnect();
-      });
+      _channel!.ready
+          .then((_) {
+            if (_disposed) return;
+            // Refresh once when socket is connected/reconnected to catch
+            // notifications created while client was temporarily offline.
+            onNotificationEvent(null);
+          })
+          .catchError((error) {
+            _scheduleReconnect();
+          });
       _subscription = _channel!.stream.listen(
         _onMessage,
-        onError: (_) => _scheduleReconnect(),
+        onError: (error) {
+          _scheduleReconnect();
+        },
         onDone: _scheduleReconnect,
         cancelOnError: true,
       );
       _reconnectDelay = const Duration(seconds: 2);
-    } catch (_) {
+    } catch (error) {
       _scheduleReconnect();
     }
   }
@@ -70,19 +83,38 @@ class NotificationSocketService {
       try {
         final decoded = jsonDecode(message);
         if (decoded is Map<String, dynamic>) {
-          final event = decoded['event']?.toString().trim().toLowerCase() ?? '';
-          if (event.isNotEmpty &&
-              event != 'notification.created' &&
-              event != 'notification.read') {
+          // Django Channels sends 'type' field; also check 'event' for
+          // compatibility with other backend implementations.
+          final event =
+              (decoded['type'] ?? decoded['event'] ?? decoded['message_type'])
+                  ?.toString()
+                  .trim()
+                  .toLowerCase() ??
+              '';
+
+          // Skip connection handshake and keepalive frames.
+          if (event == 'connection.established' ||
+              event == 'ping' ||
+              event == 'pong' ||
+              event == 'heartbeat' ||
+              event == 'connected') {
+            return;
+          }
+
+          if (event == 'notification.created') {
+            // Prefer 'notification' key; fall back to 'data' key.
+            final payload = decoded['notification'] ?? decoded['data'];
+            final notifMap = payload is Map<String, dynamic> ? payload : null;
+            onNotificationEvent(notifMap);
             return;
           }
         }
       } catch (_) {
-        // Non-JSON payloads still trigger a refresh.
+        // Non-JSON payloads still trigger a full refresh.
       }
     }
 
-    onNotificationEvent();
+    onNotificationEvent(null);
   }
 
   void _scheduleReconnect() {
