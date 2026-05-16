@@ -24,6 +24,10 @@ import 'config/app_config.dart';
 import 'theme/app_colors.dart';
 import 'web/screens/registration_web_screen.dart';
 
+// Web-only FCM bridge (conditional compilation for web platform)
+import 'web/fcm_web_bridge_stub.dart'
+    if (dart.library.html) 'web/fcm_web_bridge_web.dart';
+
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
@@ -216,6 +220,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       unawaited(_loadAppVersion());
     }
 
+    // Setup Firebase message listeners for mobile
     if (_firebaseReady && !kIsWeb) {
       FirebaseMessaging.onMessage.listen((message) {
         _handleIncomingMessage(message);
@@ -226,6 +231,20 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       FirebaseMessaging.instance.getInitialMessage().then((message) {
         if (message != null && mounted) {
           _handleIncomingMessage(message);
+        }
+      });
+    }
+
+    // Setup web FCM bridge to listen for messages from service worker
+    if (_firebaseReady && kIsWeb) {
+      FirebaseMessaging.onMessage.listen((message) {
+        _handleIncomingMessage(message);
+      });
+
+      initializeWebFcmBridge((title, body) async {
+        if (mounted) {
+          final provider = context.read<NotificationProvider>();
+          await provider.addNotification(title: title, message: body);
         }
       });
     }

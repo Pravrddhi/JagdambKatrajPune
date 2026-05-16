@@ -203,6 +203,18 @@ class NotificationProvider with ChangeNotifier {
     }
   }
 
+  /// Prepends a notification received live from the WebSocket without a
+  /// round-trip to the REST API.
+  Future<void> prependNotification(Map<String, dynamic> json) async {
+    final item = AppNotification.fromJson(json);
+    // Avoid duplicates when the same event fires more than once.
+    if (_notifications.any((n) => n.id == item.id)) return;
+    _notifications = [item, ..._notifications];
+    if (!item.isRead) _serverUnreadCount += 1;
+    await _persist();
+    notifyListeners();
+  }
+
   Future<void> addNotification({
     required String title,
     required String message,
@@ -247,17 +259,23 @@ class NotificationProvider with ChangeNotifier {
       }
 
       final decoded = jsonDecode(response.body);
-      if (decoded is! Map<String, dynamic>) {
-        return false;
-      }
 
-      final data = decoded['data'];
-      if (data is! List) {
-        _notifications = [];
-        _serverUnreadCount = 0;
-        await _persist();
-        notifyListeners();
-        return true;
+      // Support both a plain array response and a {"data": [...]} envelope.
+      final List<dynamic> data;
+      if (decoded is List) {
+        data = decoded;
+      } else if (decoded is Map<String, dynamic>) {
+        final inner = decoded['data'];
+        if (inner is! List) {
+          _notifications = [];
+          _serverUnreadCount = 0;
+          await _persist();
+          notifyListeners();
+          return true;
+        }
+        data = inner;
+      } else {
+        return false;
       }
 
       _notifications = data

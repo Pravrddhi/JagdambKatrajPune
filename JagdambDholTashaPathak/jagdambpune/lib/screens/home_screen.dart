@@ -271,12 +271,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
     _notificationSocketService?.dispose().ignore();
     _notificationSocketService = NotificationSocketService(
-      onNotificationEvent: () {
+      onNotificationEvent: (notificationData) {
         if (!mounted) return;
-        context
-            .read<NotificationProvider>()
-            .fetchFromBackend(page: 1, pageSize: 20)
-            .ignore();
+        if (notificationData != null) {
+          // Live event: prepend directly — no REST call needed.
+          context
+              .read<NotificationProvider>()
+              .prependNotification(notificationData)
+              .ignore();
+        } else {
+          // Reconnect: fetch to catch any missed notifications.
+          context
+              .read<NotificationProvider>()
+              .fetchFromBackend(page: 1, pageSize: 20)
+              .ignore();
+        }
       },
     );
     _notificationSocketService?.connect(normalized);

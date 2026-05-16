@@ -1,5 +1,7 @@
 // lib/config/api_endpoints.dart
 
+import 'package:flutter/foundation.dart';
+
 import 'app_config.dart';
 
 /// Centralized class for managing API endpoints and related utilities.
@@ -17,9 +19,35 @@ class ApiEndpoints {
     if (normalized.isEmpty) {
       return _defaultBaseUrl;
     }
-    return normalized.endsWith('/')
+    final trimmed = normalized.endsWith('/')
         ? normalized.substring(0, normalized.length - 1)
         : normalized;
+
+    final parsed = Uri.tryParse(trimmed);
+    final isAbsoluteHttpUrl =
+        parsed != null &&
+        (parsed.scheme == 'http' || parsed.scheme == 'https') &&
+        parsed.host.isNotEmpty;
+
+    // Ignore invalid/relative values (e.g. '/api') and use configured default.
+    if (!isAbsoluteHttpUrl) {
+      return _defaultBaseUrl.endsWith('/')
+          ? _defaultBaseUrl.substring(0, _defaultBaseUrl.length - 1)
+          : _defaultBaseUrl;
+    }
+
+    // Guard against absolute but wrong root path such as 'https://host/api'.
+    // Project APIs are expected under '/dholtashapathak/api'.
+    final path = parsed.path.endsWith('/')
+        ? parsed.path.substring(0, parsed.path.length - 1)
+        : parsed.path;
+    if (path == '/api') {
+      return _defaultBaseUrl.endsWith('/')
+          ? _defaultBaseUrl.substring(0, _defaultBaseUrl.length - 1)
+          : _defaultBaseUrl;
+    }
+
+    return trimmed;
   }
 
   /// API root without trailing /api, used for non-REST endpoints.
@@ -34,14 +62,21 @@ class ApiEndpoints {
   /// Build websocket URI for live notifications.
   static Uri notificationsWebSocketUri(String accessToken) {
     final rootUri = Uri.parse(apiRootUrl);
-    final secure = rootUri.scheme == 'https';
+    final pageIsSecureWebContext = kIsWeb && Uri.base.scheme == 'https';
+    final secure = rootUri.scheme == 'https' || pageIsSecureWebContext;
     final wsScheme = secure ? 'wss' : 'ws';
+    final rootPath = rootUri.path.endsWith('/')
+        ? rootUri.path.substring(0, rootUri.path.length - 1)
+        : rootUri.path;
+    final wsPath = (rootPath.isEmpty || rootPath == '/')
+        ? '/ws/notifications/'
+        : '$rootPath/ws/notifications/';
 
     return Uri(
       scheme: wsScheme,
       host: rootUri.host,
       port: rootUri.hasPort ? rootUri.port : null,
-      path: '/ws/notifications/',
+      path: wsPath,
       queryParameters: {'token': accessToken},
     );
   }
