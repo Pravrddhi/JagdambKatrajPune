@@ -40,6 +40,7 @@ dependencies:
   firebase_messaging: ^16.0.0
   flutter_local_notifications: ^19.4.0
   package_info_plus: ^8.0.2
+  new_version_plus: ^0.1.1
   flutter_quill: ^11.4.2
   flutter_launcher_icons: ^0.14.4
   permission_handler: ^12.0.1
@@ -92,14 +93,9 @@ flutter:
     - assets/fonts/
 
   fonts:
-    - family: ShreeDevanagari714
+    - family: ShreeDev7_3690
       fonts:
-        - asset: assets/fonts/shree-devanagari-714.ttf
-          weight: 700
-    - family: Shreelipi4642
-      fonts:
-        - asset: assets/fonts/Shreelipi_4642.TTF
-          weight: 700
+        - asset: assets/fonts/SHREE-DEV7-3690 Regular.ttf
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
