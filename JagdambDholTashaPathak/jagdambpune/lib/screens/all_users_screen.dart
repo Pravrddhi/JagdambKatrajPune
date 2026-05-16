@@ -93,6 +93,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
 
   Future<void> _loadUsers() async {
     try {
+      if (!mounted) return;
       setState(() {
         _isLoading = true;
         _errorMessage = null;
@@ -188,6 +189,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         }
       }
 
+      if (!mounted) return;
       setState(() {
         _users = users;
         _filteredUsers = users;
@@ -204,6 +206,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         }
         _isLoading = false;
       });
+      if (!mounted) return;
       _applyFilters();
     } catch (e) {
       if (_isSessionExpiredError(e)) {
@@ -211,6 +214,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         return;
       }
 
+      if (!mounted) return;
       setState(() {
         _errorMessage = ApiEndpoints.genericApiFailureMessage;
         _isLoading = false;
@@ -219,6 +223,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
   }
 
   void _applyFilters() {
+    if (!mounted) return;
     final query = _searchController.text.toLowerCase();
 
     setState(() {

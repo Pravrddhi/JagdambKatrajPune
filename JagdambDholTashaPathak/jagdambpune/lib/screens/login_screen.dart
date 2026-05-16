@@ -20,6 +20,8 @@ import '../widgets/dropdown.dart';
 import 'package:provider/provider.dart';
 import '../providers/feature_flags_provider.dart';
 import '../web/screens/login_web_screen.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -82,6 +84,52 @@ class _LoginScreenState extends State<LoginScreen> {
     return null;
   }
 
+  String? _mapLoginFailureMessage(String message) {
+    final normalized = message.toLowerCase();
+    final canonical = normalized
+        .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+
+    if (normalized.trim() == 'invalid pin.' ||
+        normalized.trim() == 'invalid pin' ||
+        canonical == 'invalid pin') {
+      return 'Invalid PIN. If you are not registered, please register first.';
+    }
+
+    return null;
+  }
+
+  String _extractLoginErrorMessageFromResponse(dynamic decoded) {
+    if (decoded is Map) {
+      final candidates = <dynamic>[
+        decoded['message'],
+        decoded['error'],
+        decoded['detail'],
+        decoded['msg'],
+      ];
+
+      final data = decoded['data'];
+      if (data is Map) {
+        candidates.addAll(<dynamic>[
+          data['message'],
+          data['error'],
+          data['detail'],
+          data['msg'],
+        ]);
+      }
+
+      for (final item in candidates) {
+        final text = item?.toString().trim() ?? '';
+        if (text.isNotEmpty) {
+          final mapped = _mapLoginFailureMessage(text);
+          return mapped ?? text;
+        }
+      }
+    }
+    return _loginFailureMessage;
+  }
+
   String _friendlyErrorMessage(Object error) {
     final raw = error.toString().trim();
     const prefix = 'Exception: ';
@@ -101,7 +149,96 @@ class _LoginScreenState extends State<LoginScreen> {
       return ApiEndpoints.serverUnreachableMessage;
     }
 
+    final mapped = _mapLoginFailureMessage(cleaned);
+    if (mapped != null) {
+      return mapped;
+    }
+
     return cleaned;
+  }
+
+  int _compareVersions(String current, String required) {
+    final currentParts = current
+        .split('.')
+        .map((p) => int.tryParse(p.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+        .toList();
+    final requiredParts = required
+        .split('.')
+        .map((p) => int.tryParse(p.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0)
+        .toList();
+
+    final maxLen = currentParts.length > requiredParts.length
+        ? currentParts.length
+        : requiredParts.length;
+
+    for (var i = 0; i < maxLen; i++) {
+      final a = i < currentParts.length ? currentParts[i] : 0;
+      final b = i < requiredParts.length ? requiredParts[i] : 0;
+      if (a < b) return -1;
+      if (a > b) return 1;
+    }
+    return 0;
+  }
+
+  Future<bool> _enforceUpdateAfterLoginIfRequired() async {
+    if (kIsWeb || !mounted) return true;
+
+    final isAndroid = defaultTargetPlatform == TargetPlatform.android;
+    final isIos = defaultTargetPlatform == TargetPlatform.iOS;
+    if (!isAndroid && !isIos) return true;
+
+    await context.read<FeatureFlagsProvider>().fetchFeatureFlags(force: true);
+    if (!mounted) return false;
+
+    final flags = context.read<FeatureFlagsProvider>().flags;
+    if (flags == null) return true;
+
+    final packageInfo = await PackageInfo.fromPlatform();
+    final appVersion = packageInfo.version;
+
+    final minVersion = isAndroid
+        ? flags.minAndroidVersion
+        : flags.minIosVersion;
+    final forceFlag = isAndroid
+        ? flags.forceUpdateAndroid
+        : flags.forceUpdateIos;
+    final storeUrl = isAndroid ? flags.androidStoreUrl : flags.iosStoreUrl;
+
+    final requiresByVersion =
+        minVersion != null && _compareVersions(appVersion, minVersion) < 0;
+    final requiresUpdate = forceFlag || requiresByVersion;
+
+    if (!requiresUpdate || !mounted) {
+      return true;
+    }
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => WillPopScope(
+        onWillPop: () async => false,
+        child: AlertDialog(
+          title: const Text('Update Required'),
+          content: Text(
+            flags.updateMessage ??
+                'A new version of the app is available. Please update to continue.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                if (storeUrl == null || storeUrl.trim().isEmpty) return;
+                final uri = Uri.tryParse(storeUrl.trim());
+                if (uri == null) return;
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              },
+              child: const Text('Update'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    return false;
   }
 
   @override
@@ -257,7 +394,7 @@ class _LoginScreenState extends State<LoginScreen> {
             endpoint: ApiEndpoints.loginWithPin,
           );
           setState(() {
-            _errorMessage = _loginFailureMessage;
+            _errorMessage = _extractLoginErrorMessageFromResponse(decoded);
           });
           return;
         }
@@ -432,6 +569,9 @@ class _LoginScreenState extends State<LoginScreen> {
         }
       }
 
+      final canProceed = await _enforceUpdateAfterLoginIfRequired();
+      if (!canProceed || !mounted) return;
+
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
@@ -455,13 +595,17 @@ class _LoginScreenState extends State<LoginScreen> {
             ? ApiEndpoints.passwordLogin
             : ApiEndpoints.loginWithPin,
       );
-      setState(() {
-        _errorMessage = isWeb ? _friendlyErrorMessage(e) : _loginFailureMessage;
-      });
+      if (mounted) {
+        setState(() {
+          _errorMessage = _friendlyErrorMessage(e);
+        });
+      }
     } finally {
-      setState(() {
-        _isLoggingIn = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoggingIn = false;
+        });
+      }
     }
   }
 

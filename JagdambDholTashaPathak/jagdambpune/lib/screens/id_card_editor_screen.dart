@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -33,6 +34,9 @@ class IDCardEditorScreen extends StatefulWidget {
 
 class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   static const String _defaultTemplateType = 'dhol';
+  static const Duration _uploadTimeout = Duration(seconds: 25);
+  static const Duration _refreshStatusTimeout = Duration(seconds: 12);
+  static const double _capturePixelRatio = 2.0;
 
   final ImagePicker _picker = ImagePicker();
   final TextEditingController _nameController = TextEditingController();
@@ -46,7 +50,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   bool _isResizingFrame = false;
   bool _isSubmitting = false;
   bool _isCapturing = false;
-  bool _showMarathiKeyboard = false;
+  bool _showMarathiKeyboard = true;
   bool _marathiKeyboardShift = false;
   String? _idCardDocumentStatus;
   String? _idCardRejectionReason;
@@ -77,20 +81,22 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   Offset _baseImageOffset = Offset.zero;
   Size _photoFrameSize = Size.zero;
   static const double _positionStep = 8.0;
-  // SHREE-DEV7-3690 is a legacy mapped font. We input latin keys so
-  // the font can render Marathi glyphs in the preview/template.
-  static const List<List<String>> _marathiKeyboardRowsLower = <List<String>>[
-    <String>['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
-    <String>['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
-    <String>['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l'],
-    <String>['z', 'x', 'c', 'v', 'b', 'n', 'm'],
+
+  // Marathi keyboard layout with full commonly used Marathi letters.
+  static const List<List<String>> _marathiKeyboardRowsNormal = <List<String>>[
+    <String>['अ', 'आ', 'इ', 'ई', 'उ', 'ऊ', 'ऋ', 'ए', 'ऐ', 'ओ', 'औ'],
+    <String>['अं', 'अः', 'ॲ', 'ऑ', 'ऍ'],
+    <String>['क', 'ख', 'ग', 'घ', 'ङ', 'च', 'छ', 'ज', 'झ', 'ञ'],
+    <String>['ट', 'ठ', 'ड', 'ढ', 'ण', 'त', 'थ', 'द', 'ध', 'न'],
+    <String>['प', 'फ', 'ब', 'भ', 'म', 'य', 'र', 'ल', 'व', 'ळ'],
+    <String>['श', 'ष', 'स', 'ह', 'क्ष', 'त्र', 'ज्ञ', 'श्र'],
   ];
 
-  static const List<List<String>> _marathiKeyboardRowsUpper = <List<String>>[
-    <String>['!', '@', '#', r'$', '%', '^', '&', '*', '(', ')'],
-    <String>['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
-    <String>['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L'],
-    <String>['Z', 'X', 'C', 'V', 'B', 'N', 'M'],
+  static const List<List<String>> _marathiKeyboardRowsShift = <List<String>>[
+    <String>['ा', 'ि', 'ी', 'ु', 'ू', 'ृ', 'े', 'ै', 'ो', 'ौ'],
+    <String>['ं', 'ः', 'ँ', '्', 'ॅ', 'ॉ', 'ॆ', 'ॊ'],
+    <String>['१', '२', '३', '४', '५', '६', '७', '८', '९', '०'],
+    <String>['(', ')', '-', ',', '.', '!', '?', '।', '॥', '/'],
   ];
 
   double _safeFactor(
@@ -307,6 +313,9 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
             : rejectionReason;
         final resolvedUrl = _resolveAbsoluteUrl(documentUrl);
         _idCardDocumentUrl = resolvedUrl.isEmpty ? null : resolvedUrl;
+        if (_isIdCardLocked) {
+          _showMarathiKeyboard = false;
+        }
         if (!_isIdCardLocked) {
           _pendingSubmittedCardBytes = null;
           _submittedCardBytes = null;
@@ -663,7 +672,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   }
 
   void _insertAtCursor(String input) {
-    if (_isSubmitting) return;
+    if (_isSubmitting || _isIdCardLocked) return;
 
     final current = _nameController.value;
     final selection = current.selection;
@@ -689,7 +698,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   }
 
   void _backspaceAtCursor() {
-    if (_isSubmitting) return;
+    if (_isSubmitting || _isIdCardLocked) return;
 
     final current = _nameController.value;
     final selection = current.selection;
@@ -723,94 +732,138 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   }
 
   Widget _buildMarathiKeyboard() {
-    final rows = _marathiKeyboardShift
-        ? _marathiKeyboardRowsUpper
-        : _marathiKeyboardRowsLower;
+    final isNameLocked = _isSubmitting || _isIdCardLocked;
+    final marathiRows = _marathiKeyboardShift
+        ? _marathiKeyboardRowsShift
+        : _marathiKeyboardRowsNormal;
 
     return Container(
-      margin: const EdgeInsets.only(top: 10),
-      padding: const EdgeInsets.all(10),
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
+        color: const Color(0xFFF5F5F5),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: Colors.black12),
       ),
-      child: Column(
-        children: [
-          for (final row in rows)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                alignment: WrapAlignment.center,
-                children: row
-                    .map(
-                      (letter) => SizedBox(
-                        width: 36,
-                        height: 36,
-                        child: OutlinedButton(
-                          onPressed: () => _insertAtCursor(letter),
-                          style: OutlinedButton.styleFrom(
-                            padding: EdgeInsets.zero,
-                            side: const BorderSide(color: Colors.black26),
-                          ),
-                          child: Text(
-                            letter,
-                            style: const TextStyle(
-                              fontFamily: 'ShreeDev7_3690',
-                              fontSize: 16,
-                            ),
-                          ),
-                        ),
-                      ),
-                    )
-                    .toList(),
-              ),
-            ),
-          Row(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          const spacing = 6.0;
+          final available = constraints.maxWidth;
+          const keyHeight = 44.0;
+
+          return Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    setState(() {
-                      _marathiKeyboardShift = !_marathiKeyboardShift;
-                    });
+              for (final row in marathiRows)
+                Builder(
+                  builder: (context) {
+                    final rowKeyWidth =
+                        ((available - ((row.length - 1) * spacing)) /
+                                row.length)
+                            .clamp(18.0, 42.0);
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          for (int i = 0; i < row.length; i++) ...[
+                            if (i > 0) const SizedBox(width: spacing),
+                            _buildMarathiKeyButton(
+                              row[i],
+                              isNameLocked,
+                              width: rowKeyWidth,
+                              height: keyHeight,
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
                   },
-                  icon: Icon(
-                    _marathiKeyboardShift
-                        ? Icons.keyboard_capslock
-                        : Icons.keyboard_capslock_outlined,
-                    size: 18,
+                ),
+              const SizedBox(height: 2),
+              Row(
+                children: [
+                  Expanded(
+                    flex: 2,
+                    child: _buildMarathiKeyButton(
+                      _marathiKeyboardShift ? '⇧ ON' : '⇧',
+                      isNameLocked,
+                      height: keyHeight,
+                      isControl: true,
+                      onTap: () {
+                        setState(() {
+                          _marathiKeyboardShift = !_marathiKeyboardShift;
+                        });
+                      },
+                    ),
                   ),
-                  label: Text(_marathiKeyboardShift ? 'Shift On' : 'Shift'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _insertAtCursor(' '),
-                  icon: const Icon(Icons.space_bar, size: 18),
-                  label: const Text('Space'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _backspaceAtCursor,
-                  icon: const Icon(Icons.backspace_outlined, size: 18),
-                  label: const Text('Backspace'),
-                ),
+                  const SizedBox(width: spacing),
+                  Expanded(
+                    flex: 5,
+                    child: _buildMarathiKeyButton(
+                      'SPACE',
+                      isNameLocked,
+                      height: keyHeight,
+                      isControl: true,
+                      onTap: () => _insertAtCursor(' '),
+                    ),
+                  ),
+                  const SizedBox(width: spacing),
+                  Expanded(
+                    flex: 2,
+                    child: _buildMarathiKeyButton(
+                      '⌫',
+                      isNameLocked,
+                      height: keyHeight,
+                      isControl: true,
+                      onTap: _backspaceAtCursor,
+                    ),
+                  ),
+                ],
               ),
             ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildMarathiKeyButton(
+    String char,
+    bool isDisabled, {
+    VoidCallback? onTap,
+    double? width,
+    double? height,
+    bool isControl = false,
+  }) {
+    return Material(
+      child: InkWell(
+        onTap: isDisabled ? null : (onTap ?? () => _insertAtCursor(char)),
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          width: width,
+          height: height,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          decoration: BoxDecoration(
+            color: isDisabled ? Colors.grey.shade100 : Colors.white,
+            border: Border.all(
+              color: isDisabled ? Colors.grey.shade300 : Colors.black12,
+            ),
+            borderRadius: BorderRadius.circular(8),
           ),
-          const SizedBox(height: 6),
-          const Text(
-            'Use keyboard mapping for SHREE-DEV7 Marathi typing',
-            style: TextStyle(fontSize: 11, color: Colors.black54),
-            textAlign: TextAlign.center,
+          child: Center(
+            child: Text(
+              char,
+              style: TextStyle(
+                fontFamily: isControl ? null : 'ShreeDev7_3690',
+                fontSize: isControl ? 13 : 16,
+                fontWeight: FontWeight.w600,
+                color: isDisabled ? Colors.grey : Colors.black87,
+              ),
+              textAlign: TextAlign.center,
+            ),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -901,7 +954,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   }
 
   Future<void> _submitForReview({bool fromDialog = false}) async {
-    if (_isSubmitting) return;
+    if (_isSubmitting || !_canSubmitIdCard) return;
 
     final normalizedName = _nameController.text.trim();
 
@@ -942,37 +995,24 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
       _isSubmitting = true;
       _isCapturing = true;
     });
-    // Wait one frame so Flutter repaints the card without controls.
-    await Future<void>.delayed(Duration.zero);
+    // Wait for fully rendered frames before capture so controls are hidden
+    // in the exported image on slower Android render pipelines.
+    final binding = WidgetsBinding.instance;
+    binding.scheduleFrame();
+    await binding.endOfFrame;
+    await binding.endOfFrame;
 
     // Guard against navigation/hot-reload disposing the view during the delay.
     if (!mounted) return;
 
     try {
-      // Capture the card widget as PNG bytes
-      final boundary =
-          _cardRepaintKey.currentContext?.findRenderObject()
-              as RenderRepaintBoundary?;
-      if (boundary == null) {
-        throw Exception('Could not capture card image. Please try again.');
-      }
-      final ui.Image image;
-      try {
-        image = await boundary.toImage(pixelRatio: 2.0);
-      } catch (e) {
-        throw Exception('Could not capture card image. Please try again.');
-      }
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-      if (byteData == null) {
-        throw Exception('Failed to encode card as PNG.');
-      }
-      final pngBytes = byteData.buffer.asUint8List();
+      final pngBytes = await _captureCardPngBytes();
 
       final uploadResponse = await ApiService.uploadDocument(
         documentType: 'id_card',
         fileBytes: pngBytes,
         fileName: 'id_card.png',
-      );
+      ).timeout(_uploadTimeout);
 
       // Add an ID card entry to the user's items list with status pending.
       try {
@@ -1016,14 +1056,18 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
         _submittedCardBytesError = null;
       });
 
-      await _loadIdCardDocumentStatus();
+      try {
+        await _loadIdCardDocumentStatus().timeout(_refreshStatusTimeout);
+      } on TimeoutException {
+        // Keep optimistic state; backend status will refresh on next screen entry.
+      }
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(
-            content: Text(e.toString().replaceFirst('Exception: ', '')),
+            content: Text(_submissionErrorMessage(e)),
             backgroundColor: Colors.red,
           ),
         );
@@ -1035,6 +1079,54 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
         });
       }
     }
+  }
+
+  Future<Uint8List> _captureCardPngBytes() async {
+    final boundary =
+        _cardRepaintKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
+    if (boundary == null) {
+      throw Exception('Could not capture card image. Please try again.');
+    }
+
+    final binding = WidgetsBinding.instance;
+    if (boundary.debugNeedsPaint) {
+      await binding.endOfFrame;
+    }
+
+    ui.Image? image;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      try {
+        image = await boundary.toImage(pixelRatio: _capturePixelRatio);
+        break;
+      } catch (_) {
+        if (attempt == 2) {
+          throw Exception('Could not capture card image. Please try again.');
+        }
+        await binding.endOfFrame;
+      }
+    }
+
+    if (image == null) {
+      throw Exception('Could not capture card image. Please try again.');
+    }
+
+    try {
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (byteData == null) {
+        throw Exception('Failed to encode card as PNG.');
+      }
+      return byteData.buffer.asUint8List();
+    } finally {
+      image.dispose();
+    }
+  }
+
+  String _submissionErrorMessage(Object error) {
+    if (error is TimeoutException) {
+      return 'Request timed out. Please check your internet and try again.';
+    }
+    return error.toString().replaceFirst('Exception: ', '');
   }
 
   Future<void> _showPreview() async {
@@ -1189,6 +1281,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   }
 
   Widget _buildNameField() {
+    final isNameLocked = _isSubmitting || _isIdCardLocked;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -1196,7 +1289,18 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
           controller: _nameController,
           focusNode: _nameFocusNode,
           textCapitalization: TextCapitalization.words,
-          enabled: !_isSubmitting,
+          enabled: !isNameLocked,
+          readOnly: !isNameLocked,
+          enableInteractiveSelection: false,
+          onTap: isNameLocked
+              ? null
+              : () {
+                  if (!_showMarathiKeyboard) {
+                    setState(() {
+                      _showMarathiKeyboard = true;
+                    });
+                  }
+                },
           style: const TextStyle(fontFamily: 'ShreeDev7_3690', fontSize: 18),
           inputFormatters: [LengthLimitingTextInputFormatter(32)],
           onChanged: (_) {
@@ -1214,7 +1318,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
               icon: Icon(
                 _showMarathiKeyboard ? Icons.keyboard_hide : Icons.keyboard,
               ),
-              onPressed: _isSubmitting
+              onPressed: isNameLocked
                   ? null
                   : () {
                       setState(() {
@@ -1227,7 +1331,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
             ),
           ),
         ),
-        if (_showMarathiKeyboard) _buildMarathiKeyboard(),
+        if (!isNameLocked && _showMarathiKeyboard) _buildMarathiKeyboard(),
       ],
     );
   }
@@ -1292,7 +1396,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
                                 .merge(
                                   TextStyle(
                                     color: Colors.white,
-                                    fontSize: 24.47,
+                                    fontSize: 27.47,
                                     fontWeight: FontWeight.w700,
                                     letterSpacing: 0.2,
                                     height: 1.1,
@@ -1400,6 +1504,8 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
     double height, {
     bool isPreview = false,
   }) {
+    final hideEditorControls = isPreview || _isSubmitting || _isCapturing;
+
     // Frame factors are editable so users can fine tune and resize from corners.
     final frameWidth = width * _frameWidthFactor;
     final frameLeft = width * _frameLeftFactor;
@@ -1485,7 +1591,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
                           ),
                         ),
                 ),
-                if (_hasSelectedImage && !isPreview)
+                if (_hasSelectedImage && !hideEditorControls)
                   Positioned(
                     top: 8,
                     right: 8,
@@ -1522,7 +1628,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
                       ],
                     ),
                   ),
-                if (_hasSelectedImage && !isPreview)
+                if (_hasSelectedImage && !hideEditorControls)
                   Positioned(
                     bottom: 8,
                     left: 8,
@@ -1567,7 +1673,9 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
                       ],
                     ),
                   ),
-                if (_hasSelectedImage && _isResizingFrame && !isPreview)
+                if (_hasSelectedImage &&
+                    _isResizingFrame &&
+                    !hideEditorControls)
                   Positioned(
                     top: 8,
                     left: 8,
@@ -1594,7 +1702,7 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
                       ),
                     ),
                   ),
-                if (_hasSelectedImage && !isPreview)
+                if (_hasSelectedImage && !hideEditorControls)
                   ..._buildCornerHandles(width, height),
               ],
             ),
