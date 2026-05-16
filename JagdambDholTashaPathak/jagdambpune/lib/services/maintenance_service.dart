@@ -208,10 +208,12 @@ class MaintenanceService {
 
   static Future<List<DholMaintenanceEntry>> fetchEntries({
     String? status,
+    int? gatId,
   }) async {
     final uri = Uri.parse(ApiEndpoints.maintenanceEntries).replace(
       queryParameters: {
         if (status != null && status.trim().isNotEmpty) 'status': status,
+        if (gatId != null) 'gat_id': gatId.toString(),
       },
     );
 

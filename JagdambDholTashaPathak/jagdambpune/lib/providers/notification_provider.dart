@@ -166,36 +166,53 @@ class NotificationProvider with ChangeNotifier {
     try {
       final raw = await _storage.read(key: _lastRefreshTimeKey);
       if (raw == null || raw.isEmpty) {
-        _lastRefreshTime = DateTime.now();
+        final now = DateTime.now();
+        _lastRefreshTime = now;
         await _storage.write(
           key: _lastRefreshTimeKey,
-          value: _lastRefreshTime!.toIso8601String(),
+          value: now.toIso8601String(),
         );
         return;
       }
 
       _lastRefreshTime = DateTime.tryParse(raw);
       if (_lastRefreshTime == null) {
-        _lastRefreshTime = DateTime.now();
+        final now = DateTime.now();
+        _lastRefreshTime = now;
         await _storage.write(
           key: _lastRefreshTimeKey,
-          value: _lastRefreshTime!.toIso8601String(),
+          value: now.toIso8601String(),
         );
         return;
       }
 
-      if (DateTime.now().difference(_lastRefreshTime!) >= _cacheRefreshWindow) {
+      final lastRefreshTime = _lastRefreshTime;
+      if (lastRefreshTime != null &&
+          DateTime.now().difference(lastRefreshTime) >= _cacheRefreshWindow) {
         _readNotificationIds.clear();
         await _storage.delete(key: _readNotificationIdsKey);
-        _lastRefreshTime = DateTime.now();
+        final now = DateTime.now();
+        _lastRefreshTime = now;
         await _storage.write(
           key: _lastRefreshTimeKey,
-          value: _lastRefreshTime!.toIso8601String(),
+          value: now.toIso8601String(),
         );
       }
     } catch (_) {
       // Ignore refresh-check failures.
     }
+  }
+
+  /// Prepends a notification received live from the WebSocket without a
+  /// round-trip to the REST API.
+  Future<void> prependNotification(Map<String, dynamic> json) async {
+    final item = AppNotification.fromJson(json);
+    // Avoid duplicates when the same event fires more than once.
+    if (_notifications.any((n) => n.id == item.id)) return;
+    _notifications = [item, ..._notifications];
+    if (!item.isRead) _serverUnreadCount += 1;
+    await _persist();
+    notifyListeners();
   }
 
   Future<void> addNotification({
@@ -242,17 +259,23 @@ class NotificationProvider with ChangeNotifier {
       }
 
       final decoded = jsonDecode(response.body);
-      if (decoded is! Map<String, dynamic>) {
-        return false;
-      }
 
-      final data = decoded['data'];
-      if (data is! List) {
-        _notifications = [];
-        _serverUnreadCount = 0;
-        await _persist();
-        notifyListeners();
-        return true;
+      // Support both a plain array response and a {"data": [...]} envelope.
+      final List<dynamic> data;
+      if (decoded is List) {
+        data = decoded;
+      } else if (decoded is Map<String, dynamic>) {
+        final inner = decoded['data'];
+        if (inner is! List) {
+          _notifications = [];
+          _serverUnreadCount = 0;
+          await _persist();
+          notifyListeners();
+          return true;
+        }
+        data = inner;
+      } else {
+        return false;
       }
 
       _notifications = data

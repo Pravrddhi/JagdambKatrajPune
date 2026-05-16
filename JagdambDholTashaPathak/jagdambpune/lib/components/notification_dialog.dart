@@ -71,7 +71,7 @@ class _NotificationDialogState extends State<_NotificationDialog> {
       await ApiService.sendBroadcastNotification(
         title: title,
         message: message,
-        targetType: widget.targetGatId != null ? 'user' : null,
+        targetType: widget.targetGatId != null ? 'gat' : 'all',
         targetGat: widget.targetGatId,
       );
 

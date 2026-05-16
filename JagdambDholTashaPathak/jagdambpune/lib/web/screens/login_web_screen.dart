@@ -130,8 +130,9 @@ class LoginWebScreen extends StatelessWidget {
                       ),
                       if (showRegistration) ...[
                         const SizedBox(height: 10),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                        Wrap(
+                          alignment: WrapAlignment.center,
+                          crossAxisAlignment: WrapCrossAlignment.center,
                           children: [
                             const Text(
                               'New to Pathak?  ',
@@ -139,6 +140,7 @@ class LoginWebScreen extends StatelessWidget {
                                 color: Colors.white70,
                                 fontSize: 14,
                               ),
+                              textAlign: TextAlign.center,
                             ),
                             GestureDetector(
                               onTap: onRegistrationTap,
@@ -151,6 +153,7 @@ class LoginWebScreen extends StatelessWidget {
                                   decoration: TextDecoration.underline,
                                   decorationColor: AppColors.accentYellow,
                                 ),
+                                textAlign: TextAlign.center,
                               ),
                             ),
                           ],

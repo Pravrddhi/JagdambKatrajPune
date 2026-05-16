@@ -3,17 +3,16 @@ import 'package:provider/provider.dart';
 import '../theme/app_colors.dart';
 import '../providers/feature_flags_provider.dart';
 
-class ProfileScreen extends StatelessWidget {
+class ProfileScreen extends StatefulWidget {
   final Map<String, dynamic> userDetails;
 
-  /// Controls visibility of the "Update Profile" button
-  // final bool showUpdateProfile;
+  const ProfileScreen({super.key, required this.userDetails});
 
-  const ProfileScreen({
-    super.key,
-    required this.userDetails, // default hidden
-  });
+  @override
+  State<ProfileScreen> createState() => _ProfileScreenState();
+}
 
+class _ProfileScreenState extends State<ProfileScreen> {
   bool _parseBool(dynamic value) {
     if (value is bool) return value;
     if (value is num) return value == 1;
@@ -68,15 +67,20 @@ class ProfileScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    /// Prepare user details, excluding unnecessary keys
     final flags = Provider.of<FeatureFlagsProvider>(context).flags;
-    final filteredDetails = userDetails.entries
+
+    final filteredDetails = widget.userDetails.entries
         .where((entry) {
           if (entry.key == 'events' ||
               entry.key == 'data' ||
               entry.key == 'groups' ||
               entry.key == 'group' ||
               entry.key == 'role' ||
+              entry.key == 'permissions' ||
+              entry.key == 'vadak' ||
+              entry.key == 'is_vadak' ||
+              entry.key == 'isVadak' ||
+              entry.key == 'status' ||
               entry.key == 'is_gat_pramukh' ||
               entry.key == 'has_fcm_token' ||
               entry.key == 'hasFcmToken' ||
@@ -85,14 +89,9 @@ class ProfileScreen extends StatelessWidget {
               entry.key == 'approvalComment') {
             return false;
           }
-
           final value = entry.value;
-          if (value == null) {
-            return false;
-          }
-          if (value is String && value.trim().isEmpty) {
-            return false;
-          }
+          if (value == null) return false;
+          if (value is String && value.trim().isEmpty) return false;
           return true;
         })
         .map((entry) {
@@ -117,11 +116,9 @@ class ProfileScreen extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            /// Profile avatar
             const _Avatar(),
             const SizedBox(height: 20),
-
-            if (_isGatPramukh(userDetails))
+            if (_isGatPramukh(widget.userDetails))
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Align(
@@ -155,7 +152,7 @@ class ProfileScreen extends StatelessWidget {
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          _gatPramukhBannerText(userDetails),
+                          _gatPramukhBannerText(widget.userDetails),
                           style: const TextStyle(
                             color: AppColors.primaryMaroon,
                             fontSize: 12,
@@ -167,16 +164,11 @@ class ProfileScreen extends StatelessWidget {
                   ),
                 ),
               ),
-
-            /// User details card
             _UserDetailsCard(
               details: filteredDetails,
               showUpdateProfile: flags?.showUpdateProfile ?? false,
             ),
-
             const SizedBox(height: 20),
-
-            /// Logout button
             const _LogoutButton(),
           ],
         ),

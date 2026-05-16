@@ -9,7 +9,9 @@ import '../services/bug_report_service.dart';
 import '../theme/app_colors.dart';
 
 class TermsConditionsManageScreen extends StatefulWidget {
-  const TermsConditionsManageScreen({super.key});
+  final bool embedded;
+
+  const TermsConditionsManageScreen({super.key, this.embedded = false});
 
   @override
   State<TermsConditionsManageScreen> createState() =>
@@ -330,6 +332,96 @@ class _TermsConditionsManageScreenState
 
   @override
   Widget build(BuildContext context) {
+    final content = RefreshIndicator(
+      onRefresh: _fetchTerms,
+      child: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                Text(
+                  'Total terms: ${_terms.length} / $_maxTerms',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primaryMaroon,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                if (_errorMessage.isNotEmpty)
+                  Text(
+                    _errorMessage,
+                    style: const TextStyle(color: AppColors.errorRed),
+                  ),
+                const SizedBox(height: 8),
+                if (_terms.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 24),
+                    child: Text(
+                      'No terms added yet.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: AppColors.primaryMaroon),
+                    ),
+                  ),
+                ..._terms.map((term) {
+                  final id = int.tryParse(term['id']?.toString() ?? '');
+                  final text = term['text']?.toString() ?? '';
+                  return Card(
+                    color: Colors.white,
+                    margin: const EdgeInsets.only(top: 10),
+                    child: ListTile(
+                      title: Text(
+                        text,
+                        style: const TextStyle(color: AppColors.primaryMaroon),
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.edit),
+                            color: AppColors.primaryMaroon,
+                            onPressed: id == null || _isSubmitting
+                                ? null
+                                : () => _openTermDialog(existing: term),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete),
+                            color: AppColors.errorRed,
+                            onPressed: id == null || _isSubmitting
+                                ? null
+                                : () => _confirmDelete(id),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+                const SizedBox(height: 20),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  onPressed: (_terms.length >= _maxTerms || _isSubmitting)
+                      ? null
+                      : () => _openTermDialog(),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add Term'),
+                ),
+                if (_terms.length >= _maxTerms)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Maximum 5 terms are allowed per pathak.',
+                      style: TextStyle(color: AppColors.primaryMaroon),
+                    ),
+                  ),
+              ],
+            ),
+    );
+
+    if (widget.embedded) {
+      return Container(color: Colors.white, child: content);
+    }
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -337,93 +429,7 @@ class _TermsConditionsManageScreenState
         backgroundColor: AppColors.primaryMaroon,
         foregroundColor: Colors.white,
       ),
-      body: RefreshIndicator(
-        onRefresh: _fetchTerms,
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  Text(
-                    'Total terms: ${_terms.length} / $_maxTerms',
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.primaryMaroon,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  if (_errorMessage.isNotEmpty)
-                    Text(
-                      _errorMessage,
-                      style: const TextStyle(color: AppColors.errorRed),
-                    ),
-                  const SizedBox(height: 8),
-                  if (_terms.isEmpty)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 24),
-                      child: Text(
-                        'No terms added yet.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: AppColors.primaryMaroon),
-                      ),
-                    ),
-                  ..._terms.map((term) {
-                    final id = int.tryParse(term['id']?.toString() ?? '');
-                    final text = term['text']?.toString() ?? '';
-                    return Card(
-                      color: Colors.white,
-                      margin: const EdgeInsets.only(top: 10),
-                      child: ListTile(
-                        title: Text(
-                          text,
-                          style: const TextStyle(
-                            color: AppColors.primaryMaroon,
-                          ),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.edit),
-                              color: AppColors.primaryMaroon,
-                              onPressed: id == null || _isSubmitting
-                                  ? null
-                                  : () => _openTermDialog(existing: term),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.delete),
-                              color: AppColors.errorRed,
-                              onPressed: id == null || _isSubmitting
-                                  ? null
-                                  : () => _confirmDelete(id),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }),
-                  const SizedBox(height: 20),
-                  ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      foregroundColor: AppColors.primaryMaroon,
-                    ),
-                    onPressed: (_terms.length >= _maxTerms || _isSubmitting)
-                        ? null
-                        : () => _openTermDialog(),
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add Term'),
-                  ),
-                  if (_terms.length >= _maxTerms)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 8),
-                      child: Text(
-                        'Maximum 5 terms are allowed per pathak.',
-                        style: TextStyle(color: AppColors.primaryMaroon),
-                      ),
-                    ),
-                ],
-              ),
-      ),
+      body: content,
     );
   }
 }

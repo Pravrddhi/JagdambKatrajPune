@@ -1,5 +1,7 @@
 // lib/config/api_endpoints.dart
 
+import 'package:flutter/foundation.dart';
+
 import 'app_config.dart';
 
 /// Centralized class for managing API endpoints and related utilities.
@@ -17,9 +19,35 @@ class ApiEndpoints {
     if (normalized.isEmpty) {
       return _defaultBaseUrl;
     }
-    return normalized.endsWith('/')
+    final trimmed = normalized.endsWith('/')
         ? normalized.substring(0, normalized.length - 1)
         : normalized;
+
+    final parsed = Uri.tryParse(trimmed);
+    final isAbsoluteHttpUrl =
+        parsed != null &&
+        (parsed.scheme == 'http' || parsed.scheme == 'https') &&
+        parsed.host.isNotEmpty;
+
+    // Ignore invalid/relative values (e.g. '/api') and use configured default.
+    if (!isAbsoluteHttpUrl) {
+      return _defaultBaseUrl.endsWith('/')
+          ? _defaultBaseUrl.substring(0, _defaultBaseUrl.length - 1)
+          : _defaultBaseUrl;
+    }
+
+    // Guard against absolute but wrong root path such as 'https://host/api'.
+    // Project APIs are expected under '/dholtashapathak/api'.
+    final path = parsed.path.endsWith('/')
+        ? parsed.path.substring(0, parsed.path.length - 1)
+        : parsed.path;
+    if (path == '/api') {
+      return _defaultBaseUrl.endsWith('/')
+          ? _defaultBaseUrl.substring(0, _defaultBaseUrl.length - 1)
+          : _defaultBaseUrl;
+    }
+
+    return trimmed;
   }
 
   /// API root without trailing /api, used for non-REST endpoints.
@@ -34,14 +62,21 @@ class ApiEndpoints {
   /// Build websocket URI for live notifications.
   static Uri notificationsWebSocketUri(String accessToken) {
     final rootUri = Uri.parse(apiRootUrl);
-    final secure = rootUri.scheme == 'https';
+    final pageIsSecureWebContext = kIsWeb && Uri.base.scheme == 'https';
+    final secure = rootUri.scheme == 'https' || pageIsSecureWebContext;
     final wsScheme = secure ? 'wss' : 'ws';
+    final rootPath = rootUri.path.endsWith('/')
+        ? rootUri.path.substring(0, rootUri.path.length - 1)
+        : rootUri.path;
+    final wsPath = (rootPath.isEmpty || rootPath == '/')
+        ? '/ws/notifications/'
+        : '$rootPath/ws/notifications/';
 
     return Uri(
       scheme: wsScheme,
       host: rootUri.host,
       port: rootUri.hasPort ? rootUri.port : null,
-      path: '/ws/notifications/',
+      path: wsPath,
       queryParameters: {'token': accessToken},
     );
   }
@@ -57,6 +92,8 @@ class ApiEndpoints {
   static const String pinKey = 'pin';
   static const String isGatPramukhKey = 'is_gat_pramukh';
   static const String gatPramukhNameKey = 'gat_pramukh_name';
+  static const String gatIdKey = 'gat_id';
+  static const String gatNameKey = 'gat_name';
 
   // -------------------
   // Authentication Endpoints
@@ -113,6 +150,33 @@ class ApiEndpoints {
   /// Update FCM token for push notifications
   static final String updateFCMToken =
       '$baseUrl/notifications/update-fcm-token/';
+
+  /// List active ID card template images
+  static final String idTemplateImages = '$baseUrl/id-template-images/';
+
+  /// List / create user items (jacket, instrument, uniform, shela, id_card, other)
+  static final String userItems = '$baseUrl/user-items/';
+
+  /// User's action inbox — items requiring their attention (pending_accept, admin_assigned, approved)
+  static final String userItemsPending = '$baseUrl/user-items/pending/';
+
+  /// List / create item catalog entries
+  static final String itemCatalog = '$baseUrl/item-catalog/';
+
+  /// Detail / partial-update / delete a specific user item
+  static String userItemDetail(int itemId) => '$baseUrl/user-items/$itemId/';
+
+  /// Perform lifecycle action on a user item
+  static String userItemAction(int itemId) =>
+      '$baseUrl/user-items/$itemId/action/';
+
+  /// Confirm item receipt for current user
+  static String userItemConfirm(int itemId) =>
+      '$baseUrl/user-items/$itemId/confirm/';
+
+  /// Detail / partial-update / delete a specific catalog item
+  static String itemCatalogDetail(int catalogId) =>
+      '$baseUrl/item-catalog/$catalogId/';
 
   /// Create a new event
   static final String createEvent = '$baseUrl/events/create/';

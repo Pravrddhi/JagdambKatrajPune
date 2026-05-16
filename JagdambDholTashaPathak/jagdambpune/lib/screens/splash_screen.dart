@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../providers/feature_flags_provider.dart';
 import '../theme/app_colors.dart';
 import '../config/app_config.dart';
 import 'login_screen.dart';
@@ -21,6 +24,11 @@ class _SplashScreenState extends State<SplashScreen>
   _dropAnimation; // Animation for logo drop with bounce
   late final Animation<double>
   _scaleAnimation; // Animation for scaling (bounce)
+  Timer? _navigationTimer;
+  bool _splashDelayCompleted = false;
+  bool _didNavigateToLogin = false;
+  FeatureFlagsProvider? _featureFlagsProvider;
+  bool _isShowingServerDownDialog = false;
 
   @override
   void initState() {
@@ -66,24 +74,97 @@ class _SplashScreenState extends State<SplashScreen>
       _scaleController.forward();
     });
 
-    // After animations complete (6.5s), navigate to LoginScreen with fade transition
-    Timer(const Duration(milliseconds: 6500), () {
+    // Keep existing splash duration, but only navigate when server is reachable.
+    _navigationTimer = Timer(const Duration(milliseconds: 6500), () {
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          pageBuilder: (_, __, ___) => const LoginScreen(),
-          transitionDuration: const Duration(milliseconds: 1200),
-          transitionsBuilder: (_, animation, __, child) {
-            return FadeTransition(opacity: animation, child: child);
-          },
-        ),
-      );
+      _splashDelayCompleted = true;
+      _tryNavigateToLogin();
     });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _featureFlagsProvider = context.read<FeatureFlagsProvider>();
+      _featureFlagsProvider?.addListener(_onFeatureFlagsChanged);
+      _featureFlagsProvider?.fetchFeatureFlags(force: true);
+      _onFeatureFlagsChanged();
+    });
+  }
+
+  void _onFeatureFlagsChanged() {
+    if (!mounted) {
+      return;
+    }
+
+    final provider = _featureFlagsProvider;
+    if (provider == null) return;
+
+    final error = provider.error?.trim() ?? '';
+    final hasServerFailure = error.isNotEmpty;
+    if (hasServerFailure) {
+      _showServerDownDialog();
+      return;
+    }
+
+    _closeServerDownDialogIfOpen();
+    _tryNavigateToLogin();
+  }
+
+  Future<void> _showServerDownDialog() async {
+    if (!mounted || _isShowingServerDownDialog) return;
+
+    _isShowingServerDownDialog = true;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => WillPopScope(
+        onWillPop: () async => false,
+        child: const AlertDialog(
+          title: Text(
+            'Server is Under Maintenance. Contact Admin for more details...',
+          ),
+          content: Text('Pratik Shinde 9767704126'),
+        ),
+      ),
+    );
+
+    _isShowingServerDownDialog = false;
+  }
+
+  void _closeServerDownDialogIfOpen() {
+    if (!mounted || !_isShowingServerDownDialog) return;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    if (navigator.canPop()) {
+      navigator.pop();
+    }
+  }
+
+  void _tryNavigateToLogin() {
+    if (!mounted || _didNavigateToLogin || !_splashDelayCompleted) return;
+
+    final provider = _featureFlagsProvider;
+    final hasServerFailure = (provider?.error?.trim().isNotEmpty ?? false);
+    if (hasServerFailure || _isShowingServerDownDialog) {
+      return;
+    }
+
+    _didNavigateToLogin = true;
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => const LoginScreen(),
+        transitionDuration: const Duration(milliseconds: 1200),
+        transitionsBuilder: (_, animation, __, child) {
+          return FadeTransition(opacity: animation, child: child);
+        },
+      ),
+    );
   }
 
   @override
   void dispose() {
     // Dispose animation controllers to release resources
+    _featureFlagsProvider?.removeListener(_onFeatureFlagsChanged);
+    _navigationTimer?.cancel();
     _logoController.dispose();
     _scaleController.dispose();
     super.dispose();

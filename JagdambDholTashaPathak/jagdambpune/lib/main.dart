@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:new_version_plus/new_version_plus.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:provider/provider.dart';
@@ -13,6 +15,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'firebase_options.dart';
 import 'providers/feature_flags_provider.dart';
 import 'providers/notification_provider.dart';
+import 'providers/request_counts_provider.dart';
 import 'screens/login_screen.dart';
 import 'screens/registration_screen.dart';
 import 'screens/reset_pin.dart';
@@ -20,6 +23,10 @@ import 'screens/splash_screen.dart';
 import 'config/app_config.dart';
 import 'theme/app_colors.dart';
 import 'web/screens/registration_web_screen.dart';
+
+// Web-only FCM bridge (conditional compilation for web platform)
+import 'web/fcm_web_bridge_stub.dart'
+    if (dart.library.html) 'web/fcm_web_bridge_web.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
@@ -136,6 +143,7 @@ Future<void> main() async {
       providers: [
         ChangeNotifierProvider(create: (_) => FeatureFlagsProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
+        ChangeNotifierProvider(create: (_) => RequestCountsProvider()),
       ],
       child: const MyApp(),
     ),
@@ -150,9 +158,17 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  static const Duration _updateCheckCooldown = Duration(minutes: 5);
+  static const Duration _updateCheckTimeout = Duration(seconds: 10);
+
   String? _appVersion;
+  String? _packageName;
   bool _isShowingUpdateDialog = false;
-  FeatureFlagsProvider? _featureFlagsProvider;
+  bool _isUpdateCheckInProgress = false;
+  DateTime? _lastUpdateCheckAt;
+
+  bool get _isAndroidRuntime =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   Future<void> _handleIncomingMessage(RemoteMessage message) async {
     final notification = message.notification;
@@ -200,14 +216,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _loadAppVersion();
-    try {
-      _featureFlagsProvider = context.read<FeatureFlagsProvider>();
-      _featureFlagsProvider?.addListener(_onFeatureFlagsChanged);
-    } catch (_) {
-      _featureFlagsProvider = null;
+    if (_isAndroidRuntime) {
+      unawaited(_loadAppVersion());
     }
 
+    // Setup Firebase message listeners for mobile
     if (_firebaseReady && !kIsWeb) {
       FirebaseMessaging.onMessage.listen((message) {
         _handleIncomingMessage(message);
@@ -221,23 +234,166 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         }
       });
     }
+
+    // Setup web FCM bridge to listen for messages from service worker
+    if (_firebaseReady && kIsWeb) {
+      FirebaseMessaging.onMessage.listen((message) {
+        _handleIncomingMessage(message);
+      });
+
+      initializeWebFcmBridge((title, body) async {
+        if (mounted) {
+          final provider = context.read<NotificationProvider>();
+          await provider.addNotification(title: title, message: body);
+        }
+      });
+    }
   }
 
   Future<void> _loadAppVersion() async {
-    if (kIsWeb) return;
+    if (!_isAndroidRuntime) return;
     try {
       final info = await PackageInfo.fromPlatform();
       if (!mounted) return;
       _appVersion = info.version;
-      await _maybeShowUpdateDialog();
+      _packageName = info.packageName;
+      await _maybeShowPlayStoreForceUpdateDialog(force: true);
     } catch (_) {
       // If package info fails we skip forced-update check for this session.
     }
   }
 
-  void _onFeatureFlagsChanged() {
-    if (kIsWeb) return;
-    _maybeShowUpdateDialog();
+  Future<BuildContext?> _resolveDialogContext() async {
+    if (!mounted) return null;
+
+    final direct = _rootNavigatorKey.currentContext;
+    if (direct != null) {
+      return direct;
+    }
+
+    // During app startup navigator context may not be ready yet.
+    for (var i = 0; i < 3; i++) {
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return null;
+      final next = _rootNavigatorKey.currentContext;
+      if (next != null) {
+        return next;
+      }
+    }
+
+    return mounted ? context : null;
+  }
+
+  Future<void> _openPlayStoreLink({
+    required String packageName,
+    required String appStoreLink,
+  }) async {
+    final raw = appStoreLink.trim();
+    final fallbackWeb = Uri.parse(
+      'https://play.google.com/store/apps/details?id=$packageName',
+    );
+    final fallbackMarket = Uri.parse('market://details?id=$packageName');
+
+    Future<bool> tryLaunch(Uri uri) async {
+      try {
+        return await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } catch (_) {
+        return false;
+      }
+    }
+
+    if (raw.isNotEmpty) {
+      final primary = Uri.tryParse(raw);
+      if (primary != null && await tryLaunch(primary)) {
+        return;
+      }
+    }
+
+    if (await tryLaunch(fallbackMarket)) {
+      return;
+    }
+    await tryLaunch(fallbackWeb);
+  }
+
+  Future<void> _maybeShowPlayStoreForceUpdateDialog({
+    bool force = false,
+  }) async {
+    if (!_isAndroidRuntime || !mounted || _isShowingUpdateDialog) {
+      return;
+    }
+    if (_isUpdateCheckInProgress) {
+      return;
+    }
+
+    final now = DateTime.now();
+    if (!force && _lastUpdateCheckAt != null) {
+      final elapsed = now.difference(_lastUpdateCheckAt!);
+      if (elapsed < _updateCheckCooldown) {
+        return;
+      }
+    }
+
+    _lastUpdateCheckAt = now;
+    _isUpdateCheckInProgress = true;
+
+    final packageName = _packageName;
+    final appVersion = _appVersion;
+    if (packageName == null ||
+        packageName.trim().isEmpty ||
+        appVersion == null) {
+      return;
+    }
+
+    try {
+      final newVersion = NewVersionPlus(androidId: packageName.trim());
+      final status = await newVersion.getVersionStatus().timeout(
+        _updateCheckTimeout,
+      );
+      if (status == null) return;
+
+      final storeVersion = status.storeVersion.trim();
+      if (storeVersion.isEmpty) return;
+
+      final shouldForceUpdate =
+          _compareVersions(appVersion, storeVersion) < 0 || status.canUpdate;
+      if (!shouldForceUpdate) return;
+
+      final dialogContext = await _resolveDialogContext();
+      if (dialogContext == null || !mounted) return;
+
+      _isShowingUpdateDialog = true;
+
+      await showDialog<void>(
+        context: dialogContext,
+        barrierDismissible: false,
+        builder: (_) => WillPopScope(
+          onWillPop: () async => false,
+          child: AlertDialog(
+            title: const Text('Update Required'),
+            content: Text(
+              'A newer version ($storeVersion) is available on Play Store. '
+              'Please update to continue using the app.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  await _openPlayStoreLink(
+                    packageName: packageName.trim(),
+                    appStoreLink: status.appStoreLink,
+                  );
+                },
+                child: const Text('Update'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } catch (_) {
+      // Ignore Play Store lookup failures for this check cycle.
+    } finally {
+      _isUpdateCheckInProgress = false;
+      _isShowingUpdateDialog = false;
+    }
   }
 
   int _compareVersions(String current, String required) {
@@ -263,82 +419,22 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     return 0;
   }
 
-  Future<void> _maybeShowUpdateDialog() async {
-    if (kIsWeb || !mounted || _isShowingUpdateDialog) {
-      return;
-    }
-
-    final flags = context.read<FeatureFlagsProvider>().flags;
-    if (flags == null) return;
-
-    final dialogContext = _rootNavigatorKey.currentContext ?? context;
-
-    final isAndroid = defaultTargetPlatform == TargetPlatform.android;
-    final isIos = defaultTargetPlatform == TargetPlatform.iOS;
-    if (!isAndroid && !isIos) return;
-
-    final minVersion = isAndroid
-        ? flags.minAndroidVersion
-        : flags.minIosVersion;
-    final forceFlag = isAndroid
-        ? flags.forceUpdateAndroid
-        : flags.forceUpdateIos;
-    final storeUrl = isAndroid ? flags.androidStoreUrl : flags.iosStoreUrl;
-
-    final requiresByVersion =
-        minVersion != null &&
-        _appVersion != null &&
-        _compareVersions(_appVersion!, minVersion) < 0;
-    final requiresUpdate = forceFlag || requiresByVersion;
-
-    if (!requiresUpdate) return;
-
-    _isShowingUpdateDialog = true;
-
-    await showDialog<void>(
-      context: dialogContext,
-      barrierDismissible: false,
-      builder: (_) => WillPopScope(
-        onWillPop: () async => false,
-        child: AlertDialog(
-          title: const Text('Update Required'),
-          content: Text(
-            flags.updateMessage ??
-                'A new version of the app is available. Please update to continue.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                if (storeUrl == null || storeUrl.trim().isEmpty) return;
-                final uri = Uri.tryParse(storeUrl.trim());
-                if (uri == null) return;
-                await launchUrl(uri, mode: LaunchMode.externalApplication);
-              },
-              child: const Text('Update'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   void dispose() {
-    _featureFlagsProvider?.removeListener(_onFeatureFlagsChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (kIsWeb) return;
+    if (!_isAndroidRuntime) return;
     if (state == AppLifecycleState.resumed) {
       context.read<FeatureFlagsProvider>().fetchFeatureFlags(force: true);
       context.read<NotificationProvider>().fetchFromBackend(
         page: 1,
         pageSize: 20,
       );
-      _maybeShowUpdateDialog();
+      unawaited(_maybeShowPlayStoreForceUpdateDialog());
     }
   }
 

@@ -19,6 +19,7 @@ class ApiService {
     'pan_card',
     'personal_photo',
     'agreement_document',
+    'id_card',
   };
   static final Map<String, Future<void>> _inFlightNotificationRequests =
       <String, Future<void>>{};
@@ -32,6 +33,19 @@ class ApiService {
         bytes[0] == 0xFF &&
         bytes[1] == 0xD8 &&
         bytes[2] == 0xFF;
+  }
+
+  static bool _isPngBytes(Uint8List bytes) {
+    // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+    return bytes.length >= 8 &&
+        bytes[0] == 0x89 &&
+        bytes[1] == 0x50 &&
+        bytes[2] == 0x4E &&
+        bytes[3] == 0x47 &&
+        bytes[4] == 0x0D &&
+        bytes[5] == 0x0A &&
+        bytes[6] == 0x1A &&
+        bytes[7] == 0x0A;
   }
 
   static Future<FeatureFlags> fetchFeatureFlags() async {
@@ -395,40 +409,36 @@ class ApiService {
       final normalizedFileName = fileName.trim();
       final lowerFileName = normalizedFileName.toLowerCase();
 
-      debugPrint(
-        '[uploadDocument] START — type=$normalizedType file=$normalizedFileName size=${fileBytes.length}B',
-      );
-
       if (!_allowedDocumentTypes.contains(normalizedType)) {
-        debugPrint(
-          '[uploadDocument] ERROR — invalid document type: $normalizedType',
-        );
         throw Exception('Invalid document type.');
       }
-      if (!(lowerFileName.endsWith('.jpg') ||
-          lowerFileName.endsWith('.jpeg'))) {
-        debugPrint(
-          '[uploadDocument] ERROR — disallowed file extension: $normalizedFileName',
-        );
-        throw Exception('Only .jpg and .jpeg files are allowed.');
-      }
-      if (!_isJpegBytes(fileBytes)) {
-        debugPrint('[uploadDocument] ERROR — file bytes are not JPEG');
-        throw Exception(
-          'Selected image is not a valid JPEG. Please capture/select a JPG/JPEG image.',
-        );
+      final isPngType = normalizedType == 'id_card';
+      if (isPngType) {
+        if (!lowerFileName.endsWith('.png')) {
+          throw Exception('ID card must be a PNG file.');
+        }
+        if (!_isPngBytes(fileBytes)) {
+          throw Exception('ID card image is not a valid PNG.');
+        }
+      } else {
+        if (!(lowerFileName.endsWith('.jpg') ||
+            lowerFileName.endsWith('.jpeg'))) {
+          throw Exception('Only .jpg and .jpeg files are allowed.');
+        }
+        if (!_isJpegBytes(fileBytes)) {
+          throw Exception(
+            'Selected image is not a valid JPEG. Please capture/select a JPG/JPEG image.',
+          );
+        }
       }
 
       final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
       if (token == null || token.trim().isEmpty) {
-        debugPrint('[uploadDocument] ERROR — no access token in storage');
         throw Exception('Session expired. Please login again.');
       }
-      debugPrint('[uploadDocument] token present (${token.length} chars)');
 
       Future<http.Response> sendRequest(String accessToken) async {
         final url = ApiEndpoints.uploadDocument;
-        debugPrint('[uploadDocument] POST $url');
         final request = http.MultipartRequest('POST', Uri.parse(url))
           ..headers['Authorization'] = 'Bearer $accessToken'
           ..fields['document_type'] = normalizedType
@@ -437,7 +447,9 @@ class ApiService {
               'document_file',
               fileBytes,
               filename: normalizedFileName,
-              contentType: MediaType('image', 'jpeg'),
+              contentType: isPngType
+                  ? MediaType('image', 'png')
+                  : MediaType('image', 'jpeg'),
             ),
           );
 
@@ -448,24 +460,16 @@ class ApiService {
       }
 
       var response = await sendRequest(token);
-      debugPrint('[uploadDocument] response status=${response.statusCode}');
-      debugPrint('[uploadDocument] response body=${response.body}');
 
       if (response.statusCode == 401) {
-        debugPrint('[uploadDocument] 401 — attempting token refresh');
         final refreshed = await AuthService.refreshAccessToken();
         if (refreshed) {
           final refreshedToken = await _storage.read(
             key: ApiEndpoints.accessTokenKey,
           );
           if (refreshedToken != null && refreshedToken.trim().isNotEmpty) {
-            debugPrint('[uploadDocument] retrying with refreshed token');
             response = await sendRequest(refreshedToken);
-            debugPrint('[uploadDocument] retry status=${response.statusCode}');
-            debugPrint('[uploadDocument] retry body=${response.body}');
           }
-        } else {
-          debugPrint('[uploadDocument] token refresh failed');
         }
       }
 
@@ -475,8 +479,6 @@ class ApiService {
           final raw = jsonDecode(response.body);
           decoded = raw is Map<String, dynamic> ? raw : <String, dynamic>{};
         } catch (jsonError) {
-          debugPrint('[uploadDocument] JSON parse error: $jsonError');
-          debugPrint('[uploadDocument] raw body was: ${response.body}');
           throw Exception(
             'Server returned an unexpected response (status ${response.statusCode}). '
             'Raw: ${response.body.length > 300 ? response.body.substring(0, 300) : response.body}',
@@ -486,10 +488,7 @@ class ApiService {
         decoded = <String, dynamic>{};
       }
 
-      debugPrint('[uploadDocument] decoded=$decoded');
-
       if (response.statusCode == 201) {
-        debugPrint('[uploadDocument] SUCCESS');
         return decoded;
       }
 
@@ -516,7 +515,6 @@ class ApiService {
         'Failed to upload document (status code ${response.statusCode})',
       );
     } on TimeoutException catch (e, st) {
-      debugPrint('[uploadDocument] TIMEOUT: $e');
       await BugReportService.reportApiFailure(
         title: 'Upload document API timeout',
         errorMessage: e.toString(),
@@ -528,8 +526,6 @@ class ApiService {
         'Upload timed out. Please try again with a smaller JPG image.',
       );
     } catch (e, st) {
-      debugPrint('[uploadDocument] EXCEPTION: $e');
-      debugPrint('[uploadDocument] STACKTRACE: $st');
       await BugReportService.reportApiFailure(
         title: 'Upload document API failure',
         errorMessage: e.toString(),
@@ -779,7 +775,7 @@ class ApiService {
     }
   }
 
-  static Future<List<User>> fetchAllUsers() async {
+  static Future<Map<String, dynamic>> fetchAllUsersWithSummary() async {
     try {
       String? storedAccessToken = await _storage.read(
         key: ApiEndpoints.accessTokenKey,
@@ -803,32 +799,56 @@ class ApiService {
         final dynamic decoded = jsonDecode(response.body);
 
         if (decoded is List) {
-          return decoded
-              .whereType<Map>()
-              .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
-              .toList();
+          return <String, dynamic>{
+            'users': decoded
+                .whereType<Map>()
+                .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
+                .toList(),
+            'summary': null,
+          };
         }
 
         if (decoded is Map<String, dynamic>) {
           if (decoded['users'] is List) {
-            return (decoded['users'] as List)
-                .whereType<Map>()
-                .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
-                .toList();
+            return <String, dynamic>{
+              'users': (decoded['users'] as List)
+                  .whereType<Map>()
+                  .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
+                  .toList(),
+              'summary': decoded['summary'] is Map<String, dynamic>
+                  ? Map<String, dynamic>.from(decoded['summary'])
+                  : (decoded['summary'] is Map
+                        ? Map<String, dynamic>.from(decoded['summary'] as Map)
+                        : null),
+            };
           }
 
           if (decoded['data'] is List) {
-            return (decoded['data'] as List)
-                .whereType<Map>()
-                .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
-                .toList();
+            return <String, dynamic>{
+              'users': (decoded['data'] as List)
+                  .whereType<Map>()
+                  .map((e) => User.fromJson(Map<String, dynamic>.from(e)))
+                  .toList(),
+              'summary': decoded['summary'] is Map<String, dynamic>
+                  ? Map<String, dynamic>.from(decoded['summary'])
+                  : (decoded['summary'] is Map
+                        ? Map<String, dynamic>.from(decoded['summary'] as Map)
+                        : null),
+            };
           }
 
           // Some backends return a single user object for list endpoint.
           if (decoded['id'] != null &&
               decoded['first_name'] != null &&
               decoded['last_name'] != null) {
-            return [User.fromJson(decoded)];
+            return <String, dynamic>{
+              'users': [User.fromJson(decoded)],
+              'summary': decoded['summary'] is Map<String, dynamic>
+                  ? Map<String, dynamic>.from(decoded['summary'])
+                  : (decoded['summary'] is Map
+                        ? Map<String, dynamic>.from(decoded['summary'] as Map)
+                        : null),
+            };
           }
         }
 
@@ -836,7 +856,7 @@ class ApiService {
       } else if (response.statusCode == 401) {
         final success = await _handleTokenRefresh();
         if (success) {
-          return fetchAllUsers();
+          return fetchAllUsersWithSummary();
         }
         throw Exception('Session expired. Please login again.');
       } else {
@@ -854,6 +874,15 @@ class ApiService {
       );
       rethrow;
     }
+  }
+
+  static Future<List<User>> fetchAllUsers() async {
+    final response = await fetchAllUsersWithSummary();
+    final users = response['users'];
+    if (users is List<User>) {
+      return users;
+    }
+    return <User>[];
   }
 
   static Future<User> fetchUserById(int userId) async {
@@ -1500,24 +1529,40 @@ class ApiService {
     required String message,
     String? type,
     String? targetType,
-    int? targetRole,
     int? targetUser,
     int? targetGat,
   }) async {
     final normalizedTitle = title.trim();
     final normalizedMessage = message.trim();
     final normalizedType = type?.trim();
-    var normalizedTargetType = targetType?.trim();
-    // Backend contract: gat-targeted notifications use target_type='user'
-    // with target_gat=<id>.
-    if (targetGat != null &&
-        (normalizedTargetType == null ||
-            normalizedTargetType.isEmpty ||
-            normalizedTargetType == 'gat')) {
-      normalizedTargetType = 'user';
+    var normalizedTargetType = targetType?.trim().toLowerCase();
+
+    if (normalizedTargetType == null || normalizedTargetType.isEmpty) {
+      if (targetUser != null) {
+        normalizedTargetType = 'user';
+      } else if (targetGat != null) {
+        normalizedTargetType = 'gat';
+      } else {
+        normalizedTargetType = 'all';
+      }
     }
+
+    if (normalizedTargetType != 'all' &&
+        normalizedTargetType != 'gat' &&
+        normalizedTargetType != 'user') {
+      throw Exception('Invalid target_type. Use all, gat, or user.');
+    }
+
+    if (normalizedTargetType == 'gat' && targetGat == null) {
+      throw Exception('target_gat is required when target_type is gat.');
+    }
+
+    if (normalizedTargetType == 'user' && targetUser == null) {
+      throw Exception('target_user is required when target_type is user.');
+    }
+
     final fingerprint =
-        '${normalizedTitle.toLowerCase()}::${normalizedMessage.toLowerCase()}::${normalizedType ?? ''}::${normalizedTargetType ?? ''}::${targetRole ?? ''}::${targetUser ?? ''}::${targetGat ?? ''}';
+        '${normalizedTitle.toLowerCase()}::${normalizedMessage.toLowerCase()}::${normalizedType ?? ''}::$normalizedTargetType::${targetUser ?? ''}::${targetGat ?? ''}';
 
     final existingRequest = _inFlightNotificationRequests[fingerprint];
     if (existingRequest != null) {
@@ -1538,7 +1583,6 @@ class ApiService {
       message: normalizedMessage,
       type: normalizedType,
       targetType: normalizedTargetType,
-      targetRole: targetRole,
       targetUser: targetUser,
       targetGat: targetGat,
     );
@@ -1558,7 +1602,6 @@ class ApiService {
     required String message,
     String? type,
     String? targetType,
-    int? targetRole,
     int? targetUser,
     int? targetGat,
   }) async {
@@ -1607,9 +1650,6 @@ class ApiService {
         if (effectiveTargetType != null && effectiveTargetType.isNotEmpty) {
           payload['target_type'] = effectiveTargetType;
         }
-        if (targetRole != null) {
-          payload['target_role'] = targetRole;
-        }
         if (targetUser != null) {
           payload['target_user'] = targetUser;
         }
@@ -1619,66 +1659,47 @@ class ApiService {
         return payload;
       }
 
-      final payloadAttempts = <Map<String, dynamic>>[buildPayload()];
+      final response = await sendPayload(buildPayload());
 
-      String? lastError;
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
 
-      for (final payload in payloadAttempts) {
-        final response = await sendPayload(payload);
-
-        if (response == null) {
-          throw Exception('Session expired. Please login again.');
-        }
-
-        if (response.statusCode == 200 || response.statusCode == 201) {
-          if (response.body.trim().isEmpty) {
-            return;
-          }
-
-          final decoded = jsonDecode(response.body);
-          if (decoded is Map<String, dynamic>) {
-            final status = decoded['status'];
-            if (status == null || status == true || status == 'success') {
-              return;
-            }
-            final err = extractErrorMessage(decoded);
-            throw Exception(err);
-          }
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (response.body.trim().isEmpty) {
           return;
         }
 
-        if (response.statusCode == 401) {
-          throw Exception('Session expired. Please login again.');
-        }
-
-        if (response.statusCode == 400) {
-          try {
-            final decoded = jsonDecode(response.body);
-            if (decoded is Map<String, dynamic>) {
-              lastError = extractErrorMessage(decoded);
-            }
-          } catch (_) {
-            lastError = 'Bad request';
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map<String, dynamic>) {
+          final status = decoded['status'];
+          if (status == null || status == true || status == 'success') {
+            return;
           }
-          // Try next payload variant if available.
-          continue;
+          final err = extractErrorMessage(decoded);
+          throw Exception(err);
         }
-
-        if (response.statusCode == 429) {
-          final dynamic decoded = response.body.isNotEmpty
-              ? jsonDecode(response.body)
-              : <String, dynamic>{};
-          if (decoded is Map<String, dynamic>) {
-            throw Exception(extractErrorMessage(decoded));
-          }
-        }
-
-        throw Exception(
-          'Failed to send notification (status code ${response.statusCode})',
-        );
+        return;
       }
 
-      throw Exception(lastError ?? 'Failed to send notification (Bad Request)');
+      if (response.statusCode == 401) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      if (response.statusCode == 400 ||
+          response.statusCode == 403 ||
+          response.statusCode == 429) {
+        final dynamic decoded = response.body.isNotEmpty
+            ? jsonDecode(response.body)
+            : <String, dynamic>{};
+        if (decoded is Map<String, dynamic>) {
+          throw Exception(extractErrorMessage(decoded));
+        }
+      }
+
+      throw Exception(
+        'Failed to send notification (status code ${response.statusCode})',
+      );
     } catch (e, st) {
       await BugReportService.reportApiFailure(
         title: 'Create notification API failure',

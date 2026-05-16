@@ -138,7 +138,7 @@ class User {
       lastName: json['last_name'],
       instrument: json['instrument'],
       joiningYear: json['joining_year']?.toString(),
-      sex: json['sex'],
+      sex: json['gender'],
       role: primaryRole,
       groups: normalizedGroups,
       bloodGroup: json['blood_group'],

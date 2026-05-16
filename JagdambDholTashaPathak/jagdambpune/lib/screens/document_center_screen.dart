@@ -4,22 +4,32 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:image/image.dart' as img;
+import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../config/api_endpoints.dart';
+import '../providers/feature_flags_provider.dart';
 import '../services/api_service.dart';
+import 'id_card_editor_screen.dart';
 import '../theme/app_colors.dart';
 import '../utils/web_file_picker.dart';
 
 class DocumentCenterScreen extends StatefulWidget {
   final bool isPathakAdmin;
+  final Map<String, dynamic>? userDetails;
 
-  const DocumentCenterScreen({super.key, required this.isPathakAdmin});
+  const DocumentCenterScreen({
+    super.key,
+    required this.isPathakAdmin,
+    this.userDetails,
+  });
 
   @override
   State<DocumentCenterScreen> createState() => _DocumentCenterScreenState();
 }
 
-class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
+class _DocumentCenterScreenState extends State<DocumentCenterScreen>
+    with SingleTickerProviderStateMixin {
   static const int _maxLongestEdge = 1600;
   static const int _targetMaxUploadBytes = 1500 * 1024;
 
@@ -52,10 +62,15 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
 
   final ScrollController _scrollController = ScrollController();
   final GlobalKey _uploadSectionKey = GlobalKey();
+  late final TabController _userTabController;
+  int _lastUserTabIndex = 0;
+  int _idCardRefreshTick = 0;
 
   @override
   void initState() {
     super.initState();
+    _userTabController = TabController(length: 2, vsync: this)
+      ..addListener(_handleUserTabChange);
     if (widget.isPathakAdmin) {
       _loadAdminDocuments();
     } else {
@@ -63,8 +78,30 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
     }
   }
 
+  void _handleUserTabChange() {
+    if (_userTabController.indexIsChanging) {
+      return;
+    }
+    if (_userTabController.index == _lastUserTabIndex) {
+      return;
+    }
+
+    _lastUserTabIndex = _userTabController.index;
+    if (_lastUserTabIndex == 0) {
+      _loadMyDocuments();
+      return;
+    }
+
+    setState(() {
+      _idCardRefreshTick++;
+    });
+  }
+
   @override
   void dispose() {
+    _userTabController
+      ..removeListener(_handleUserTabChange)
+      ..dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -278,22 +315,16 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
       return;
     }
 
-    debugPrint(
-      '[_uploadDocument] START — type=$_selectedDocumentType file=$_selectedFileName bytes=${_selectedBytes!.length}',
-    );
-
     setState(() {
       _isUploading = true;
     });
 
     try {
-      debugPrint('[_uploadDocument] calling ApiService.uploadDocument...');
       final response = await ApiService.uploadDocument(
         documentType: _selectedDocumentType,
         fileBytes: _selectedBytes!,
         fileName: _selectedFileName!,
       );
-      debugPrint('[_uploadDocument] upload success, response=$response');
 
       if (!mounted) {
         return;
@@ -314,9 +345,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
       }
 
       _showSnackBar(response['message']?.toString() ?? 'Document uploaded.');
-    } catch (error, st) {
-      debugPrint('[_uploadDocument] EXCEPTION: $error');
-      debugPrint('[_uploadDocument] STACKTRACE: $st');
+    } catch (error) {
       _showSnackBar(error.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) {
@@ -387,7 +416,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
   }
 
   Future<void> _openDocumentUrl(String url) async {
-    final trimmed = url.trim();
+    final trimmed = _resolveDocumentUrl(url);
     if (trimmed.isEmpty) {
       _showSnackBar('Document URL is not available.');
       return;
@@ -502,6 +531,22 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
     return normalized[0].toUpperCase() + normalized.substring(1);
   }
 
+  String _resolveDocumentUrl(String? rawUrl) {
+    final value = rawUrl?.trim() ?? '';
+    if (value.isEmpty) {
+      return '';
+    }
+
+    final parsed = Uri.tryParse(value);
+    if (parsed != null && parsed.hasScheme) {
+      return value;
+    }
+
+    final root = Uri.parse(ApiEndpoints.apiRootUrl);
+    final normalizedPath = value.startsWith('/') ? value : '/$value';
+    return root.resolve(normalizedPath).toString();
+  }
+
   Color _statusColor(String? value) {
     switch (value?.trim().toLowerCase()) {
       case 'approved':
@@ -514,7 +559,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
   }
 
   Widget _buildDocumentThumbnail(String documentUrl) {
-    final trimmedUrl = documentUrl.trim();
+    final trimmedUrl = _resolveDocumentUrl(documentUrl);
     if (trimmedUrl.isEmpty) {
       return _buildThumbnailPlaceholder('Preview unavailable');
     }
@@ -591,7 +636,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
         : ((_adminTotalCount - 1) ~/ _adminPageSize) + 1;
 
     return _SectionCard(
-      title: 'Admin Review Queue',
+      title: 'Review Documents',
       subtitle:
           'Review uploaded documents for users in your pathak. Use filters to inspect pending, approved, or rejected submissions.',
       child: Column(
@@ -885,7 +930,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
     );
   }
 
-  Widget _buildMyDocumentsSection() {
+  Widget _buildMyDocumentsSection({required bool showIdCardTab}) {
     if (_isLoadingMyDocuments) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 24),
@@ -1034,7 +1079,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
                       ),
                     ),
                   ],
-                  if (status == 'rejected') ...[
+                  if (status == 'rejected' && docType != 'id_card') ...[
                     const SizedBox(height: 10),
                     SizedBox(
                       width: double.infinity,
@@ -1068,6 +1113,19 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
                           foregroundColor: Colors.red.shade700,
                           side: BorderSide(color: Colors.red.shade700),
                         ),
+                      ),
+                    ),
+                  ],
+                  if (status == 'rejected' && docType == 'id_card') ...[
+                    const SizedBox(height: 10),
+                    Text(
+                      showIdCardTab
+                          ? 'Use the ID Card tab to submit your ID card again.'
+                          : 'ID Card resubmission is currently unavailable.',
+                      style: TextStyle(
+                        color: Colors.red.shade700,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ],
@@ -1134,48 +1192,73 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      appBar: AppBar(
-        title: const Text('Document Center'),
-        backgroundColor: AppColors.primaryMaroon,
-        foregroundColor: AppColors.textLight,
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          controller: _scrollController,
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (!widget.isPathakAdmin) ...[
-                _buildMyDocumentsSection(),
-                const SizedBox(height: 16),
-              ],
-              _SectionCard(
-                key: _uploadSectionKey,
-                title: 'Upload Document',
-                subtitle: 'Upload photo as JPG.',
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // Step 1: category
+  Widget _buildDocumentsContent({required bool showIdCardTab}) {
+    return SafeArea(
+      child: SingleChildScrollView(
+        controller: _scrollController,
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (!widget.isPathakAdmin) ...[
+              _buildMyDocumentsSection(showIdCardTab: showIdCardTab),
+              const SizedBox(height: 16),
+            ],
+            _SectionCard(
+              key: _uploadSectionKey,
+              title: 'Upload Document',
+              subtitle: 'Upload photo as JPG.',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  DropdownButtonFormField<String>(
+                    value: _selectedCategory,
+                    decoration: const InputDecoration(
+                      labelText: 'Document Category',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(
+                        value: 'pii',
+                        child: Text('PII Document'),
+                      ),
+                      DropdownMenuItem(
+                        value: 'agreement',
+                        child: Text('Agreement Document'),
+                      ),
+                    ],
+                    onChanged: _isUploading
+                        ? null
+                        : (value) {
+                            if (value == null) return;
+                            setState(() {
+                              _selectedCategory = value;
+                              _selectedDocumentType = value == 'pii'
+                                  ? 'adhaar_card'
+                                  : 'agreement_document';
+                            });
+                          },
+                  ),
+                  const SizedBox(height: 12),
+                  if (_selectedCategory == 'pii')
                     DropdownButtonFormField<String>(
-                      value: _selectedCategory,
+                      value: _selectedDocumentType,
                       decoration: const InputDecoration(
-                        labelText: 'Document Category',
+                        labelText: 'PII Document Type',
                         border: OutlineInputBorder(),
                       ),
                       items: const [
                         DropdownMenuItem(
-                          value: 'pii',
-                          child: Text('PII Document'),
+                          value: 'adhaar_card',
+                          child: Text('Aadhaar Card'),
                         ),
                         DropdownMenuItem(
-                          value: 'agreement',
-                          child: Text('Agreement Document'),
+                          value: 'pan_card',
+                          child: Text('PAN Card'),
+                        ),
+                        DropdownMenuItem(
+                          value: 'personal_photo',
+                          child: Text('Personal Photo'),
                         ),
                       ],
                       onChanged: _isUploading
@@ -1183,175 +1266,196 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen> {
                           : (value) {
                               if (value == null) return;
                               setState(() {
-                                _selectedCategory = value;
-                                // reset sub-type to a valid default for the new category
-                                _selectedDocumentType = value == 'pii'
-                                    ? 'adhaar_card'
-                                    : 'agreement_document';
+                                _selectedDocumentType = value;
                               });
                             },
-                    ),
-                    const SizedBox(height: 12),
-                    // Step 2: sub-type — depends on category
-                    if (_selectedCategory == 'pii')
-                      DropdownButtonFormField<String>(
-                        value: _selectedDocumentType,
-                        decoration: const InputDecoration(
-                          labelText: 'PII Document Type',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'adhaar_card',
-                            child: Text('Aadhaar Card'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'pan_card',
-                            child: Text('PAN Card'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'personal_photo',
-                            child: Text('Personal Photo'),
-                          ),
-                        ],
-                        onChanged: _isUploading
-                            ? null
-                            : (value) {
-                                if (value == null) return;
-                                setState(() {
-                                  _selectedDocumentType = value;
-                                });
-                              },
-                      )
-                    else
-                      DropdownButtonFormField<String>(
-                        value: _selectedDocumentType,
-                        decoration: const InputDecoration(
-                          labelText: 'Agreement Type',
-                          border: OutlineInputBorder(),
-                        ),
-                        items: const [
-                          DropdownMenuItem(
-                            value: 'agreement_document',
-                            child: Text(
-                              'Agreement Document (more types coming soon)',
-                            ),
-                          ),
-                        ],
-                        onChanged: _isUploading
-                            ? null
-                            : (value) {
-                                if (value == null) return;
-                                setState(() {
-                                  _selectedDocumentType = value;
-                                });
-                              },
+                    )
+                  else
+                    DropdownButtonFormField<String>(
+                      value: _selectedDocumentType,
+                      decoration: const InputDecoration(
+                        labelText: 'Agreement Type',
+                        border: OutlineInputBorder(),
                       ),
-                    const SizedBox(height: 16),
-                    OutlinedButton.icon(
-                      onPressed: (_isPicking || _isUploading)
-                          ? null
-                          : _showImageSourcePicker,
-                      icon: _isPicking
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.upload_file),
-                      label: Text(
-                        _isPicking
-                            ? 'Loading Photo...'
-                            : _selectedFileName == null
-                            ? 'Add JPG Image'
-                            : 'Replace Image',
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.primaryMaroon,
-                        side: const BorderSide(color: AppColors.primaryMaroon),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    const Text(
-                      'Upload photo as JPG.',
-                      style: TextStyle(
-                        color: AppColors.primaryMaroon,
-                        fontSize: 13,
-                        height: 1.4,
-                      ),
-                    ),
-                    if (_selectedFileName != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        'Selected: $_selectedFileName',
-                        style: const TextStyle(
-                          color: AppColors.primaryMaroon,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      if (_selectedBytes != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          'Optimized size: ${_formatBytes(_selectedBytes!.length)}',
-                          style: TextStyle(
-                            color: AppColors.primaryMaroon.withValues(
-                              alpha: 0.8,
-                            ),
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'agreement_document',
+                          child: Text(
+                            'Agreement Document (more types coming soon)',
                           ),
                         ),
                       ],
-                    ],
+                      onChanged: _isUploading
+                          ? null
+                          : (value) {
+                              if (value == null) return;
+                              setState(() {
+                                _selectedDocumentType = value;
+                              });
+                            },
+                    ),
+                  const SizedBox(height: 16),
+                  OutlinedButton.icon(
+                    onPressed: (_isPicking || _isUploading)
+                        ? null
+                        : _showImageSourcePicker,
+                    icon: _isPicking
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.upload_file),
+                    label: Text(
+                      _isPicking
+                          ? 'Loading Photo...'
+                          : _selectedFileName == null
+                          ? 'Add JPG Image'
+                          : 'Replace Image',
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.primaryMaroon,
+                      side: const BorderSide(color: AppColors.primaryMaroon),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Upload photo as JPG.',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontSize: 13,
+                      height: 1.4,
+                    ),
+                  ),
+                  if (_selectedFileName != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'Selected: $_selectedFileName',
+                      style: const TextStyle(
+                        color: AppColors.primaryMaroon,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                     if (_selectedBytes != null) ...[
-                      const SizedBox(height: 16),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Image.memory(
-                          _selectedBytes!,
-                          height: 220,
-                          fit: BoxFit.cover,
+                      const SizedBox(height: 4),
+                      Text(
+                        'Optimized size: ${_formatBytes(_selectedBytes!.length)}',
+                        style: TextStyle(
+                          color: AppColors.primaryMaroon.withValues(alpha: 0.8),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
+                  ],
+                  if (_selectedBytes != null) ...[
                     const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed:
-                          (_isUploading ||
-                              _isPicking ||
-                              _selectedBytes == null ||
-                              _selectedFileName == null)
-                          ? null
-                          : _uploadDocument,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primaryMaroon,
-                        foregroundColor: AppColors.textLight,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.memory(
+                        _selectedBytes!,
+                        height: 220,
+                        fit: BoxFit.cover,
                       ),
-                      child: _isUploading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(
-                                  AppColors.textLight,
-                                ),
-                              ),
-                            )
-                          : const Text('Upload Document'),
                     ),
                   ],
-                ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed:
+                        (_isUploading ||
+                            _isPicking ||
+                            _selectedBytes == null ||
+                            _selectedFileName == null)
+                        ? null
+                        : _uploadDocument,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryMaroon,
+                      foregroundColor: AppColors.textLight,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    child: _isUploading
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                AppColors.textLight,
+                              ),
+                            ),
+                          )
+                        : const Text('Upload Document'),
+                  ),
+                ],
               ),
-              if (widget.isPathakAdmin) ...[
-                const SizedBox(height: 16),
-                _buildAdminReviewSection(),
-              ],
+            ),
+            if (widget.isPathakAdmin) ...[
+              const SizedBox(height: 16),
+              _buildAdminReviewSection(),
             ],
-          ),
+          ],
         ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final showIdCardTab =
+        context.watch<FeatureFlagsProvider>().flags?.showIdCard ?? false;
+
+    if (widget.isPathakAdmin) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        appBar: AppBar(
+          title: const Text('Document Center'),
+          backgroundColor: AppColors.primaryMaroon,
+          foregroundColor: AppColors.textLight,
+        ),
+        body: _buildDocumentsContent(showIdCardTab: showIdCardTab),
+      );
+    }
+
+    if (!showIdCardTab) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        appBar: AppBar(
+          title: const Text('Document Center'),
+          backgroundColor: AppColors.primaryMaroon,
+          foregroundColor: AppColors.textLight,
+        ),
+        body: _buildDocumentsContent(showIdCardTab: false),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      appBar: AppBar(
+        title: const Text('Document Center'),
+        backgroundColor: AppColors.primaryMaroon,
+        foregroundColor: AppColors.textLight,
+        bottom: TabBar(
+          controller: _userTabController,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white,
+          indicatorColor: Colors.white,
+          tabs: const [
+            Tab(icon: Icon(Icons.description_outlined), text: 'Documents'),
+            Tab(icon: Icon(Icons.credit_card), text: 'ID Card'),
+          ],
+        ),
+      ),
+      body: TabBarView(
+        controller: _userTabController,
+        children: [
+          _buildDocumentsContent(showIdCardTab: true),
+          IDCardEditorScreen(
+            refreshTick: _idCardRefreshTick,
+            userDetails: widget.userDetails,
+            showAppBar: false,
+          ),
+        ],
       ),
     );
   }
