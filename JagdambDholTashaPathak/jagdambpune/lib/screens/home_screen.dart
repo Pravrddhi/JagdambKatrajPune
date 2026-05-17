@@ -1270,6 +1270,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  bool get _canDownloadAttendanceQr {
+    return _permissionBool(
+      'download_attendance_qr',
+      fallback: _canGenerateAttendanceQr,
+    );
+  }
+
   bool get _canSetAttendanceLocation {
     return _permissionBool('attendance_settings', fallback: _isPathakAdminOnly);
   }
@@ -1387,6 +1394,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         builder: (_) => AdminOperationsScreen(
           initialTabIndex: initialTabIndex,
           canGenerateAttendanceQr: _canGenerateAttendanceQr,
+          canDownloadAttendanceQr: _canDownloadAttendanceQr,
           canSetAttendanceLocation: _canSetAttendanceLocation,
           canViewAttendanceByUser: _canViewAttendanceByUser,
           isPathakAdmin: _isPathakAdmin,
@@ -1417,6 +1425,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           gatPramukhName:
               _userDetails?['gat_pramukh_name']?.toString() ??
               _userDetails?['gatPramukhName']?.toString(),
+          canViewUserAnalysis: _permissionBool(
+            'user_analysis',
+            fallback: _isPathakAdminOnly,
+          ),
         ),
       ),
     );
@@ -1942,6 +1954,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         MaterialPageRoute<void>(
                           builder: (_) => AttendanceModuleScreen(
                             canGenerateQr: _canGenerateAttendanceQr,
+                            canDownloadAttendanceQr: _canDownloadAttendanceQr,
                             canSetAttendanceLocation: _canSetAttendanceLocation,
                             canViewByUserAttendance: _canViewAttendanceByUser,
                             scanOnly: true,
@@ -2027,6 +2040,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     MaterialPageRoute<void>(
                                       builder: (_) => AttendanceModuleScreen(
                                         canGenerateQr: _canGenerateAttendanceQr,
+                                        canDownloadAttendanceQr:
+                                            _canDownloadAttendanceQr,
                                         canSetAttendanceLocation:
                                             _canSetAttendanceLocation,
                                         canViewByUserAttendance:

@@ -3,6 +3,7 @@ import '../config/api_endpoints.dart';
 import '../models/user.dart';
 import '../services/api_service.dart';
 import '../theme/app_colors.dart';
+import 'user_analysis_screen.dart';
 
 class AllUsersScreen extends StatefulWidget {
   final bool showStatusFilters;
@@ -10,6 +11,7 @@ class AllUsersScreen extends StatefulWidget {
   final bool canUpdateUserGroup;
   final bool isGatPramukh;
   final String? gatPramukhName;
+  final bool canViewUserAnalysis;
 
   const AllUsersScreen({
     super.key,
@@ -18,6 +20,7 @@ class AllUsersScreen extends StatefulWidget {
     this.canUpdateUserGroup = false,
     this.isGatPramukh = false,
     this.gatPramukhName,
+    this.canViewUserAnalysis = false,
   });
 
   @override
@@ -814,6 +817,33 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                     'Approve',
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
+                ),
+              if (effectiveUserId != null && widget.canViewUserAnalysis)
+                TextButton.icon(
+                  icon: const Icon(
+                    Icons.bar_chart,
+                    color: AppColors.primaryMaroon,
+                    size: 18,
+                  ),
+                  label: const Text(
+                    'Analysis',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(dialogCtx);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => UserAnalysisScreen(
+                          userId: effectiveUserId,
+                          userName: _fullName(user),
+                        ),
+                      ),
+                    );
+                  },
                 ),
               TextButton(
                 onPressed: () => Navigator.pop(dialogCtx),

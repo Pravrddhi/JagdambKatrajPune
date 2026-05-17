@@ -1,17 +1,24 @@
+import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../services/attendance_service.dart';
 import '../theme/app_colors.dart';
+import '../utils/qr_download_helper.dart';
 
 class AttendanceSettingsPanel extends StatefulWidget {
   final bool canManageSettings;
   final bool canGenerateQr;
+  final bool canDownloadAttendanceQr;
 
   const AttendanceSettingsPanel({
     super.key,
     required this.canManageSettings,
     required this.canGenerateQr,
+    this.canDownloadAttendanceQr = false,
   });
 
   @override
@@ -25,6 +32,7 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
   bool _isLoadingConfiguredLocation = false;
   bool _isSavingSettings = false;
   bool _isGenerating = false;
+  bool _isDownloadingQr = false;
 
   double? _configuredLat;
   double? _configuredLng;
@@ -37,6 +45,7 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
   String? _qrPayload;
   String? _qrExpiry;
   bool _qrIsPermanent = false;
+  final GlobalKey _qrPreviewKey = GlobalKey();
 
   @override
   void initState() {
@@ -562,6 +571,87 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
     }
   }
 
+  Future<Uint8List?> _renderQrToPng(String data, {double size = 400}) async {
+    try {
+      final painter = QrPainter(
+        data: data,
+        version: QrVersions.auto,
+        errorCorrectionLevel: QrErrorCorrectLevel.M,
+        dataModuleStyle: const QrDataModuleStyle(color: Color(0xFF000000)),
+        eyeStyle: const QrEyeStyle(color: Color(0xFF000000)),
+        gapless: false,
+      );
+
+      final byteData = await painter.toImageData(
+        size,
+        format: ui.ImageByteFormat.png,
+      );
+      if (byteData != null) return byteData.buffer.asUint8List();
+
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder);
+      final border = size * 0.08;
+      final qrSize = size - (border * 2);
+      canvas.drawRect(
+        Rect.fromLTWH(0, 0, size, size),
+        ui.Paint()..color = const Color(0xFFFFFFFF),
+      );
+      canvas.save();
+      canvas.translate(border, border);
+      painter.paint(canvas, Size(qrSize, qrSize));
+      canvas.restore();
+      final picture = recorder.endRecording();
+      final image = await picture.toImage(size.toInt(), size.toInt());
+      final fallbackByteData = await image.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      return fallbackByteData?.buffer.asUint8List();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _captureDisplayedQrPng() async {
+    try {
+      final context = _qrPreviewKey.currentContext;
+      if (context == null) return null;
+
+      final renderObject = context.findRenderObject();
+      if (renderObject is! RenderRepaintBoundary) return null;
+
+      final image = await renderObject.toImage(pixelRatio: 3.0);
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+      return byteData?.buffer.asUint8List();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _downloadQr() async {
+    final payload = _qrPayload;
+    if (payload == null || !widget.canDownloadAttendanceQr) return;
+
+    setState(() => _isDownloadingQr = true);
+    try {
+      final bytes =
+          await _captureDisplayedQrPng() ?? await _renderQrToPng(payload);
+      if (bytes == null) throw Exception('Failed to render QR image.');
+
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final filename = 'jagdamb_attendance_qr_$timestamp.png';
+      final ok = await downloadQrBytes(bytes, filename);
+      if (ok) {
+        _showSnack(kIsWeb ? 'QR downloaded.' : 'QR saved to temp folder.');
+      } else {
+        throw Exception('Download failed. Please try again.');
+      }
+    } catch (error) {
+      _showSnack(error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) setState(() => _isDownloadingQr = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (!widget.canManageSettings && !widget.canGenerateQr) {
@@ -738,19 +828,22 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
             if (_qrPayload != null) ...[
               const SizedBox(height: 18),
               Center(
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: AppColors.primaryMaroon.withValues(alpha: 0.25),
+                child: RepaintBoundary(
+                  key: _qrPreviewKey,
+                  child: Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: AppColors.primaryMaroon.withValues(alpha: 0.25),
+                      ),
                     ),
-                  ),
-                  child: QrImageView(
-                    data: _qrPayload!,
-                    size: 220,
-                    backgroundColor: Colors.white,
+                    child: QrImageView(
+                      data: _qrPayload!,
+                      size: 220,
+                      backgroundColor: Colors.white,
+                    ),
                   ),
                 ),
               ),
@@ -777,6 +870,35 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                       color: Colors.green,
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+              if (widget.canDownloadAttendanceQr) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _isDownloadingQr ? null : _downloadQr,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primaryMaroon,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    icon: _isDownloadingQr
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.white,
+                              ),
+                            ),
+                          )
+                        : const Icon(Icons.download),
+                    label: Text(
+                      _isDownloadingQr ? 'Downloading...' : 'Download QR (PNG)',
                     ),
                   ),
                 ),

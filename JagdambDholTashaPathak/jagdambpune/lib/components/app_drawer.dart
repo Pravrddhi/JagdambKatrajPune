@@ -223,6 +223,7 @@ class AppDrawer extends StatelessWidget {
           canGenerateQr: showAdminFunctionsInDrawer
               ? _canGenerateAttendanceQr
               : false,
+          canDownloadAttendanceQr: _canDownloadAttendanceQr,
           canSetAttendanceLocation: showAdminFunctionsInDrawer
               ? _canSetAttendanceLocation
               : false,
@@ -246,6 +247,7 @@ class AppDrawer extends StatelessWidget {
         builder: (context) => AdminOperationsScreen(
           initialTabIndex: initialTabIndex,
           canGenerateAttendanceQr: _canGenerateAttendanceQr,
+          canDownloadAttendanceQr: _canDownloadAttendanceQr,
           canSetAttendanceLocation: _canSetAttendanceLocation,
           canViewAttendanceByUser: _canViewAttendanceByUser,
           isPathakAdmin: _isPathakAdmin,
@@ -293,6 +295,10 @@ class AppDrawer extends StatelessWidget {
           gatPramukhName:
               userDetails?['gat_pramukh_name']?.toString() ??
               userDetails?['gatPramukhName']?.toString(),
+          canViewUserAnalysis: _permissionBool(
+            'user_analysis',
+            fallback: _isPathakAdminOnly,
+          ),
         ),
       ),
     );
@@ -358,6 +364,13 @@ class AppDrawer extends StatelessWidget {
         'attendance_settings',
         fallback: _isPathakAdmin,
       ),
+    );
+  }
+
+  bool get _canDownloadAttendanceQr {
+    return _permissionBool(
+      'download_attendance_qr',
+      fallback: _canGenerateAttendanceQr,
     );
   }
 

@@ -10,6 +10,7 @@ import '../widgets/document_approval_panel.dart';
 class AdminOperationsScreen extends StatelessWidget {
   final int initialTabIndex;
   final bool canGenerateAttendanceQr;
+  final bool canDownloadAttendanceQr;
   final bool canSetAttendanceLocation;
   final bool canViewAttendanceByUser;
   final bool canViewDocumentApprovals;
@@ -31,11 +32,13 @@ class AdminOperationsScreen extends StatelessWidget {
   final bool canUpdateUserGroup;
   final bool isGatPramukh;
   final String? gatPramukhName;
+  final bool canViewUserAnalysis;
 
   const AdminOperationsScreen({
     super.key,
     this.initialTabIndex = 0,
     required this.canGenerateAttendanceQr,
+    this.canDownloadAttendanceQr = false,
     required this.canSetAttendanceLocation,
     required this.canViewAttendanceByUser,
     required this.canViewDocumentApprovals,
@@ -55,6 +58,7 @@ class AdminOperationsScreen extends StatelessWidget {
     this.canUpdateUserGroup = false,
     this.isGatPramukh = false,
     this.gatPramukhName,
+    this.canViewUserAnalysis = false,
   });
 
   @override
@@ -83,6 +87,7 @@ class AdminOperationsScreen extends StatelessWidget {
           view: AttendanceSettingsPanel(
             canManageSettings: canSetAttendanceLocation,
             canGenerateQr: canGenerateAttendanceQr,
+            canDownloadAttendanceQr: canDownloadAttendanceQr,
           ),
         ),
       if (showUsersTab)
@@ -95,6 +100,7 @@ class AdminOperationsScreen extends StatelessWidget {
             canUpdateUserGroup: canUpdateUserGroup,
             isGatPramukh: isGatPramukh,
             gatPramukhName: gatPramukhName,
+            canViewUserAnalysis: canViewUserAnalysis,
           ),
         ),
       if (showDocumentApprovalTab)

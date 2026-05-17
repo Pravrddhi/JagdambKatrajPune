@@ -1255,134 +1255,75 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final formKey = GlobalKey<FormState>();
     final quantityController = TextEditingController();
     final noteController = TextEditingController();
-    final eventOptions = _events.where((event) => event.isActiveStatus).toList()
-      ..sort((a, b) {
-        final left = DateTime.tryParse(a.eventDate);
-        final right = DateTime.tryParse(b.eventDate);
-        if (left == null && right == null) return 0;
-        if (left == null) return 1;
-        if (right == null) return -1;
-        return right.compareTo(left);
-      });
 
-    int? selectedEventId;
-    if (eventOptions.length == 1) {
-      selectedEventId = eventOptions.first.id;
-    }
+    // Update stock proposals are never linked to a maintenance event.
+    const int? selectedEventId = null;
 
     final shouldSubmit = await showDialog<bool>(
       context: context,
       builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setLocalState) {
-            return AlertDialog(
-              title: Text('Update Stock Request: ${item.name}'),
-              content: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Current Available: ${item.quantityAvailable}',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Colors.black54,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    if (eventOptions.isNotEmpty) ...[
-                      DropdownButtonFormField<int?>(
-                        isExpanded: true,
-                        initialValue: selectedEventId,
-                        decoration: const InputDecoration(
-                          labelText: 'Maintenance Event (optional)',
-                        ),
-                        items: [
-                          const DropdownMenuItem<int?>(
-                            value: null,
-                            child: Text('No Event Link'),
-                          ),
-                          ...eventOptions.map(
-                            (event) => DropdownMenuItem<int?>(
-                              value: event.id,
-                              child: Text(
-                                '${event.title} (${event.eventDate})',
-                              ),
-                            ),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          setLocalState(() {
-                            selectedEventId = value;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    TextFormField(
-                      controller: quantityController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Quantity to Add',
-                      ),
-                      validator: (value) {
-                        final qty = int.tryParse(value ?? '');
-                        if (qty == null || qty <= 0) {
-                          return 'Enter a valid quantity';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: noteController,
-                      decoration: const InputDecoration(
-                        labelText: 'Reason (optional)',
-                      ),
-                      maxLines: 2,
-                    ),
-                  ],
+        return AlertDialog(
+          title: Text('Update Stock Request: ${item.name}'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Current Available: ${item.quantityAvailable}',
+                  style: const TextStyle(fontSize: 13, color: Colors.black54),
                 ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.primaryMaroon,
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: quantityController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Quantity to Add',
                   ),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    if (formKey.currentState?.validate() ?? false) {
-                      Navigator.of(context).pop(true);
+                  validator: (value) {
+                    final qty = int.tryParse(value ?? '');
+                    if (qty == null || qty <= 0) {
+                      return 'Enter a valid quantity';
                     }
+                    return null;
                   },
-                  style: ElevatedButton.styleFrom(
-                    foregroundColor: AppColors.primaryMaroon,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: noteController,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason (optional)',
                   ),
-                  child: const Text('Submit'),
+                  maxLines: 2,
                 ),
               ],
-            );
-          },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (formKey.currentState?.validate() ?? false) {
+                  Navigator.of(context).pop(true);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Submit'),
+            ),
+          ],
         );
       },
     );
 
     if (shouldSubmit != true) {
-      quantityController.dispose();
-      noteController.dispose();
-      return;
-    }
-
-    final blockedByCompletion = await _isStockRequestBlockedByCompletion(
-      eventId: selectedEventId,
-    );
-    if (blockedByCompletion) {
-      _showSnack(
-        'Completion already submitted (pending/approved) for this maintenance day. You cannot send stock request now.',
-      );
       quantityController.dispose();
       noteController.dispose();
       return;
@@ -1413,110 +1354,100 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   Future<void> _openSingleStockRequestForm(InventoryItem item) async {
     final formKey = GlobalKey<FormState>();
     final noteController = TextEditingController();
-    final eventOptions = _events.where((event) => event.isActiveStatus).toList()
-      ..sort((a, b) {
-        final left = DateTime.tryParse(a.eventDate);
-        final right = DateTime.tryParse(b.eventDate);
-        if (left == null && right == null) return 0;
-        if (left == null) return 1;
-        if (right == null) return -1;
-        return right.compareTo(left);
-      });
 
-    int? selectedEventId;
-    if (eventOptions.length == 1) {
-      selectedEventId = eventOptions.first.id;
-    }
+    // Auto-select today's active maintenance event, if any.
+    final todayActiveEvent = _events
+        .where((event) => event.isActiveStatus && event.isScheduledForToday)
+        .firstOrNull;
+    final int? selectedEventId = todayActiveEvent?.id;
 
     final shouldSubmit = await showDialog<bool>(
       context: context,
       builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setLocalState) {
-            return AlertDialog(
-              title: Text('Request Stock: ${item.name}'),
-              content: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Current Available: ${item.quantityAvailable}',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Colors.black54,
-                      ),
+        return AlertDialog(
+          title: Text('Request Stock: ${item.name}'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Current Available: ${item.quantityAvailable}',
+                  style: const TextStyle(fontSize: 13, color: Colors.black54),
+                ),
+                if (todayActiveEvent != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
                     ),
-                    const SizedBox(height: 12),
-                    if (eventOptions.isNotEmpty) ...[
-                      DropdownButtonFormField<int?>(
-                        isExpanded: true,
-                        initialValue: selectedEventId,
-                        decoration: const InputDecoration(
-                          labelText: 'Maintenance Event (optional)',
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryMaroon.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.event,
+                          size: 14,
+                          color: AppColors.primaryMaroon,
                         ),
-                        items: [
-                          const DropdownMenuItem<int?>(
-                            value: null,
-                            child: Text('No Event Link'),
-                          ),
-                          ...eventOptions.map(
-                            (event) => DropdownMenuItem<int?>(
-                              value: event.id,
-                              child: Text(
-                                '${event.title} (${event.eventDate})',
-                              ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '${todayActiveEvent.title} (${todayActiveEvent.eventDate})',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: AppColors.primaryMaroon,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                        ],
-                        onChanged: (value) {
-                          setLocalState(() {
-                            selectedEventId = value;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    TextFormField(
-                      initialValue: '1',
-                      enabled: false,
-                      decoration: const InputDecoration(
-                        labelText: 'Requested Quantity',
-                      ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: noteController,
-                      decoration: const InputDecoration(
-                        labelText: 'Reason (optional)',
-                      ),
-                      maxLines: 2,
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.primaryMaroon,
                   ),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    if (formKey.currentState?.validate() ?? false) {
-                      Navigator.of(context).pop(true);
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    foregroundColor: AppColors.primaryMaroon,
+                ],
+                const SizedBox(height: 12),
+                TextFormField(
+                  initialValue: '1',
+                  enabled: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Requested Quantity',
                   ),
-                  child: const Text('Request'),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: noteController,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason (optional)',
+                  ),
+                  maxLines: 2,
                 ),
               ],
-            );
-          },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (formKey.currentState?.validate() ?? false) {
+                  Navigator.of(context).pop(true);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Request'),
+            ),
+          ],
         );
       },
     );
@@ -2223,10 +2154,20 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   }
 
   bool get _hasBlockingCompletionForCurrentUser {
+    // Only block stock requests when there is a currently active maintenance
+    // event. Outside of maintenance days there should be no restriction.
+    final activeEventIds = _events
+        .where((e) => e.isActiveStatus)
+        .map((e) => e.id)
+        .toSet();
+
+    if (activeEventIds.isEmpty) return false;
+
     final userCompletionRequests = _filterCompletionsForCurrentUser(
       _completionRequests,
     );
     return userCompletionRequests.any((request) {
+      if (!activeEventIds.contains(request.event)) return false;
       final status = request.status.trim().toLowerCase();
       return status == 'pending' || status == 'approved';
     });

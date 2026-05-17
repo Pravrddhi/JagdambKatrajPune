@@ -313,6 +313,9 @@ class ApiEndpoints {
   /// Maintenance stock analysis dashboard
   static final String maintenanceAnalysis = '$baseUrl/maintenance/analysis/';
 
+  /// Full user analysis (profile, gat, attendance, maintenance, documents)
+  static String userAnalysis(int userId) => '$baseUrl/users/$userId/analysis/';
+
   /// Maintenance events list/create
   static final String maintenanceEvents = '$baseUrl/maintenance/events/';
 

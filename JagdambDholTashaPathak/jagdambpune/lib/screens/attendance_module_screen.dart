@@ -18,6 +18,7 @@ import '../widgets/web_camera_qr_scanner.dart';
 
 class AttendanceModuleScreen extends StatefulWidget {
   final bool canGenerateQr;
+  final bool canDownloadAttendanceQr;
   final bool canSetAttendanceLocation;
   final bool canViewByUserAttendance;
   final bool isPathakAdmin;
@@ -26,6 +27,7 @@ class AttendanceModuleScreen extends StatefulWidget {
   const AttendanceModuleScreen({
     super.key,
     required this.canGenerateQr,
+    this.canDownloadAttendanceQr = false,
     required this.canSetAttendanceLocation,
     required this.canViewByUserAttendance,
     this.isPathakAdmin = false,
@@ -2122,7 +2124,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         children: [
           const Text(
             'QR can be generated only at the location configured by Pathak Admin, within the allowed radius.',
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.primaryMaroon,
               fontSize: 13,
               height: 1.4,
@@ -2256,6 +2258,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                   ),
                 ),
               ),
+            ],
+            if (widget.canDownloadAttendanceQr) ...[
               const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
