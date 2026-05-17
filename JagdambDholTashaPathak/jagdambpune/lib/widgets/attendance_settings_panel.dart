@@ -111,6 +111,31 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
         '${date.day.toString().padLeft(2, '0')}';
   }
 
+  bool _isValidApiDateFormat(String value) {
+    return RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(value);
+  }
+
+  String? _validateSeasonDates({
+    required DateTime? seasonStart,
+    required DateTime? seasonEnd,
+  }) {
+    if (seasonStart == null || seasonEnd == null) {
+      return 'This field is required.';
+    }
+
+    final startStr = _formatApiDate(seasonStart);
+    final endStr = _formatApiDate(seasonEnd);
+    if (!_isValidApiDateFormat(startStr) || !_isValidApiDateFormat(endStr)) {
+      return 'Date has wrong format. Use one of these formats instead: YYYY-MM-DD.';
+    }
+
+    if (seasonEnd.isBefore(seasonStart)) {
+      return 'Season end date cannot be before season start date.';
+    }
+
+    return null;
+  }
+
   String _formatDisplayDate(DateTime date) {
     const months = <String>[
       'Jan',
@@ -266,9 +291,12 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
     if (_isSettingLocation || _isGettingLocation || !widget.canManageSettings) {
       return;
     }
-    if (_configuredSeasonStartDate == null ||
-        _configuredSeasonEndDate == null) {
-      _showSnack('Select season from and to dates before saving.');
+    final preValidationMessage = _validateSeasonDates(
+      seasonStart: _configuredSeasonStartDate,
+      seasonEnd: _configuredSeasonEndDate,
+    );
+    if (preValidationMessage != null) {
+      _showSnack(preValidationMessage);
       return;
     }
 
@@ -300,8 +328,14 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
     try {
       final seasonStart = _configuredSeasonStartDate;
       final seasonEnd = _configuredSeasonEndDate;
-      if (seasonStart == null || seasonEnd == null) {
-        throw Exception('Select season from and to dates before saving.');
+      final validationMessage = _validateSeasonDates(
+        seasonStart: seasonStart,
+        seasonEnd: seasonEnd,
+      );
+      if (validationMessage != null ||
+          seasonStart == null ||
+          seasonEnd == null) {
+        throw Exception(validationMessage ?? 'This field is required.');
       }
 
       final response = await AttendanceService.setAttendanceLocation(
@@ -658,25 +692,15 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                   final checkOutStr = checkOut != null
                       ? '${checkOut!.hour.toString().padLeft(2, '0')}:${checkOut!.minute.toString().padLeft(2, '0')}'
                       : null;
-                  if (seasonStart == null || seasonEnd == null) {
+                  final validationMessage = _validateSeasonDates(
+                    seasonStart: seasonStart,
+                    seasonEnd: seasonEnd,
+                  );
+                  if (validationMessage != null) {
                     ScaffoldMessenger.of(dialogContext)
                       ..hideCurrentSnackBar()
                       ..showSnackBar(
-                        const SnackBar(
-                          content: Text('Select season from and to dates.'),
-                        ),
-                      );
-                    return;
-                  }
-                  if (seasonEnd!.isBefore(seasonStart!)) {
-                    ScaffoldMessenger.of(dialogContext)
-                      ..hideCurrentSnackBar()
-                      ..showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            'Season end date cannot be before season start date.',
-                          ),
-                        ),
+                        SnackBar(content: Text(validationMessage)),
                       );
                     return;
                   }
