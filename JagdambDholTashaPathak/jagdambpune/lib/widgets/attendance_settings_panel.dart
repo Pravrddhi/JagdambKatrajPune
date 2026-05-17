@@ -42,6 +42,8 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
   int _configuredAllowedBeforeMinutes = 15;
   int _configuredAllowedAfterMinutes = 15;
   double _configuredMinimumPresentHours = 4.0;
+  DateTime? _configuredSeasonStartDate;
+  DateTime? _configuredSeasonEndDate;
   String? _qrPayload;
   String? _qrExpiry;
   bool _qrIsPermanent = false;
@@ -68,6 +70,90 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
     return hours.toStringAsFixed(1);
   }
 
+  DateTime? _parseApiDate(String? value) {
+    final raw = value?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return null;
+    return DateTime(parsed.year, parsed.month, parsed.day);
+  }
+
+  DateTime? _parseFirstApiDate(Map<String, dynamic> json, List<String> keys) {
+    DateTime? search(Map<String, dynamic> source, int depth) {
+      for (final key in keys) {
+        final parsed = _parseApiDate(source[key]?.toString());
+        if (parsed != null) return parsed;
+      }
+      if (depth <= 0) return null;
+      for (final value in source.values) {
+        if (value is Map) {
+          final parsed = search(Map<String, dynamic>.from(value), depth - 1);
+          if (parsed != null) return parsed;
+        }
+      }
+      return null;
+    }
+
+    return search(json, 3);
+  }
+
+  dynamic _firstValue(Map<String, dynamic> json, List<String> keys) {
+    for (final key in keys) {
+      final value = json[key];
+      if (value != null) return value;
+    }
+    return null;
+  }
+
+  String _formatApiDate(DateTime date) {
+    return '${date.year.toString().padLeft(4, '0')}-'
+        '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}';
+  }
+
+  String _formatDisplayDate(DateTime date) {
+    const months = <String>[
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${date.day.toString().padLeft(2, '0')} ${months[date.month - 1]} ${date.year}';
+  }
+
+  String get _seasonDateRangeLabel {
+    final start = _configuredSeasonStartDate;
+    final end = _configuredSeasonEndDate;
+    if (start == null || end == null) return 'Not set';
+    return '${_formatDisplayDate(start)} to ${_formatDisplayDate(end)}';
+  }
+
+  bool get _isWithinConfiguredSeason {
+    final start = _configuredSeasonStartDate;
+    final end = _configuredSeasonEndDate;
+    if (start == null || end == null) return false;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    return !today.isBefore(start) && !today.isAfter(end);
+  }
+
+  String get _seasonUnavailableMessage {
+    final start = _configuredSeasonStartDate;
+    final end = _configuredSeasonEndDate;
+    if (start == null || end == null) {
+      return 'Attendance season dates are not configured yet.';
+    }
+    return 'Attendance is only allowed between ${_formatDisplayDate(start)} and ${_formatDisplayDate(end)}.';
+  }
+
   TimeOfDay? _parseTimeOfDay(String hhmm) {
     final parts = hhmm.split(':');
     if (parts.length < 2) return null;
@@ -86,8 +172,24 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
 
     try {
       final response = await AttendanceService.fetchAttendanceLocation();
-      final lat = double.tryParse(response['location_lat']?.toString() ?? '');
-      final lng = double.tryParse(response['location_lng']?.toString() ?? '');
+      final lat = double.tryParse(
+        _firstValue(response, const <String>[
+              'location_lat',
+              'locationLat',
+              'latitude',
+              'lat',
+            ])?.toString() ??
+            '',
+      );
+      final lng = double.tryParse(
+        _firstValue(response, const <String>[
+              'location_lng',
+              'locationLng',
+              'longitude',
+              'lng',
+            ])?.toString() ??
+            '',
+      );
       final radius =
           int.tryParse(response['radius_meters']?.toString() ?? '') ?? 100;
       final checkIn = response['check_in_time']?.toString();
@@ -109,6 +211,22 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
             response['minimum_present_hours']?.toString() ?? '',
           ) ??
           double.tryParse(response['present_hours_required']?.toString() ?? '');
+      final seasonStart = _parseFirstApiDate(response, const <String>[
+        'season_start_date',
+        'seasonStartDate',
+        'season_start',
+        'season_from_date',
+        'seasonFromDate',
+        'from_date',
+      ]);
+      final seasonEnd = _parseFirstApiDate(response, const <String>[
+        'season_end_date',
+        'seasonEndDate',
+        'season_end',
+        'season_to_date',
+        'seasonToDate',
+        'to_date',
+      ]);
 
       if (!mounted) return;
       setState(() {
@@ -130,6 +248,8 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
         if (minimumPresentHours != null) {
           _configuredMinimumPresentHours = minimumPresentHours;
         }
+        _configuredSeasonStartDate = seasonStart;
+        _configuredSeasonEndDate = seasonEnd;
       });
     } catch (_) {
       // Leave panel visible even if settings are not configured yet.
@@ -144,6 +264,11 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
 
   Future<void> _setAttendanceLocation() async {
     if (_isSettingLocation || _isGettingLocation || !widget.canManageSettings) {
+      return;
+    }
+    if (_configuredSeasonStartDate == null ||
+        _configuredSeasonEndDate == null) {
+      _showSnack('Select season from and to dates before saving.');
       return;
     }
 
@@ -173,6 +298,12 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
     });
 
     try {
+      final seasonStart = _configuredSeasonStartDate;
+      final seasonEnd = _configuredSeasonEndDate;
+      if (seasonStart == null || seasonEnd == null) {
+        throw Exception('Select season from and to dates before saving.');
+      }
+
       final response = await AttendanceService.setAttendanceLocation(
         latitude: lat,
         longitude: lng,
@@ -182,6 +313,8 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
         allowedBeforeMinutes: _configuredAllowedBeforeMinutes,
         allowedAfterMinutes: _configuredAllowedAfterMinutes,
         minimumPresentHours: _configuredMinimumPresentHours,
+        seasonStartDate: _formatApiDate(seasonStart),
+        seasonEndDate: _formatApiDate(seasonEnd),
       );
 
       if (!mounted) return;
@@ -229,6 +362,8 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
     TimeOfDay? checkOut = _configuredCheckOutTime != null
         ? _parseTimeOfDay(_configuredCheckOutTime!)
         : null;
+    DateTime? seasonStart = _configuredSeasonStartDate;
+    DateTime? seasonEnd = _configuredSeasonEndDate;
 
     final settingsResult = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -382,6 +517,94 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                   ),
                   const SizedBox(height: 14),
                   const Text(
+                    'Season Dates',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Attendance QR generation and scanning will work only within this date range.',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.primaryMaroon,
+                          side: BorderSide(
+                            color: AppColors.primaryMaroon.withValues(
+                              alpha: 0.35,
+                            ),
+                          ),
+                        ),
+                        onPressed: () async {
+                          final now = DateTime.now();
+                          final picked = await showDatePicker(
+                            context: dialogContext,
+                            initialDate: seasonStart ?? now,
+                            firstDate: DateTime(now.year - 5),
+                            lastDate: DateTime(now.year + 10),
+                          );
+                          if (picked != null) {
+                            setDialogState(() {
+                              seasonStart = DateTime(
+                                picked.year,
+                                picked.month,
+                                picked.day,
+                              );
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.event),
+                        label: Text(
+                          seasonStart == null
+                              ? 'Season from'
+                              : _formatDisplayDate(seasonStart!),
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.primaryMaroon,
+                          side: BorderSide(
+                            color: AppColors.primaryMaroon.withValues(
+                              alpha: 0.35,
+                            ),
+                          ),
+                        ),
+                        onPressed: () async {
+                          final now = DateTime.now();
+                          final picked = await showDatePicker(
+                            context: dialogContext,
+                            initialDate: seasonEnd ?? seasonStart ?? now,
+                            firstDate: DateTime(now.year - 5),
+                            lastDate: DateTime(now.year + 10),
+                          );
+                          if (picked != null) {
+                            setDialogState(() {
+                              seasonEnd = DateTime(
+                                picked.year,
+                                picked.month,
+                                picked.day,
+                              );
+                            });
+                          }
+                        },
+                        icon: const Icon(Icons.event_available),
+                        label: Text(
+                          seasonEnd == null
+                              ? 'Season to'
+                              : _formatDisplayDate(seasonEnd!),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
                     'Attendance Radius (meters)',
                     style: TextStyle(
                       color: AppColors.primaryMaroon,
@@ -435,6 +658,28 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                   final checkOutStr = checkOut != null
                       ? '${checkOut!.hour.toString().padLeft(2, '0')}:${checkOut!.minute.toString().padLeft(2, '0')}'
                       : null;
+                  if (seasonStart == null || seasonEnd == null) {
+                    ScaffoldMessenger.of(dialogContext)
+                      ..hideCurrentSnackBar()
+                      ..showSnackBar(
+                        const SnackBar(
+                          content: Text('Select season from and to dates.'),
+                        ),
+                      );
+                    return;
+                  }
+                  if (seasonEnd!.isBefore(seasonStart!)) {
+                    ScaffoldMessenger.of(dialogContext)
+                      ..hideCurrentSnackBar()
+                      ..showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Season end date cannot be before season start date.',
+                          ),
+                        ),
+                      );
+                    return;
+                  }
 
                   Navigator.pop(dialogContext, <String, dynamic>{
                     'radius': radius,
@@ -443,6 +688,8 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                     'minimumPresentHours': minimumPresentHours,
                     'checkInStr': checkInStr,
                     'checkOutStr': checkOutStr,
+                    'seasonStart': seasonStart,
+                    'seasonEnd': seasonEnd,
                   });
                 },
                 child: const Text('Save'),
@@ -453,11 +700,7 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
       ),
     );
 
-    final lat = _configuredLat;
-    final lng = _configuredLng;
-    if (settingsResult != null && (lat == null || lng == null)) {
-      _showSnack('Set current location first before saving settings.');
-    } else if (settingsResult != null && lat != null && lng != null) {
+    if (settingsResult != null) {
       final radius = settingsResult['radius'] as int;
       final allowedBefore = settingsResult['allowedBefore'] as int;
       final allowedAfter = settingsResult['allowedAfter'] as int;
@@ -465,11 +708,21 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
           settingsResult['minimumPresentHours'] as double;
       final checkInStr = settingsResult['checkInStr'] as String?;
       final checkOutStr = settingsResult['checkOutStr'] as String?;
+      final seasonStart = settingsResult['seasonStart'] as DateTime;
+      final seasonEnd = settingsResult['seasonEnd'] as DateTime;
 
       if (mounted) {
         setState(() => _isSavingSettings = true);
       }
       try {
+        var lat = _configuredLat;
+        var lng = _configuredLng;
+        if (lat == null || lng == null) {
+          final position = await AttendanceService.getCurrentPosition();
+          lat = position.latitude;
+          lng = position.longitude;
+        }
+
         final response = await AttendanceService.setAttendanceLocation(
           latitude: lat,
           longitude: lng,
@@ -479,15 +732,21 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
           allowedBeforeMinutes: allowedBefore,
           allowedAfterMinutes: allowedAfter,
           minimumPresentHours: minimumPresentHours,
+          seasonStartDate: _formatApiDate(seasonStart),
+          seasonEndDate: _formatApiDate(seasonEnd),
         );
         if (mounted) {
           setState(() {
+            _configuredLat = lat;
+            _configuredLng = lng;
             _configuredRadiusMeters = radius;
             _configuredAllowedBeforeMinutes = allowedBefore;
             _configuredAllowedAfterMinutes = allowedAfter;
             _configuredMinimumPresentHours = minimumPresentHours;
             _configuredCheckInTime = checkInStr;
             _configuredCheckOutTime = checkOutStr;
+            _configuredSeasonStartDate = seasonStart;
+            _configuredSeasonEndDate = seasonEnd;
           });
         }
         _showSnack(response['message']?.toString() ?? 'Settings saved.');
@@ -513,6 +772,10 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
 
     if (targetLat == null || targetLng == null) {
       _showSnack('Attendance location is not configured by Pathak Admin yet.');
+      return;
+    }
+    if (!_isWithinConfiguredSeason) {
+      _showSnack(_seasonUnavailableMessage);
       return;
     }
 
@@ -702,9 +965,19 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                     child: Center(child: CircularProgressIndicator()),
                   )
                 : (_configuredLat == null || _configuredLng == null)
-                ? const Text(
-                    'Configured location is not set yet.',
-                    style: TextStyle(color: AppColors.primaryMaroon),
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Configured location is not set yet.',
+                        style: TextStyle(color: AppColors.primaryMaroon),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Season: $_seasonDateRangeLabel',
+                        style: const TextStyle(color: AppColors.primaryMaroon),
+                      ),
+                    ],
                   )
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -734,6 +1007,11 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                       const SizedBox(height: 4),
                       Text(
                         'Present if stayed at least: $_minimumPresentHoursLabel hour(s)',
+                        style: const TextStyle(color: AppColors.primaryMaroon),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Season: $_seasonDateRangeLabel',
                         style: const TextStyle(color: AppColors.primaryMaroon),
                       ),
                     ],
@@ -791,7 +1069,7 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
             ),
             const SizedBox(height: 4),
             const Text(
-              'Set check-in time, attendance window, minimum present hours, and radius.',
+              'Set check-in time, attendance window, minimum present hours, season dates, and radius.',
               style: TextStyle(
                 color: AppColors.primaryMaroon,
                 fontSize: 12,
@@ -805,7 +1083,8 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
               onPressed:
                   (_isGenerating ||
                       _configuredLat == null ||
-                      _configuredLng == null)
+                      _configuredLng == null ||
+                      !_isWithinConfiguredSeason)
                   ? null
                   : _generateAttendanceQr,
               style: ElevatedButton.styleFrom(
@@ -825,6 +1104,18 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                   : const Icon(Icons.qr_code),
               label: Text(_isGenerating ? 'Generating...' : 'Generate QR'),
             ),
+            if (!_isWithinConfiguredSeason) ...[
+              const SizedBox(height: 8),
+              Text(
+                _seasonUnavailableMessage,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: AppColors.primaryMaroon,
+                  fontSize: 12,
+                  height: 1.35,
+                ),
+              ),
+            ],
             if (_qrPayload != null) ...[
               const SizedBox(height: 18),
               Center(
