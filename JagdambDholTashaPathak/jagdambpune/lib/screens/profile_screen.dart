@@ -264,8 +264,18 @@ class _UserDetailsCard extends StatelessWidget {
                 ),
                 onPressed: () {
                   // Placeholder until the update-profile flow is implemented.
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Update profile clicked!')),
+                  showDialog<void>(
+                    context: context,
+                    builder: (dialogContext) => AlertDialog(
+                      title: const Text('Message'),
+                      content: const Text('Update profile clicked!'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(dialogContext).pop(),
+                          child: const Text('OK'),
+                        ),
+                      ],
+                    ),
                   );
                 },
                 icon: const Icon(Icons.edit),

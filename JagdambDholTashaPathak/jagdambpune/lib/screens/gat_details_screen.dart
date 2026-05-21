@@ -213,7 +213,7 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
     );
     final seedController = TextEditingController();
     var reassign = false;
-    var dryRun = true;
+    var dryRun = false;
 
     final shouldSubmit = await showDialog<bool>(
       context: context,
@@ -336,6 +336,7 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
       if (!mounted) return;
 
       final message = result['message']?.toString() ?? 'Completed';
+      final auditId = result['audit_id'];
       final data = result['data'];
 
       await showDialog<void>(
@@ -358,6 +359,7 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                   children: [
                     Text(message),
                     const SizedBox(height: 12),
+                    Text('Audit ID: ${auditId ?? '-'}'),
                     Text('Year: ${resultData['year'] ?? '-'}'),
                     Text(
                       'Dry run: ${resultData['dry_run'] == true ? 'Yes' : 'No'}',
@@ -368,6 +370,7 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                     Text(
                       'Candidates: ${resultData['total_candidates'] ?? 0} | Assigned: ${resultData['total_assigned'] ?? 0}',
                     ),
+                    Text('Skipped: ${resultData['total_skipped'] ?? 0}'),
                     const SizedBox(height: 12),
                     const Text(
                       'Gat Summary',
@@ -377,14 +380,42 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                     if (gats.isEmpty)
                       const Text('No gat data returned')
                     else
-                      ...gats.map(
-                        (gat) => Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: Text(
-                            '${gat['gat_name'] ?? '-'}: +${gat['added_count'] ?? 0} (final ${gat['final_count'] ?? 0})',
+                      ...gats.map((gat) {
+                        final rawMembers = gat['members'];
+                        final members = rawMembers is List
+                            ? rawMembers
+                                  .whereType<Map>()
+                                  .map((e) => Map<String, dynamic>.from(e))
+                                  .toList()
+                            : <Map<String, dynamic>>[];
+
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${gat['gat_name'] ?? '-'}: +${gat['added_count'] ?? 0} (final ${gat['final_count'] ?? 0})',
+                              ),
+                              const SizedBox(height: 4),
+                              if (members.isEmpty)
+                                const Text(
+                                  'No member names returned',
+                                  style: TextStyle(color: Colors.black54),
+                                )
+                              else
+                                ...members.map((member) {
+                                  final name = member['name']
+                                      ?.toString()
+                                      .trim();
+                                  return Text(
+                                    '- ${name != null && name.isNotEmpty ? name : 'Unnamed member'}',
+                                  );
+                                }),
+                            ],
                           ),
-                        ),
-                      ),
+                        );
+                      }),
                   ],
                 ),
               ),
@@ -404,8 +435,18 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Error'),
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
       );
     } finally {
       if (mounted) {
@@ -424,8 +465,18 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
       pathakUsers = await ApiService.fetchAllUsers();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Error'),
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
       );
       return;
     }
@@ -474,7 +525,7 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                         ),
                         const SizedBox(height: 12),
                         const Text(
-                          'Select Gat Pramukh (optional)',
+                          'Select Gat Pramukh',
                           style: TextStyle(
                             color: AppColors.primaryMaroon,
                             fontWeight: FontWeight.w600,
@@ -591,6 +642,24 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                 ElevatedButton(
                   onPressed: () {
                     if (formKey.currentState?.validate() ?? false) {
+                      if (selectedGatPramukh == null) {
+                        showDialog<void>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('Error'),
+                            content: const Text(
+                              'Gat Pramukh is required for creating gat.',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(context).pop(),
+                                child: const Text('OK'),
+                              ),
+                            ],
+                          ),
+                        );
+                        return;
+                      }
                       Navigator.of(dialogContext).pop(true);
                     }
                   },
@@ -624,14 +693,34 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
 
       final message =
           result['message']?.toString() ?? 'Gat created successfully.';
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Success'),
+          content: Text(message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
       await _loadGats();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Error'),
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
       );
     } finally {
       if (mounted) {

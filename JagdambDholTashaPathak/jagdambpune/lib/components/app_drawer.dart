@@ -148,6 +148,41 @@ class AppDrawer extends StatelessWidget {
     return _permissionBool('document_approval', fallback: _isPathakAdmin);
   }
 
+  bool get _canUpdateUserGroup {
+    return _permissionBool('user_approval', fallback: _isPathakAdminOnly);
+  }
+
+  bool get _canManageTerms {
+    return _permissionBool('manage_terms', fallback: _isPathakAdminOnly);
+  }
+
+  bool get _showAdminAttendanceTab {
+    return _canSetAttendanceLocation || _canGenerateAttendanceQr;
+  }
+
+  bool get _showAdminUsersTab {
+    return _canUpdateUserGroup;
+  }
+
+  bool get _showAdminDocumentApprovalsTab {
+    return _canViewDocumentApprovals;
+  }
+
+  bool get _showAdminMaintenanceApprovalsTab {
+    return _canManageMaintenanceInventory ||
+        _canApproveMaintenanceEntries ||
+        _canCreateMaintenanceEvents ||
+        _canApproveMaintenanceCompletions;
+  }
+
+  bool get _showAdminMaintenanceAnalysisTab {
+    return _canViewMaintenanceAnalysis;
+  }
+
+  bool get _showAdminManageTermsTab {
+    return _canManageTerms;
+  }
+
   void _navigateToMaintenance(BuildContext context) {
     Navigator.pop(context);
     final nested = userDetails?['data'];
@@ -419,7 +454,8 @@ class AppDrawer extends StatelessWidget {
 
     return Drawer(
       backgroundColor: AppColors.background,
-      child: Column(
+      child: ListView(
+        padding: EdgeInsets.zero,
         children: [
           UserAccountsDrawerHeader(
             decoration: const BoxDecoration(color: AppColors.primaryMaroon),
@@ -454,12 +490,13 @@ class AppDrawer extends StatelessWidget {
           if (!_isVadak && _isAdminLike)
             Consumer<RequestCountsProvider>(
               builder: (context, provider, _) {
-                return _buildDrawerItemWithBadge(
+                return _buildAdminSection(
                   context,
-                  icon: Icons.admin_panel_settings,
-                  title: 'Admin',
-                  count: provider.counts.total,
-                  onTap: () => _navigateToAdminOperations(context),
+                  totalCount: provider.counts.total,
+                  documentApprovalsCount: provider.counts.documentApprovals,
+                  maintenanceCount:
+                      provider.counts.maintenanceRequests +
+                      provider.counts.completionRequests,
                 );
               },
             ),
@@ -517,7 +554,121 @@ class AppDrawer extends StatelessWidget {
               count: 0,
               onTap: () => _navigateToComingSoon(context, 'Finance'),
             ),
-          const Spacer(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAdminSection(
+    BuildContext context, {
+    required int totalCount,
+    required int documentApprovalsCount,
+    required int maintenanceCount,
+  }) {
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        leading: const Icon(
+          Icons.admin_panel_settings,
+          color: AppColors.primaryMaroon,
+        ),
+        iconColor: AppColors.primaryMaroon,
+        collapsedIconColor: AppColors.primaryMaroon,
+        title: Row(
+          children: [
+            const Text(
+              'Admin',
+              style: TextStyle(color: AppColors.primaryMaroon),
+            ),
+            if (totalCount > 0) ...[
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppColors.errorRed,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  totalCount.toString(),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+        children: [
+          if (_showAdminAttendanceTab)
+            ListTile(
+              contentPadding: const EdgeInsets.only(left: 72, right: 16),
+              leading: const Icon(
+                Icons.qr_code_2,
+                color: AppColors.primaryMaroon,
+              ),
+              title: const Text(
+                'Attendance',
+                style: TextStyle(color: AppColors.primaryMaroon),
+              ),
+              onTap: () =>
+                  _navigateToAdminOperations(context, initialTabIndex: 0),
+            ),
+          if (_showAdminUsersTab)
+            ListTile(
+              contentPadding: const EdgeInsets.only(left: 72, right: 16),
+              leading: const Icon(Icons.group, color: AppColors.primaryMaroon),
+              title: const Text(
+                'Users',
+                style: TextStyle(color: AppColors.primaryMaroon),
+              ),
+              onTap: () =>
+                  _navigateToAdminOperations(context, initialTabIndex: 1),
+            ),
+          if (_showAdminDocumentApprovalsTab)
+            _buildAdminSubItemWithBadge(
+              icon: Icons.badge,
+              title: 'Document Approvals',
+              count: documentApprovalsCount,
+              onTap: () =>
+                  _navigateToAdminOperations(context, initialTabIndex: 2),
+              contentPadding: const EdgeInsets.only(left: 72, right: 16),
+            ),
+          if (_showAdminMaintenanceApprovalsTab)
+            _buildAdminSubItemWithBadge(
+              icon: Icons.build_circle,
+              title: 'Maintenance Approvals',
+              count: maintenanceCount,
+              onTap: () =>
+                  _navigateToAdminOperations(context, initialTabIndex: 3),
+              contentPadding: const EdgeInsets.only(left: 72, right: 16),
+            ),
+          if (_showAdminMaintenanceAnalysisTab)
+            ListTile(
+              contentPadding: const EdgeInsets.only(left: 72, right: 16),
+              leading: const Icon(
+                Icons.analytics,
+                color: AppColors.primaryMaroon,
+              ),
+              title: const Text(
+                'Maintenance Analysis',
+                style: TextStyle(color: AppColors.primaryMaroon),
+              ),
+              onTap: () =>
+                  _navigateToAdminOperations(context, initialTabIndex: 4),
+            ),
+          if (_showAdminManageTermsTab)
+            ListTile(
+              contentPadding: const EdgeInsets.only(left: 72, right: 16),
+              leading: const Icon(Icons.rule, color: AppColors.primaryMaroon),
+              title: const Text(
+                'Manage Terms',
+                style: TextStyle(color: AppColors.primaryMaroon),
+              ),
+              onTap: () =>
+                  _navigateToAdminOperations(context, initialTabIndex: 5),
+            ),
         ],
       ),
     );
@@ -530,8 +681,47 @@ class AppDrawer extends StatelessWidget {
     required String title,
     required int count,
     required VoidCallback onTap,
+    EdgeInsetsGeometry? contentPadding,
   }) {
     return ListTile(
+      contentPadding: contentPadding,
+      leading: Icon(icon, color: AppColors.primaryMaroon),
+      title: Row(
+        children: [
+          Text(title, style: const TextStyle(color: AppColors.primaryMaroon)),
+          if (count > 0) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.errorRed,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                count.toString(),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+      onTap: onTap,
+    );
+  }
+
+  Widget _buildAdminSubItemWithBadge({
+    required IconData icon,
+    required String title,
+    required int count,
+    required VoidCallback onTap,
+    EdgeInsetsGeometry? contentPadding,
+  }) {
+    return ListTile(
+      contentPadding: contentPadding,
       leading: Icon(icon, color: AppColors.primaryMaroon),
       title: Row(
         children: [

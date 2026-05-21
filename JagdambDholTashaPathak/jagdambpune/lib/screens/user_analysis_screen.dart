@@ -112,9 +112,19 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('PDF generation failed: $e')));
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Error'),
+            content: Text('PDF generation failed: $e'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _isGeneratingPdf = false);

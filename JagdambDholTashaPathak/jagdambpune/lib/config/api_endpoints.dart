@@ -9,10 +9,10 @@ class ApiEndpoints {
   // Base URL for API requests.
   // Override with: --dart-define=API_BASE_URL=https://your-domain/api
   // This allows separate dev/prod builds without code edits.
-  static const String _defaultBaseUrl = AppConfig.defaultApiBaseUrl;
+  static final String _defaultBaseUrl = AppConfig.defaultApiBaseUrl;
   static const String baseUrlFromDefine = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: _defaultBaseUrl,
+    defaultValue: '',
   );
   static String get baseUrl {
     final normalized = baseUrlFromDefine.trim();
@@ -258,6 +258,13 @@ class ApiEndpoints {
 
   /// Fetch all assignable groups for pathak admin
   static final String fetchGroups = '$baseUrl/groups/';
+
+  /// Get home screen photos for logged-in user's pathak
+  static final String homeScreenPhotos = '$baseUrl/home-screen/photos/';
+
+  /// Manage home screen photos (pathak admin)
+  static final String homeScreenPhotosManage =
+      '$baseUrl/home-screen/photos/manage/';
 
   /// Base endpoint for a specific user by id (api/user/<int:id>/)
   static final String userByIdBase = '$baseUrl/user';

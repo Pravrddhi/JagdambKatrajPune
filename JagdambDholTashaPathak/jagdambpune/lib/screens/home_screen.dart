@@ -17,6 +17,7 @@ import '../services/user_service.dart';
 import '../components/emergency_contact_dialog.dart';
 import '../providers/notification_provider.dart';
 import '../config/api_endpoints.dart';
+import '../navigation/app_route_observer.dart';
 import '../services/fcm_service.dart';
 import '../services/notification_socket_service.dart';
 import '../services/maintenance_service.dart';
@@ -51,7 +52,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen>
+    with TickerProviderStateMixin, WidgetsBindingObserver, RouteAware {
   static const String _showEmergencyAfterFirstLoginKey =
       'show_emergency_after_first_login';
 
@@ -68,25 +70,41 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late final AnimationController _fabAnimationController;
   late final Animation<double> _fabAnimation;
 
-  final List<String> _motivationalSayings = const [
-    'Practice with discipline today, perform with confidence tomorrow.',
-    'Team rhythm is stronger than individual speed.',
-    'Small daily effort builds unstoppable performance.',
-    'Consistency beats intensity when repeated every day.',
-    'Respect the beat, trust the team, enjoy the journey.',
-  ];
-  late final PageController _sayingsPageController;
-  Timer? _sayingsTimer;
+  List<Map<String, dynamic>> _homeScreenSlides = <Map<String, dynamic>>[];
+  late final PageController _homePhotosPageController;
+  Timer? _homePhotosTimer;
+  bool _isLoadingHomePhotos = false;
   Timer? _pushSetupRetryTimer;
-  int _currentSayingIndex = 0;
+  int _currentHomePhotoIndex = 0;
   NotificationSocketService? _notificationSocketService;
   final FCMService _fcmService = FCMService();
   int _pushSetupRetryCount = 0;
+  ModalRoute<dynamic>? _subscribedRoute;
+
+  // Backward-compatibility shims for hot-reload sessions that may still
+  // reference older motivation field names.
+  // ignore: unused_element
+  PageController get _sayingsPageController => _homePhotosPageController;
+  // ignore: unused_element
+  Timer? get _sayingsTimer => _homePhotosTimer;
+  // ignore: unused_element
+  int get _currentSayingIndex => _currentHomePhotoIndex;
+  // ignore: unused_element
+  set _currentSayingIndex(int value) {
+    _currentHomePhotoIndex = value;
+  }
+
+  // ignore: unused_element
+  void _startSayingsAutoScroll() => _startHomePhotosAutoScroll();
+  // ignore: unused_element
+  Widget _buildMotivationalSayingsPanel({required bool isCompact}) =>
+      _buildHomePhotosPanel(isCompact: isCompact);
 
   static const int _maxPushSetupRetries = 3;
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     // Initialize FAB menu animations
     _fabAnimationController = AnimationController(
@@ -98,34 +116,208 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       curve: Curves.easeInOut,
     );
 
-    _sayingsPageController = PageController();
-    _startSayingsAutoScroll();
+    _homePhotosPageController = PageController();
+    _startHomePhotosAutoScroll();
 
     // Start user initialization workflow
     _initializeUser();
   }
 
-  void _startSayingsAutoScroll() {
-    _sayingsTimer?.cancel();
-    _sayingsTimer = Timer.periodic(const Duration(seconds: 6), (_) {
-      if (!mounted || !_sayingsPageController.hasClients) {
+  void _startHomePhotosAutoScroll() {
+    _homePhotosTimer?.cancel();
+    _homePhotosTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (!mounted || !_homePhotosPageController.hasClients) {
+        return;
+      }
+      if (_homeScreenSlides.length <= 1) {
         return;
       }
 
-      final next = (_currentSayingIndex + 1) % _motivationalSayings.length;
-      _sayingsPageController.animateToPage(
-        next,
-        duration: const Duration(milliseconds: 700),
-        curve: Curves.easeInOut,
-      );
-      _currentSayingIndex = next;
+      final next = (_currentHomePhotoIndex + 1) % _homeScreenSlides.length;
+      try {
+        _homePhotosPageController.animateToPage(
+          next,
+          duration: const Duration(milliseconds: 700),
+          curve: Curves.easeInOut,
+        );
+        _currentHomePhotoIndex = next;
+      } catch (_) {
+        // If controller/view gets disposed during teardown on web, stop timer.
+        _homePhotosTimer?.cancel();
+      }
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!mounted) return;
+
+    if (state == AppLifecycleState.resumed) {
+      _startHomePhotosAutoScroll();
+      unawaited(_loadHomeScreenPhotos());
+      return;
+    }
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _homePhotosTimer?.cancel();
+    }
   }
 
   Future<void> _syncNotificationsFromBackend() async {
     if (!mounted) return;
     final provider = context.read<NotificationProvider>();
     await provider.fetchFromBackend(page: 1, pageSize: 20);
+  }
+
+  void _refreshPhotosOnHomeVisit() {
+    if (!mounted) return;
+    unawaited(_loadHomeScreenPhotos());
+  }
+
+  @override
+  void didPush() {
+    _refreshPhotosOnHomeVisit();
+  }
+
+  @override
+  void didPopNext() {
+    _refreshPhotosOnHomeVisit();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final route = ModalRoute.of(context);
+    if (route == null || identical(route, _subscribedRoute)) {
+      return;
+    }
+
+    if (_subscribedRoute != null) {
+      appRouteObserver.unsubscribe(this);
+    }
+    appRouteObserver.subscribe(this, route);
+    _subscribedRoute = route;
+  }
+
+  String _resolvePhotoUrl(String? rawUrl) {
+    final value = rawUrl?.trim() ?? '';
+    if (value.isEmpty) {
+      return '';
+    }
+
+    Uri configuredRoot() {
+      final root = Uri.parse(ApiEndpoints.apiRootUrl);
+      final host = root.host.trim().toLowerCase();
+      final isLocal =
+          host == 'localhost' || host == '127.0.0.1' || host == '::1';
+      final hasNonStandardPort =
+          root.hasPort && root.port != 80 && root.port != 443;
+
+      if (root.scheme == 'http' && !isLocal && !hasNonStandardPort) {
+        return root.replace(scheme: 'https');
+      }
+      return root;
+    }
+
+    String fromConfiguredRoot({required String path, String? query}) {
+      final root = configuredRoot();
+      final normalizedPath = path.startsWith('/') ? path : '/$path';
+      final resolved = root.resolve(normalizedPath);
+      if (query == null || query.isEmpty) {
+        return resolved.toString();
+      }
+      return resolved.replace(query: query).toString();
+    }
+
+    final parsed = Uri.tryParse(value);
+    if (parsed != null && parsed.hasScheme) {
+      return value;
+    }
+
+    if (value.startsWith('/media/')) {
+      return fromConfiguredRoot(path: value);
+    }
+
+    final base = configuredRoot();
+    return base.resolve(value).toString();
+  }
+
+  List<Map<String, dynamic>> _extractHomeSlides(Map<String, dynamic> payload) {
+    final carousel = payload['carousel'];
+    if (carousel is Map<String, dynamic>) {
+      final slides = carousel['slides'];
+      if (slides is List) {
+        return slides
+            .whereType<Map>()
+            .map((e) {
+              final normalized = Map<String, dynamic>.from(e);
+              normalized['image_url'] = _resolvePhotoUrl(
+                normalized['image_url']?.toString(),
+              );
+              return normalized;
+            })
+            .where((slide) {
+              final imageUrl = slide['image_url']?.toString().trim() ?? '';
+              return imageUrl.isNotEmpty;
+            })
+            .toList();
+      }
+    }
+
+    final photos = payload['photos'];
+    if (photos is List) {
+      return photos
+          .whereType<Map>()
+          .map((e) {
+            final normalized = Map<String, dynamic>.from(e);
+            normalized['image_url'] = _resolvePhotoUrl(
+              normalized['image_url']?.toString(),
+            );
+            return normalized;
+          })
+          .where((photo) {
+            final imageUrl = photo['image_url']?.toString().trim() ?? '';
+            return imageUrl.isNotEmpty;
+          })
+          .toList();
+    }
+
+    return <Map<String, dynamic>>[];
+  }
+
+  Future<void> _loadHomeScreenPhotos() async {
+    if (_isLoadingHomePhotos) return;
+    if (mounted) {
+      setState(() {
+        _isLoadingHomePhotos = true;
+      });
+    }
+
+    try {
+      final response = await ApiService.fetchHomeScreenPhotos();
+      final slides = _extractHomeSlides(response);
+      if (!mounted) return;
+      setState(() {
+        _homeScreenSlides = slides;
+        if (_currentHomePhotoIndex >= _homeScreenSlides.length) {
+          _currentHomePhotoIndex = 0;
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _homeScreenSlides = <Map<String, dynamic>>[];
+        _currentHomePhotoIndex = 0;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingHomePhotos = false;
+        });
+      }
+    }
   }
 
   Future<void> _loadMaintenanceDays() async {
@@ -582,6 +774,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       });
 
       await _loadMaintenanceDays();
+      await _loadHomeScreenPhotos();
 
       return true;
     } catch (e) {
@@ -591,6 +784,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _userDetails = null;
         _events = [];
         _maintenanceDays = <MaintenanceEvent>[];
+        _homeScreenSlides = <Map<String, dynamic>>[];
+        _currentHomePhotoIndex = 0;
       });
       return false;
     } finally {
@@ -623,15 +818,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     DateTime? submitLoaderStart;
 
     if (event.isClosedForUserAction) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text(
-              'This maintenance day is closed. Completion can only be handled automatically for the current day.',
-            ),
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Message'),
+          content: const Text(
+            'This maintenance day is closed. Completion can only be handled automatically for the current day.',
           ),
-        );
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
       return;
     }
 
@@ -654,17 +855,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           (request) => request.status.toLowerCase() == 'pending',
         );
         if (!mounted) return;
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(
-              content: Text(
-                hasPending
-                    ? 'Completion already submitted and pending approval for this day.'
-                    : 'Completion already approved for this day.',
-              ),
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Message'),
+            content: Text(
+              hasPending
+                  ? 'Completion already submitted and pending approval for this day.'
+                  : 'Completion already approved for this day.',
             ),
-          );
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
         return;
       }
 
@@ -743,23 +950,39 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       );
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(
-              response['message']?.toString() ??
-                  'Completion request submitted successfully.',
-            ),
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Success'),
+          content: Text(
+            response['message']?.toString() ??
+                'Completion request submitted successfully.',
           ),
-        );
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
 
       await _refreshEventsSection();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(e.toString())));
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Error'),
+          content: Text(e.toString()),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
     } finally {
       if (submitLoaderStart != null) {
         final elapsedMs = DateTime.now()
@@ -1210,6 +1433,37 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         rawStatus.contains('pending');
   }
 
+  bool _isUpcomingMirvnuk(Map<String, dynamic> event) {
+    final status = event['status'] is int
+        ? event['status'] as int
+        : int.tryParse(event['status']?.toString() ?? '0') ?? 0;
+
+    // Canceled and completed events are not upcoming.
+    if (status == 3 || status == 4) {
+      return false;
+    }
+
+    final date = event['date']?.toString().trim() ?? '';
+    if (date.isEmpty) {
+      return true;
+    }
+
+    final eventDate = DateTime.tryParse(date);
+    if (eventDate == null) {
+      return true;
+    }
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final normalizedEventDate = DateTime(
+      eventDate.year,
+      eventDate.month,
+      eventDate.day,
+    );
+
+    return !normalizedEventDate.isBefore(today);
+  }
+
   String? get _currentGatName {
     final details = _userDetails;
     if (details == null) return null;
@@ -1289,6 +1543,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return _permissionBool('document_approval', fallback: _isPathakAdmin);
   }
 
+  bool get _canManageHomeScreenPhotos {
+    return _permissionBool('homescreenphotomanage');
+  }
+
   bool get _canAccessAttendance {
     return _userDetails != null;
   }
@@ -1331,6 +1589,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _canApproveMaintenanceCompletions ||
         _permissionBool('document_approval') ||
         _permissionBool('manage_terms') ||
+        _canManageHomeScreenPhotos ||
         _isPathakAdmin;
   }
 
@@ -1397,8 +1656,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           canDownloadAttendanceQr: _canDownloadAttendanceQr,
           canSetAttendanceLocation: _canSetAttendanceLocation,
           canViewAttendanceByUser: _canViewAttendanceByUser,
-          isPathakAdmin: _isPathakAdmin,
           canViewDocumentApprovals: _canViewDocumentApprovals,
+          isPathakAdmin: _isPathakAdmin,
           canManageMaintenanceInventory: _canManageMaintenanceInventory,
           canApproveMaintenanceEntries: _canApproveMaintenanceEntries,
           canCreateMaintenanceEvents: _canCreateMaintenanceEvents,
@@ -1412,11 +1671,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               '${_userDetails?['first_name'] ?? ''} ${_userDetails?['last_name'] ?? ''}'
                   .trim(),
           userInstrument: _userDetails?['instrument']?.toString(),
+          showUsersStatusFilters: showStatusFilters,
           canManageTerms: _permissionBool(
             'manage_terms',
             fallback: _isPathakAdminOnly,
           ),
-          showUsersStatusFilters: showStatusFilters,
           canUpdateUserGroup: _permissionBool(
             'user_approval',
             fallback: _isPathakAdminOnly,
@@ -1637,7 +1896,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildMotivationalSayingsPanel({required bool isCompact}) {
+  Widget _buildHomePhotosPanel({required bool isCompact}) {
     return Container(
       width: double.infinity,
       padding: EdgeInsets.fromLTRB(
@@ -1666,13 +1925,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           Row(
             children: [
               Icon(
-                Icons.auto_awesome,
+                Icons.photo_library,
                 color: AppColors.primaryMaroon,
                 size: isCompact ? 16 : 18,
               ),
               SizedBox(width: isCompact ? 6 : 8),
               Text(
-                'Motivation Corner',
+                'Pathak Moments',
                 style: TextStyle(
                   color: AppColors.primaryMaroon,
                   fontWeight: FontWeight.w700,
@@ -1683,26 +1942,113 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           ),
           SizedBox(height: isCompact ? 8 : 10),
           Expanded(
-            child: PageView.builder(
-              controller: _sayingsPageController,
-              scrollDirection: Axis.vertical,
-              itemCount: _motivationalSayings.length,
-              onPageChanged: (index) => _currentSayingIndex = index,
-              itemBuilder: (_, index) {
-                return Center(
-                  child: Text(
-                    _motivationalSayings[index],
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: AppColors.primaryMaroon,
-                      fontSize: isCompact ? 16 : 18,
-                      fontWeight: FontWeight.w600,
-                      height: 1.35,
+            child: _isLoadingHomePhotos
+                ? const Center(
+                    child: CircularProgressIndicator(
+                      color: AppColors.accentYellow,
                     ),
+                  )
+                : _homeScreenSlides.isEmpty
+                ? Center(
+                    child: Text(
+                      'Welcome to ${AppConfig.appDisplayName}',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: AppColors.primaryMaroon,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  )
+                : Stack(
+                    children: [
+                      PageView.builder(
+                        controller: _homePhotosPageController,
+                        itemCount: _homeScreenSlides.length,
+                        onPageChanged: (index) {
+                          _currentHomePhotoIndex = index;
+                          if (mounted) setState(() {});
+                        },
+                        itemBuilder: (_, index) {
+                          final slide = _homeScreenSlides[index];
+                          final imageUrl =
+                              slide['image_url']?.toString().trim() ?? '';
+                          final caption =
+                              slide['caption']?.toString().trim() ?? '';
+
+                          return ClipRRect(
+                            borderRadius: BorderRadius.circular(10),
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Image.network(
+                                  imageUrl,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, __, ___) {
+                                    return Container(
+                                      color: Colors.black12,
+                                      alignment: Alignment.center,
+                                      child: const Text(
+                                        'Image unavailable',
+                                        style: TextStyle(
+                                          color: AppColors.primaryMaroon,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                                if (caption.isNotEmpty)
+                                  Align(
+                                    alignment: Alignment.bottomCenter,
+                                    child: Container(
+                                      width: double.infinity,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 8,
+                                      ),
+                                      color: Colors.black.withValues(
+                                        alpha: 0.45,
+                                      ),
+                                      child: Text(
+                                        caption,
+                                        style: const TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                      if (_homeScreenSlides.length > 1)
+                        Positioned(
+                          right: 8,
+                          bottom: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.35),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              '${_currentHomePhotoIndex + 1}/${_homeScreenSlides.length}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
-                );
-              },
-            ),
           ),
         ],
       ),
@@ -1769,11 +2115,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    if (_subscribedRoute != null) {
+      appRouteObserver.unsubscribe(this);
+      _subscribedRoute = null;
+    }
+    WidgetsBinding.instance.removeObserver(this);
     _notificationSocketService?.dispose().ignore();
     _fabAnimationController.dispose();
-    _sayingsTimer?.cancel();
+    _homePhotosTimer?.cancel();
     _pushSetupRetryTimer?.cancel();
-    _sayingsPageController.dispose();
+    _homePhotosPageController.dispose();
     super.dispose();
   }
 
@@ -1782,6 +2133,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final size = MediaQuery.of(context).size;
     final isCompact = size.width < 390 || size.height < 760;
     final hasScheduledMaintenanceDays = _maintenanceDays.isNotEmpty;
+    final hasUpcomingMirvnuks = _events.any(_isUpcomingMirvnuk);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -1905,7 +2257,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             SizedBox(height: isCompact ? 10 : 12),
                             Expanded(
                               flex: isCompact ? 5 : 6,
-                              child: _events.isNotEmpty
+                              child: hasUpcomingMirvnuks
                                   ? SingleChildScrollView(
                                       child: UpcomingEvents(
                                         events: _events,
@@ -1913,9 +2265,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                         onRefresh: _refreshEventsSection,
                                       ),
                                     )
-                                  : _buildMotivationalSayingsPanel(
-                                      isCompact: isCompact,
-                                    ),
+                                  : _buildHomePhotosPanel(isCompact: isCompact),
                             ),
                           ],
                         ),
@@ -1957,7 +2307,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             canDownloadAttendanceQr: _canDownloadAttendanceQr,
                             canSetAttendanceLocation: _canSetAttendanceLocation,
                             canViewByUserAttendance: _canViewAttendanceByUser,
-                            scanOnly: true,
                           ),
                         ),
                       );
@@ -2178,13 +2527,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     }
                                     if (targetGatId == null && mounted) {
                                       // ignore: use_build_context_synchronously
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
+                                      await showDialog<void>(
+                                        context: context,
+                                        builder: (dialogContext) => AlertDialog(
+                                          title: const Text('Error'),
+                                          content: const Text(
                                             'Could not load your gat info. Please try again.',
                                           ),
+                                          actions: [
+                                            TextButton(
+                                              onPressed: () => Navigator.of(
+                                                dialogContext,
+                                              ).pop(),
+                                              child: const Text('OK'),
+                                            ),
+                                          ],
                                         ),
                                       );
                                       return;

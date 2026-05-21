@@ -2255,7 +2255,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
   }
 
-  void _showSnack(String message) {
+  Future<void> _showSnack(String message) async {
     if (!mounted) return;
 
     final normalized = message.toLowerCase();
@@ -2277,11 +2277,19 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       }
     }
 
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    if (messenger == null) return;
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Message'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<T> _withApiLoader<T>(Future<T> Function() action) async {
