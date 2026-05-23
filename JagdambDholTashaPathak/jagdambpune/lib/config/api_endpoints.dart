@@ -124,6 +124,10 @@ class ApiEndpoints {
   static final String verifyDevicePhone =
       '$baseUrl/auth/device/verify-phone-device/';
 
+  /// Update device ID mapping by user id (no token required)
+  static final String updateDeviceByUser =
+      '$baseUrl/auth/device/update-by-user/';
+
   /// Terms and conditions list (pathak scoped)
   static final String termsAndConditions = '$baseUrl/terms-and-conditions/';
 
