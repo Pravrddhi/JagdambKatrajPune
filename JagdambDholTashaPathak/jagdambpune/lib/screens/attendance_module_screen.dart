@@ -18,6 +18,7 @@ import '../widgets/web_camera_qr_scanner.dart';
 
 class AttendanceModuleScreen extends StatefulWidget {
   final bool canGenerateQr;
+  final bool canDownloadAttendanceQr;
   final bool canSetAttendanceLocation;
   final bool canViewByUserAttendance;
   final bool isPathakAdmin;
@@ -26,6 +27,7 @@ class AttendanceModuleScreen extends StatefulWidget {
   const AttendanceModuleScreen({
     super.key,
     required this.canGenerateQr,
+    this.canDownloadAttendanceQr = false,
     required this.canSetAttendanceLocation,
     required this.canViewByUserAttendance,
     this.isPathakAdmin = false,
@@ -67,6 +69,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   int _configuredAllowedBeforeMinutes = 15;
   int _configuredAllowedAfterMinutes = 15;
   double _configuredMinimumPresentHours = 4.0;
+  DateTime? _configuredSeasonStartDate;
+  DateTime? _configuredSeasonEndDate;
 
   bool _isMarking = false;
   bool _hasMarkedFromCurrentScan = false;
@@ -234,6 +238,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
   bool get _shouldDisableCamera {
     if (!_isScanTabActive) return true;
+    if (!_isWithinConfiguredSeason) return true;
     if (_shouldBlockScannerForCheckoutCooldown) return true;
     if (_shouldShowCheckoutScannerUnlockCard && !_isCheckoutScannerUnlocked) {
       return true;
@@ -704,6 +709,84 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     return hours.toStringAsFixed(1);
   }
 
+  DateTime? _parseApiDate(String? value) {
+    final raw = value?.trim();
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return null;
+    return DateTime(parsed.year, parsed.month, parsed.day);
+  }
+
+  DateTime? _parseFirstApiDate(Map<String, dynamic> json, List<String> keys) {
+    DateTime? search(Map<String, dynamic> source, int depth) {
+      for (final key in keys) {
+        final parsed = _parseApiDate(source[key]?.toString());
+        if (parsed != null) return parsed;
+      }
+      if (depth <= 0) return null;
+      for (final value in source.values) {
+        if (value is Map) {
+          final parsed = search(Map<String, dynamic>.from(value), depth - 1);
+          if (parsed != null) return parsed;
+        }
+      }
+      return null;
+    }
+
+    return search(json, 3);
+  }
+
+  dynamic _firstValue(Map<String, dynamic> json, List<String> keys) {
+    for (final key in keys) {
+      final value = json[key];
+      if (value != null) return value;
+    }
+    return null;
+  }
+
+  String _formatDisplayDate(DateTime date) {
+    const months = <String>[
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${date.day.toString().padLeft(2, '0')} ${months[date.month - 1]} ${date.year}';
+  }
+
+  String get _seasonDateRangeLabel {
+    final start = _configuredSeasonStartDate;
+    final end = _configuredSeasonEndDate;
+    if (start == null || end == null) return 'Not set';
+    return '${_formatDisplayDate(start)} to ${_formatDisplayDate(end)}';
+  }
+
+  bool get _isWithinConfiguredSeason {
+    final start = _configuredSeasonStartDate;
+    final end = _configuredSeasonEndDate;
+    if (start == null || end == null) return false;
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    return !today.isBefore(start) && !today.isAfter(end);
+  }
+
+  String get _seasonUnavailableMessage {
+    final start = _configuredSeasonStartDate;
+    final end = _configuredSeasonEndDate;
+    if (start == null || end == null) {
+      return 'Attendance season dates are not configured yet.';
+    }
+    return 'Attendance is only allowed between ${_formatDisplayDate(start)} and ${_formatDisplayDate(end)}.';
+  }
+
   Future<void> _generateAttendanceQr() async {
     if (_isGenerating) return;
 
@@ -713,6 +796,10 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
     if (targetLat == null || targetLng == null) {
       _showSnack('Attendance location is not configured by Pathak Admin yet.');
+      return;
+    }
+    if (!_isWithinConfiguredSeason) {
+      _showSnack(_seasonUnavailableMessage);
       return;
     }
 
@@ -779,8 +866,24 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
     try {
       final response = await AttendanceService.fetchAttendanceLocation();
-      final lat = double.tryParse(response['location_lat']?.toString() ?? '');
-      final lng = double.tryParse(response['location_lng']?.toString() ?? '');
+      final lat = double.tryParse(
+        _firstValue(response, const <String>[
+              'location_lat',
+              'locationLat',
+              'latitude',
+              'lat',
+            ])?.toString() ??
+            '',
+      );
+      final lng = double.tryParse(
+        _firstValue(response, const <String>[
+              'location_lng',
+              'locationLng',
+              'longitude',
+              'lng',
+            ])?.toString() ??
+            '',
+      );
       final radius =
           int.tryParse(response['radius_meters']?.toString() ?? '') ?? 100;
       final checkIn = response['check_in_time']?.toString();
@@ -802,6 +905,22 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
             response['minimum_present_hours']?.toString() ?? '',
           ) ??
           double.tryParse(response['present_hours_required']?.toString() ?? '');
+      final seasonStart = _parseFirstApiDate(response, const <String>[
+        'season_start_date',
+        'seasonStartDate',
+        'season_start',
+        'season_from_date',
+        'seasonFromDate',
+        'from_date',
+      ]);
+      final seasonEnd = _parseFirstApiDate(response, const <String>[
+        'season_end_date',
+        'seasonEndDate',
+        'season_end',
+        'season_to_date',
+        'seasonToDate',
+        'to_date',
+      ]);
 
       if (!mounted) return;
       setState(() {
@@ -823,7 +942,21 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         if (minimumPresentHours != null) {
           _configuredMinimumPresentHours = minimumPresentHours;
         }
+        _configuredSeasonStartDate = seasonStart;
+        _configuredSeasonEndDate = seasonEnd;
+        if (seasonStart != null && seasonEnd != null) {
+          _calendarFocusDate = _clampMonthToSeason(_calendarFocusDate);
+          _selectedDate = _clampDateToSeason(_selectedDate);
+          _byUserFocusMonth = _clampMonthToSeason(_byUserFocusMonth);
+        }
       });
+      _syncScannerLifecycle();
+      if (seasonStart != null && seasonEnd != null) {
+        _loadMyAttendance();
+        if (widget.canViewByUserAttendance) {
+          _loadAttendanceByUser();
+        }
+      }
     } catch (_) {
       // Do not block UI if location is not configured yet.
     } finally {
@@ -837,6 +970,11 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
   Future<void> _markAttendance(String qrData) async {
     if (_isMarking || _hasMarkedFromCurrentScan) {
+      return;
+    }
+    if (!_isWithinConfiguredSeason) {
+      _pauseAllScanners();
+      _showSnack(_seasonUnavailableMessage);
       return;
     }
 
@@ -1209,6 +1347,49 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     return '${monthNames[dt.month - 1]} ${dt.year}';
   }
 
+  bool get _hasConfiguredSeason =>
+      _configuredSeasonStartDate != null && _configuredSeasonEndDate != null;
+
+  DateTime _clampDateToSeason(DateTime date) {
+    final start = _configuredSeasonStartDate;
+    final end = _configuredSeasonEndDate;
+    final normalized = _dateOnly(date);
+    if (start == null || end == null) return normalized;
+    if (normalized.isBefore(start)) return start;
+    if (normalized.isAfter(end)) return end;
+    return normalized;
+  }
+
+  DateTime _clampMonthToSeason(DateTime month) {
+    final start = _configuredSeasonStartDate;
+    final end = _configuredSeasonEndDate;
+    final normalized = DateTime(month.year, month.month, 1);
+    if (start == null || end == null) return normalized;
+    final seasonStartMonth = DateTime(start.year, start.month, 1);
+    final seasonEndMonth = DateTime(end.year, end.month, 1);
+    if (normalized.isBefore(seasonStartMonth)) return seasonStartMonth;
+    if (normalized.isAfter(seasonEndMonth)) return seasonEndMonth;
+    return normalized;
+  }
+
+  bool _isDateInConfiguredSeason(DateTime date) {
+    final start = _configuredSeasonStartDate;
+    final end = _configuredSeasonEndDate;
+    if (start == null || end == null) return false;
+    final normalized = _dateOnly(date);
+    return !normalized.isBefore(start) && !normalized.isAfter(end);
+  }
+
+  bool _canMoveMonth(DateTime currentMonth, int monthDelta) {
+    if (!_hasConfiguredSeason) return false;
+    final target = DateTime(
+      currentMonth.year,
+      currentMonth.month + monthDelta,
+      1,
+    );
+    return _clampMonthToSeason(target) == target;
+  }
+
   /// Renders [data] as a QR code and returns raw PNG bytes.
   Future<Uint8List?> _renderQrToPng(String data, {double size = 400}) async {
     try {
@@ -1297,21 +1478,28 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   }
 
   void _changeCalendarMonth(int monthDelta) {
-    final updated = DateTime(
-      _calendarFocusDate.year,
-      _calendarFocusDate.month + monthDelta,
-      1,
+    if (!_canMoveMonth(_calendarFocusDate, monthDelta)) return;
+    final updated = _clampMonthToSeason(
+      DateTime(
+        _calendarFocusDate.year,
+        _calendarFocusDate.month + monthDelta,
+        1,
+      ),
+    );
+    final maxSelectedDay = DateUtils.getDaysInMonth(
+      updated.year,
+      updated.month,
+    );
+    final selected = _clampDateToSeason(
+      DateTime(
+        updated.year,
+        updated.month,
+        _selectedDate.day > maxSelectedDay ? maxSelectedDay : _selectedDate.day,
+      ),
     );
     setState(() {
       _calendarFocusDate = updated;
-      _selectedDate = DateTime(
-        updated.year,
-        updated.month,
-        _selectedDate.day >
-                DateUtils.getDaysInMonth(updated.year, updated.month)
-            ? DateUtils.getDaysInMonth(updated.year, updated.month)
-            : _selectedDate.day,
-      );
+      _selectedDate = selected;
     });
     _loadMyAttendance();
   }
@@ -1396,6 +1584,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     if (_isLoadingMyAttendance) return;
 
     setState(() {
+      _calendarFocusDate = _clampMonthToSeason(_calendarFocusDate);
+      _selectedDate = _clampDateToSeason(_selectedDate);
       _isLoadingMyAttendance = true;
     });
 
@@ -1430,6 +1620,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     if (_isLoadingAttendanceByUser) return;
 
     setState(() {
+      _byUserFocusMonth = _clampMonthToSeason(_byUserFocusMonth);
       _isLoadingAttendanceByUser = true;
     });
 
@@ -1453,11 +1644,14 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   }
 
   void _changeByUserMonth(int monthDelta) {
+    if (!_canMoveMonth(_byUserFocusMonth, monthDelta)) return;
     setState(() {
-      _byUserFocusMonth = DateTime(
-        _byUserFocusMonth.year,
-        _byUserFocusMonth.month + monthDelta,
-        1,
+      _byUserFocusMonth = _clampMonthToSeason(
+        DateTime(
+          _byUserFocusMonth.year,
+          _byUserFocusMonth.month + monthDelta,
+          1,
+        ),
       );
     });
     _loadAttendanceByUser();
@@ -1504,6 +1698,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
     _attendanceByDate.forEach((date, status) {
       if (date.year != month.year || date.month != month.month) return;
+      if (!_isDateInConfiguredSeason(date)) return;
       final normalized = status.trim().toLowerCase();
       if (normalized == 'present' || normalized == 'p') {
         present++;
@@ -1607,6 +1802,16 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   }
 
   Widget _buildMyAttendanceTab() {
+    if (_isLoadingConfiguredLocation) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (!_hasConfiguredSeason) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Center(child: _buildSeasonUnavailableCard()),
+      );
+    }
+
     final selectedKey = _dateOnly(_selectedDate);
     final selectedStatus = _attendanceByDate[selectedKey];
     final monthCounts = _monthStatusCounts(_calendarFocusDate);
@@ -1617,6 +1822,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     final monthRecorded = monthPresent + monthAbsent + monthLate + monthOther;
 
     List<String> eventLoader(DateTime day) {
+      if (!_isDateInConfiguredSeason(day)) return <String>[];
       final status = _attendanceByDate[_dateOnly(day)];
       if (status == null || status.isEmpty) {
         return <String>[];
@@ -1668,7 +1874,9 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
               children: [
                 IconButton(
                   tooltip: 'Previous month',
-                  onPressed: _isLoadingMyAttendance
+                  onPressed:
+                      (_isLoadingMyAttendance ||
+                          !_canMoveMonth(_calendarFocusDate, -1))
                       ? null
                       : () => _changeCalendarMonth(-1),
                   icon: const Icon(Icons.chevron_left),
@@ -1686,7 +1894,9 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                 ),
                 IconButton(
                   tooltip: 'Next month',
-                  onPressed: _isLoadingMyAttendance
+                  onPressed:
+                      (_isLoadingMyAttendance ||
+                          !_canMoveMonth(_calendarFocusDate, 1))
                       ? null
                       : () => _changeCalendarMonth(1),
                   icon: const Icon(Icons.chevron_right),
@@ -1723,24 +1933,30 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           ),
           const SizedBox(height: 10),
           TableCalendar<String>(
-            firstDay: DateTime(2020, 1, 1),
-            lastDay: DateTime(2100, 12, 31),
-            focusedDay: _calendarFocusDate,
+            firstDay: _configuredSeasonStartDate!,
+            lastDay: _configuredSeasonEndDate!,
+            focusedDay: _clampDateToSeason(_calendarFocusDate),
             calendarFormat: CalendarFormat.month,
             availableCalendarFormats: const {CalendarFormat.month: 'Month'},
             headerVisible: false,
-            selectedDayPredicate: (day) => isSameDay(day, _selectedDate),
+            enabledDayPredicate: _isDateInConfiguredSeason,
+            selectedDayPredicate: (day) =>
+                _isDateInConfiguredSeason(day) && isSameDay(day, _selectedDate),
             eventLoader: eventLoader,
             onDaySelected: (selectedDay, focusedDay) {
+              if (!_isDateInConfiguredSeason(selectedDay)) return;
               setState(() {
-                _selectedDate = selectedDay;
-                _calendarFocusDate = focusedDay;
+                _selectedDate = _dateOnly(selectedDay);
+                _calendarFocusDate = _clampMonthToSeason(focusedDay);
               });
             },
             onPageChanged: (focusedDay) {
-              final normalized = DateTime(focusedDay.year, focusedDay.month, 1);
+              final normalized = _clampMonthToSeason(
+                DateTime(focusedDay.year, focusedDay.month, 1),
+              );
               setState(() {
                 _calendarFocusDate = normalized;
+                _selectedDate = _clampDateToSeason(_selectedDate);
               });
               _loadMyAttendance();
             },
@@ -1879,6 +2095,16 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   }
 
   Widget _buildAttendanceByUserTab() {
+    if (_isLoadingConfiguredLocation) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (!_hasConfiguredSeason) {
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Center(child: _buildSeasonUnavailableCard()),
+      );
+    }
+
     final currentMonthKey =
         '${_byUserFocusMonth.year}-${_byUserFocusMonth.month.toString().padLeft(2, '0')}';
 
@@ -2005,7 +2231,9 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
               children: [
                 IconButton(
                   tooltip: 'Previous month',
-                  onPressed: _isLoadingAttendanceByUser
+                  onPressed:
+                      (_isLoadingAttendanceByUser ||
+                          !_canMoveMonth(_byUserFocusMonth, -1))
                       ? null
                       : () => _changeByUserMonth(-1),
                   icon: const Icon(Icons.chevron_left),
@@ -2023,7 +2251,9 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                 ),
                 IconButton(
                   tooltip: 'Next month',
-                  onPressed: _isLoadingAttendanceByUser
+                  onPressed:
+                      (_isLoadingAttendanceByUser ||
+                          !_canMoveMonth(_byUserFocusMonth, 1))
                       ? null
                       : () => _changeByUserMonth(1),
                   icon: const Icon(Icons.chevron_right),
@@ -2122,7 +2352,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         children: [
           const Text(
             'QR can be generated only at the location configured by Pathak Admin, within the allowed radius.',
-            style: const TextStyle(
+            style: TextStyle(
               color: AppColors.primaryMaroon,
               fontSize: 13,
               height: 1.4,
@@ -2179,15 +2409,25 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                         'Present if stayed at least: $_minimumPresentHoursLabel hour(s)',
                         style: const TextStyle(color: AppColors.primaryMaroon),
                       ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Season: $_seasonDateRangeLabel',
+                        style: const TextStyle(color: AppColors.primaryMaroon),
+                      ),
                     ],
                   ),
           ),
           const SizedBox(height: 12),
+          if (!_isLoadingConfiguredLocation && !_isWithinConfiguredSeason) ...[
+            _buildSeasonUnavailableCard(),
+            const SizedBox(height: 12),
+          ],
           ElevatedButton.icon(
             onPressed:
                 (_isGenerating ||
                     _configuredLat == null ||
-                    _configuredLng == null)
+                    _configuredLng == null ||
+                    !_isWithinConfiguredSeason)
                 ? null
                 : _generateAttendanceQr,
             style: ElevatedButton.styleFrom(
@@ -2256,6 +2496,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                   ),
                 ),
               ),
+            ],
+            if (widget.canDownloadAttendanceQr) ...[
               const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
@@ -2290,8 +2532,72 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     );
   }
 
+  Widget _buildSeasonUnavailableCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: AppColors.primaryMaroon.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 58,
+            height: 58,
+            decoration: BoxDecoration(
+              color: AppColors.primaryMaroon.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.event_busy_rounded,
+              color: AppColors.primaryMaroon,
+              size: 32,
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Attendance Season Closed',
+            style: TextStyle(
+              color: AppColors.primaryMaroon,
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _seasonUnavailableMessage,
+            style: const TextStyle(
+              color: AppColors.primaryMaroon,
+              fontSize: 13,
+              height: 1.4,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildScanTab() {
     final isSecureWeb = _isSecureWebContext;
+
+    if (_isLoadingConfiguredLocation) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (!_isWithinConfiguredSeason) {
+      _pauseAllScanners();
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Center(child: _buildSeasonUnavailableCard()),
+      );
+    }
 
     if (_shouldBlockScannerForCheckoutCooldown) {
       _pauseAllScanners();

@@ -22,6 +22,7 @@ import 'screens/reset_pin.dart';
 import 'screens/splash_screen.dart';
 import 'config/app_config.dart';
 import 'theme/app_colors.dart';
+import 'navigation/app_route_observer.dart';
 import 'web/screens/registration_web_screen.dart';
 
 // Web-only FCM bridge (conditional compilation for web platform)
@@ -442,6 +443,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: _rootNavigatorKey,
+      navigatorObservers: [appRouteObserver],
       title: AppConfig.appTitle,
       theme: ThemeData(
         primaryColor: AppColors.primaryMaroon,

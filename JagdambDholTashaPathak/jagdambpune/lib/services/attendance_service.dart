@@ -211,6 +211,8 @@ class AttendanceService {
     int? allowedBeforeMinutes,
     int? allowedAfterMinutes,
     double? minimumPresentHours,
+    String? seasonStartDate,
+    String? seasonEndDate,
   }) async {
     final payload = <String, dynamic>{
       'pathak_id': ApiEndpoints.pathakId,
@@ -227,6 +229,10 @@ class AttendanceService {
         'allowed_minutes_after_check_in': allowedAfterMinutes,
       if (minimumPresentHours != null)
         'minimum_present_hours': minimumPresentHours,
+      if (seasonStartDate != null && seasonStartDate.trim().isNotEmpty)
+        'season_start_date': seasonStartDate.trim(),
+      if (seasonEndDate != null && seasonEndDate.trim().isNotEmpty)
+        'season_end_date': seasonEndDate.trim(),
     };
 
     final response = await AuthorizedApiService.sendWithAutoRefresh(
@@ -273,10 +279,42 @@ class AttendanceService {
         : <String, dynamic>{};
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
-      if (decoded['data'] is Map<String, dynamic>) {
-        return Map<String, dynamic>.from(decoded['data'] as Map);
+      Map<String, dynamic> asStringMap(dynamic value) {
+        if (value is Map) {
+          return Map<String, dynamic>.from(value);
+        }
+        return <String, dynamic>{};
       }
-      return decoded;
+
+      final topLevel = asStringMap(decoded);
+      final normalized = Map<String, dynamic>.from(topLevel);
+      var current = topLevel;
+      for (var depth = 0; depth < 3; depth += 1) {
+        Map<String, dynamic>? nestedMatch;
+        for (final key in <String>[
+          'data',
+          'settings',
+          'attendance_settings',
+          'attendance_location',
+          'location',
+        ]) {
+          final nested = asStringMap(current[key]);
+          if (nested.isNotEmpty) {
+            nestedMatch = nested;
+            break;
+          }
+        }
+        if (nestedMatch == null) {
+          break;
+        }
+        for (final entry in nestedMatch.entries) {
+          if (entry.value != null) {
+            normalized[entry.key] = entry.value;
+          }
+        }
+        current = nestedMatch;
+      }
+      return normalized;
     }
 
     throw Exception(

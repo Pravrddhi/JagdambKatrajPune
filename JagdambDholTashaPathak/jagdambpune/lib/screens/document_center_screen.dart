@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
@@ -29,7 +30,7 @@ class DocumentCenterScreen extends StatefulWidget {
 }
 
 class _DocumentCenterScreenState extends State<DocumentCenterScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   static const int _maxLongestEdge = 1600;
   static const int _targetMaxUploadBytes = 1500 * 1024;
 
@@ -65,10 +66,20 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
   late final TabController _userTabController;
   int _lastUserTabIndex = 0;
   int _idCardRefreshTick = 0;
+  bool _isViewDetached = false;
+
+  Future<void> _refreshFeatureFlags({bool force = false}) async {
+    if (!mounted || _isViewDetached) {
+      return;
+    }
+    await context.read<FeatureFlagsProvider>().fetchFeatureFlags(force: force);
+  }
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_refreshFeatureFlags(force: true));
     _userTabController = TabController(length: 2, vsync: this)
       ..addListener(_handleUserTabChange);
     if (widget.isPathakAdmin) {
@@ -79,6 +90,9 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
   }
 
   void _handleUserTabChange() {
+    if (!mounted || _isViewDetached) {
+      return;
+    }
     if (_userTabController.indexIsChanging) {
       return;
     }
@@ -99,11 +113,20 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _userTabController
       ..removeListener(_handleUserTabChange)
       ..dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _isViewDetached = state == AppLifecycleState.detached;
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_refreshFeatureFlags(force: true));
+    }
   }
 
   Future<void> _loadMyDocuments() async {
@@ -128,13 +151,18 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
   }
 
   void _scrollToUploadSection() {
+    if (!mounted || _isViewDetached) {
+      return;
+    }
     final ctx = _uploadSectionKey.currentContext;
-    if (ctx != null) {
-      Scrollable.ensureVisible(
-        ctx,
-        duration: const Duration(milliseconds: 400),
-        curve: Curves.easeInOut,
-      );
+    if (ctx == null) {
+      return;
+    }
+
+    try {
+      Scrollable.ensureVisible(ctx, duration: Duration.zero);
+    } catch (_) {
+      // Ignore if widget tree is being torn down during navigation.
     }
   }
 
@@ -251,7 +279,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
         final rawName = result.value.trim();
         final convertedBytes = _toOptimizedJpegBytes(result.key);
         if (convertedBytes == null) {
-          _showSnackBar('Only JPG and JPEG images are supported.');
+          _showMessageDialog('Only JPG and JPEG images are supported.');
           return;
         }
         final normalizedName = _ensureJpegFileName(
@@ -278,7 +306,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
       final bytes = await pickedFile.readAsBytes();
       final convertedBytes = _toOptimizedJpegBytes(bytes);
       if (convertedBytes == null) {
-        _showSnackBar('Only JPG and JPEG images are supported.');
+        _showMessageDialog('Only JPG and JPEG images are supported.');
         return;
       }
       final normalizedFileName = _ensureJpegFileName(
@@ -296,7 +324,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
         _selectedFileName = normalizedFileName;
       });
     } catch (error) {
-      _showSnackBar(error.toString());
+      _showMessageDialog(error.toString());
     } finally {
       if (mounted) {
         setState(() {
@@ -311,7 +339,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
       return;
     }
     if (_selectedBytes == null || _selectedFileName == null) {
-      _showSnackBar('Please select a JPG or JPEG image first.');
+      _showMessageDialog('Please select a JPG or JPEG image first.');
       return;
     }
 
@@ -344,9 +372,11 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
         _loadMyDocuments();
       }
 
-      _showSnackBar(response['message']?.toString() ?? 'Document uploaded.');
+      _showMessageDialog(
+        response['message']?.toString() ?? 'Document uploaded.',
+      );
     } catch (error) {
-      _showSnackBar(error.toString().replaceFirst('Exception: ', ''));
+      _showMessageDialog(error.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) {
         setState(() {
@@ -356,14 +386,24 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
     }
   }
 
-  void _showSnackBar(String message) {
-    if (!mounted) {
+  Future<void> _showMessageDialog(String message) async {
+    if (!mounted || _isViewDetached) {
       return;
     }
 
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Message'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadAdminDocuments({int page = 1}) async {
@@ -405,7 +445,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
         _adminDocuments = items;
       });
     } catch (error) {
-      _showSnackBar(error.toString().replaceFirst('Exception: ', ''));
+      _showMessageDialog(error.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) {
         setState(() {
@@ -418,19 +458,19 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
   Future<void> _openDocumentUrl(String url) async {
     final trimmed = _resolveDocumentUrl(url);
     if (trimmed.isEmpty) {
-      _showSnackBar('Document URL is not available.');
+      _showMessageDialog('Document URL is not available.');
       return;
     }
 
     final uri = Uri.tryParse(trimmed);
     if (uri == null) {
-      _showSnackBar('Invalid document URL.');
+      _showMessageDialog('Invalid document URL.');
       return;
     }
 
     final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!launched) {
-      _showSnackBar('Unable to open document URL.');
+      _showMessageDialog('Unable to open document URL.');
     }
   }
 
@@ -504,12 +544,12 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
         return;
       }
 
-      _showSnackBar(
+      _showMessageDialog(
         response['message']?.toString() ?? 'Document reviewed successfully.',
       );
       await _loadAdminDocuments(page: _adminCurrentPage);
     } catch (error) {
-      _showSnackBar(error.toString().replaceFirst('Exception: ', ''));
+      _showMessageDialog(error.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) {
         setState(() {
@@ -1140,6 +1180,10 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
 
   Future<void> _showImageSourcePicker() async {
     if (_isPicking || _isUploading) {
+      return;
+    }
+
+    if (!mounted || _isViewDetached) {
       return;
     }
 

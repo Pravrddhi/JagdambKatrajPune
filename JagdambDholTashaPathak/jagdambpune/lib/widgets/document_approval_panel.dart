@@ -38,11 +38,21 @@ class _DocumentApprovalPanelState extends State<DocumentApprovalPanel> {
     }
   }
 
-  void _showSnackBar(String message) {
+  Future<void> _showMessageDialog(String message) async {
     if (!mounted) return;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Message'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadAdminDocuments({int page = 1}) async {
@@ -84,7 +94,7 @@ class _DocumentApprovalPanelState extends State<DocumentApprovalPanel> {
         _adminDocuments = items;
       });
     } catch (error) {
-      _showSnackBar(error.toString().replaceFirst('Exception: ', ''));
+      _showMessageDialog(error.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) {
         setState(() {
@@ -97,19 +107,19 @@ class _DocumentApprovalPanelState extends State<DocumentApprovalPanel> {
   Future<void> _openDocumentUrl(String url) async {
     final trimmed = url.trim();
     if (trimmed.isEmpty) {
-      _showSnackBar('Document URL is not available.');
+      _showMessageDialog('Document URL is not available.');
       return;
     }
 
     final uri = Uri.tryParse(trimmed);
     if (uri == null) {
-      _showSnackBar('Invalid document URL.');
+      _showMessageDialog('Invalid document URL.');
       return;
     }
 
     final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
     if (!launched) {
-      _showSnackBar('Unable to open document URL.');
+      _showMessageDialog('Unable to open document URL.');
     }
   }
 
@@ -183,12 +193,12 @@ class _DocumentApprovalPanelState extends State<DocumentApprovalPanel> {
         return;
       }
 
-      _showSnackBar(
+      _showMessageDialog(
         response['message']?.toString() ?? 'Document reviewed successfully.',
       );
       await _loadAdminDocuments(page: _adminCurrentPage);
     } catch (error) {
-      _showSnackBar(error.toString().replaceFirst('Exception: ', ''));
+      _showMessageDialog(error.toString().replaceFirst('Exception: ', ''));
     } finally {
       if (mounted) {
         setState(() {
