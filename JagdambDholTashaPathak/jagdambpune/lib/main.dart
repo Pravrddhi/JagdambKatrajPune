@@ -5,6 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:new_version_plus/new_version_plus.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -23,6 +24,7 @@ import 'screens/splash_screen.dart';
 import 'config/app_config.dart';
 import 'theme/app_colors.dart';
 import 'web/screens/registration_web_screen.dart';
+import 'web/screens/new_registration_web_screen.dart';
 
 // Web-only FCM bridge (conditional compilation for web platform)
 import 'web/fcm_web_bridge_stub.dart'
@@ -109,6 +111,9 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kIsWeb) {
+    usePathUrlStrategy();
+  }
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
@@ -169,6 +174,43 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
 
   bool get _isAndroidRuntime =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  bool _isNewRegistrationRouteName(String? rawRouteName) {
+    if (rawRouteName == null || rawRouteName.trim().isEmpty) {
+      return false;
+    }
+
+    final routeName = rawRouteName.trim();
+    final normalized = routeName.split('#').first;
+
+    final parsed = Uri.tryParse(normalized);
+    final path = (parsed?.path ?? normalized).trim();
+    final noTrailingSlash = path.endsWith('/') && path.length > 1
+        ? path.substring(0, path.length - 1)
+        : path;
+
+    return noTrailingSlash == '/new_registration' ||
+        noTrailingSlash.contains('/new_registration');
+  }
+
+  MaterialPageRoute<void> _newRegistrationRoute() {
+    return MaterialPageRoute<void>(
+      settings: const RouteSettings(name: '/new_registration'),
+      builder: (_) => const NewRegistrationWebScreen(),
+    );
+  }
+
+  String _resolveInitialRoute() {
+    if (!kIsWeb) {
+      return '/';
+    }
+
+    final path = Uri.base.path.trim();
+    if (_isNewRegistrationRouteName(path)) {
+      return '/new_registration';
+    }
+    return '/';
+  }
 
   Future<void> _handleIncomingMessage(RemoteMessage message) async {
     final notification = message.notification;
@@ -502,12 +544,29 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
           ),
         ),
       ),
-      initialRoute: '/',
+      initialRoute: _resolveInitialRoute(),
       routes: {
         '/': (context) => const SplashScreen(),
         '/login': (context) => const LoginScreen(),
         '/register': (context) => const _FlagGatedAuthRoute(),
+        '/new_registration': (context) => const NewRegistrationWebScreen(),
+        '/new_registration/': (context) => const NewRegistrationWebScreen(),
         '/resetPin': (context) => const ResetPinScreen(),
+      },
+      onGenerateRoute: (settings) {
+        if (_isNewRegistrationRouteName(settings.name)) {
+          return _newRegistrationRoute();
+        }
+        return null;
+      },
+      onUnknownRoute: (settings) {
+        if (_isNewRegistrationRouteName(settings.name)) {
+          return _newRegistrationRoute();
+        }
+        return MaterialPageRoute<void>(
+          settings: settings,
+          builder: (_) => const SplashScreen(),
+        );
       },
     );
   }
