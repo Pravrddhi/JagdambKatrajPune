@@ -189,7 +189,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         ? path.substring(0, path.length - 1)
         : path;
 
-    return noTrailingSlash == '/new_registration';
+    return noTrailingSlash == '/new_registration' ||
+        noTrailingSlash.contains('/new_registration');
   }
 
   MaterialPageRoute<void> _newRegistrationRoute() {

@@ -157,7 +157,8 @@ class _SplashScreenState extends State<SplashScreen>
       final noTrailingSlash = basePath.endsWith('/') && basePath.length > 1
           ? basePath.substring(0, basePath.length - 1)
           : basePath;
-      if (noTrailingSlash == '/new_registration') {
+      if (noTrailingSlash == '/new_registration' ||
+          noTrailingSlash.contains('/new_registration')) {
         _didNavigateToLogin = true;
         Navigator.of(context).pushReplacement(
           PageRouteBuilder(

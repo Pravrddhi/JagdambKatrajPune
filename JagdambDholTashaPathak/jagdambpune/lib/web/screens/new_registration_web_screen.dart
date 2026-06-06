@@ -16,9 +16,9 @@ class NewRegistrationWebScreen extends StatefulWidget {
 
 class _NewRegistrationWebScreenState extends State<NewRegistrationWebScreen> {
   static const String _maleWhatsAppGroupLink =
-      'https://chat.whatsapp.com/REPLACE_WITH_MALE_GROUP_LINK';
+      'https://chat.whatsapp.com/H29nmPdT5tz4WOMMzURYZQ?mode=gi_t';
   static const String _femaleWhatsAppGroupLink =
-      'https://chat.whatsapp.com/REPLACE_WITH_FEMALE_GROUP_LINK';
+      'https://chat.whatsapp.com/GJrpCkQVzRbEQc8sbzUFwG?mode=gi_t';
 
   String get _seasonLabel {
     final now = DateTime.now();
@@ -399,6 +399,15 @@ class _NewRegistrationWebScreenState extends State<NewRegistrationWebScreen> {
                                 SizedBox(height: 12),
                                 Text(
                                   'Help / मदत: Pratik Shinde - 9767704126',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF5D4037),
+                                  ),
+                                ),
+                                SizedBox(height: 6),
+                                Text(
+                                  'Help / मदत: Sanket Karkanis - 8668857595',
                                   style: TextStyle(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w700,
