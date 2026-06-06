@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -6,6 +7,7 @@ import '../providers/feature_flags_provider.dart';
 import '../theme/app_colors.dart';
 import '../config/app_config.dart';
 import 'login_screen.dart';
+import '../web/screens/new_registration_web_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -140,12 +142,34 @@ class _SplashScreenState extends State<SplashScreen>
   }
 
   void _tryNavigateToLogin() {
-    if (!mounted || _didNavigateToLogin || !_splashDelayCompleted) return;
+    if (!mounted || _didNavigateToLogin) return;
+
+    if (!_splashDelayCompleted) return;
 
     final provider = _featureFlagsProvider;
     final hasServerFailure = (provider?.error?.trim().isNotEmpty ?? false);
     if (hasServerFailure || _isShowingServerDownDialog) {
       return;
+    }
+
+    if (kIsWeb) {
+      final basePath = Uri.base.path.trim();
+      final noTrailingSlash = basePath.endsWith('/') && basePath.length > 1
+          ? basePath.substring(0, basePath.length - 1)
+          : basePath;
+      if (noTrailingSlash == '/new_registration') {
+        _didNavigateToLogin = true;
+        Navigator.of(context).pushReplacement(
+          PageRouteBuilder(
+            pageBuilder: (_, __, ___) => const NewRegistrationWebScreen(),
+            transitionDuration: const Duration(milliseconds: 700),
+            transitionsBuilder: (_, animation, __, child) {
+              return FadeTransition(opacity: animation, child: child);
+            },
+          ),
+        );
+        return;
+      }
     }
 
     _didNavigateToLogin = true;
