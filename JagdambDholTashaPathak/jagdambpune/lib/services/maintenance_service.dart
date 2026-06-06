@@ -367,62 +367,7 @@ class MaintenanceService {
         .map((e) => MaintenanceEvent.fromJson(Map<String, dynamic>.from(e)))
         .toList();
 
-    await _autoCloseExpiredActiveEvents(events);
-
-    return events
-        .map(
-          (event) => _shouldAutoCloseEvent(event)
-              ? event.copyWith(status: completedEventStatus)
-              : event,
-        )
-        .toList();
-  }
-
-  static Future<void> _autoCloseExpiredActiveEvents(
-    List<MaintenanceEvent> events,
-  ) async {
-    final expiredActiveEvents = events.where(_shouldAutoCloseEvent).toList();
-    if (expiredActiveEvents.isEmpty) {
-      return;
-    }
-
-    await Future.wait<void>(
-      expiredActiveEvents.map(_markEventCompletedSilently),
-    );
-  }
-
-  static bool _shouldAutoCloseEvent(MaintenanceEvent event) {
-    if (!event.isActiveStatus) {
-      return false;
-    }
-
-    final eventDay = event.parsedEventDate;
-    if (eventDay == null) {
-      return false;
-    }
-
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    return eventDay.isBefore(today);
-  }
-
-  static Future<void> _markEventCompletedSilently(
-    MaintenanceEvent event,
-  ) async {
-    try {
-      final payload = <String, dynamic>{'status': completedEventStatus};
-
-      await AuthorizedApiService.sendWithAutoRefresh(
-        null,
-        (token) => http.patch(
-          Uri.parse(ApiEndpoints.getMaintenanceEventDetail(event.id)),
-          headers: ApiEndpoints.authorizedHeaders(token),
-          body: jsonEncode(payload),
-        ),
-      );
-    } catch (_) {
-      // Keep fetch resilient even when auto-close persistence is rejected.
-    }
+    return events;
   }
 
   static Future<Map<String, dynamic>> createMaintenanceEvent({

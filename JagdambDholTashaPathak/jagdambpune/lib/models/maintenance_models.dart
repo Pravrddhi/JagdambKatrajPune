@@ -512,6 +512,54 @@ class MaintenanceEvent {
   }
 }
 
+int? latestActiveMaintenanceEventId(Iterable<MaintenanceEvent> events) {
+  MaintenanceEvent? latestEvent;
+
+  for (final event in events) {
+    if (!event.isActiveStatus) {
+      continue;
+    }
+
+    if (latestEvent == null) {
+      latestEvent = event;
+      continue;
+    }
+
+    final leftDate = latestEvent.parsedEventDate;
+    final rightDate = event.parsedEventDate;
+
+    if (leftDate == null && rightDate != null) {
+      latestEvent = event;
+      continue;
+    }
+
+    if (leftDate != null && rightDate != null) {
+      final comparison = rightDate.compareTo(leftDate);
+      if (comparison > 0 || (comparison == 0 && event.id > latestEvent.id)) {
+        latestEvent = event;
+      }
+      continue;
+    }
+
+    if (leftDate == null && rightDate == null && event.id > latestEvent.id) {
+      latestEvent = event;
+    }
+  }
+
+  return latestEvent?.id;
+}
+
+bool isLatestActiveMaintenanceEvent(
+  MaintenanceEvent event,
+  Iterable<MaintenanceEvent> events,
+) {
+  if (!event.isActiveStatus) {
+    return false;
+  }
+
+  return latestActiveMaintenanceEventId(events) == event.id;
+}
+
 extension MaintenanceEventDayState on MaintenanceEvent {
   DateTime? get parsedEventDate {
     final parsed = DateTime.tryParse(eventDate);
@@ -520,19 +568,6 @@ extension MaintenanceEventDayState on MaintenanceEvent {
   }
 
   bool get isActiveStatus => status.trim().toLowerCase() == 'active';
-
-  bool get isScheduledForToday {
-    final eventDay = parsedEventDate;
-    if (eventDay == null) return false;
-
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    return eventDay == today;
-  }
-
-  bool get shouldShowOnHome => isActiveStatus && isScheduledForToday;
-
-  bool get isClosedForUserAction => !shouldShowOnHome;
 }
 
 class CompletionUsedItem {
@@ -659,6 +694,26 @@ class MaintenanceCompletionRequest {
                 .toList()
           : <CompletionUsedItem>[],
     );
+  }
+}
+
+extension MaintenanceCompletionRequestStatus on MaintenanceCompletionRequest {
+  String get normalizedStatus {
+    final rawStatus = status.trim().toLowerCase();
+    if (rawStatus == 'approved' || rawStatus == 'rejected') {
+      return rawStatus;
+    }
+
+    if ((approvedBy != null && approvedBy! > 0) ||
+        approvedAt.trim().isNotEmpty) {
+      return 'approved';
+    }
+
+    if (rawStatus.isEmpty) {
+      return 'pending';
+    }
+
+    return rawStatus;
   }
 }
 

@@ -688,7 +688,14 @@ class AppDrawer extends StatelessWidget {
       leading: Icon(icon, color: AppColors.primaryMaroon),
       title: Row(
         children: [
-          Text(title, style: const TextStyle(color: AppColors.primaryMaroon)),
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppColors.primaryMaroon),
+            ),
+          ),
           if (count > 0) ...[
             const SizedBox(width: 8),
             Container(
@@ -725,7 +732,14 @@ class AppDrawer extends StatelessWidget {
       leading: Icon(icon, color: AppColors.primaryMaroon),
       title: Row(
         children: [
-          Text(title, style: const TextStyle(color: AppColors.primaryMaroon)),
+          Expanded(
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppColors.primaryMaroon),
+            ),
+          ),
           if (count > 0) ...[
             const SizedBox(width: 8),
             Container(

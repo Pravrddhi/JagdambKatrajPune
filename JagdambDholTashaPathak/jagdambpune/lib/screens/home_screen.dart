@@ -73,6 +73,7 @@ class _HomeScreenState extends State<HomeScreen>
   List<Map<String, dynamic>> _homeScreenSlides = <Map<String, dynamic>>[];
   late final PageController _homePhotosPageController;
   Timer? _homePhotosTimer;
+  Timer? _maintenanceDaysRefreshTimer;
   bool _isLoadingHomePhotos = false;
   Timer? _pushSetupRetryTimer;
   int _currentHomePhotoIndex = 0;
@@ -101,6 +102,9 @@ class _HomeScreenState extends State<HomeScreen>
       _buildHomePhotosPanel(isCompact: isCompact);
 
   static const int _maxPushSetupRetries = 3;
+  static const Duration _maintenanceDaysRefreshInterval = Duration(seconds: 30);
+  bool _isRefreshingMaintenanceDays = false;
+
   @override
   void initState() {
     super.initState();
@@ -118,9 +122,48 @@ class _HomeScreenState extends State<HomeScreen>
 
     _homePhotosPageController = PageController();
     _startHomePhotosAutoScroll();
+    _startMaintenanceDaysAutoRefresh();
 
     // Start user initialization workflow
     _initializeUser();
+  }
+
+  void _startMaintenanceDaysAutoRefresh() {
+    _maintenanceDaysRefreshTimer?.cancel();
+    _maintenanceDaysRefreshTimer = Timer.periodic(
+      _maintenanceDaysRefreshInterval,
+      (_) {
+        unawaited(_refreshMaintenanceDaysSilently());
+      },
+    );
+  }
+
+  Future<void> _refreshMaintenanceDaysSilently() async {
+    if (!mounted || _isRefreshingMaintenanceDays) return;
+
+    final storedToken = await storage.read(key: ApiEndpoints.accessTokenKey);
+    final effectiveToken = (storedToken != null && storedToken.isNotEmpty)
+        ? storedToken
+        : accessToken.trim().isNotEmpty
+        ? accessToken
+        : widget.authToken;
+
+    if (effectiveToken.trim().isEmpty) {
+      if (mounted) {
+        setState(() {
+          _maintenanceDays = <MaintenanceEvent>[];
+          _completionStatusByEvent.clear();
+        });
+      }
+      return;
+    }
+
+    _isRefreshingMaintenanceDays = true;
+    try {
+      await _loadMaintenanceDays();
+    } finally {
+      _isRefreshingMaintenanceDays = false;
+    }
   }
 
   void _startHomePhotosAutoScroll() {
@@ -154,7 +197,9 @@ class _HomeScreenState extends State<HomeScreen>
 
     if (state == AppLifecycleState.resumed) {
       _startHomePhotosAutoScroll();
+      _startMaintenanceDaysAutoRefresh();
       unawaited(_loadHomeScreenPhotos());
+      unawaited(_refreshMaintenanceDaysSilently());
       return;
     }
 
@@ -162,6 +207,7 @@ class _HomeScreenState extends State<HomeScreen>
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       _homePhotosTimer?.cancel();
+      _maintenanceDaysRefreshTimer?.cancel();
     }
   }
 
@@ -174,6 +220,7 @@ class _HomeScreenState extends State<HomeScreen>
   void _refreshPhotosOnHomeVisit() {
     if (!mounted) return;
     unawaited(_loadHomeScreenPhotos());
+    unawaited(_refreshMaintenanceDaysSilently());
   }
 
   @override
@@ -325,7 +372,10 @@ class _HomeScreenState extends State<HomeScreen>
       final events = await MaintenanceService.fetchMaintenanceEvents();
       if (!mounted) return;
 
-      final current = events.where((event) => event.shouldShowOnHome).toList();
+      final latestEventId = latestActiveMaintenanceEventId(events);
+      final current = events
+          .where((event) => latestEventId != null && event.id == latestEventId)
+          .toList();
 
       current.sort((a, b) {
         final da = DateTime.tryParse(a.eventDate);
@@ -817,13 +867,13 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     DateTime? submitLoaderStart;
 
-    if (event.isClosedForUserAction) {
+    if (!isLatestActiveMaintenanceEvent(event, _maintenanceDays)) {
       await showDialog<void>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: const Text('Message'),
           content: const Text(
-            'This maintenance day is closed. Completion can only be handled automatically for the current day.',
+            'This maintenance day is closed. It stays open until a newer maintenance day is created.',
           ),
           actions: [
             TextButton(
@@ -1039,10 +1089,6 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
                 ),
               ),
-              TextButton(
-                onPressed: _refreshEventsSection,
-                child: const Text('Refresh'),
-              ),
             ],
           ),
           const SizedBox(height: 6),
@@ -1208,7 +1254,7 @@ class _HomeScreenState extends State<HomeScreen>
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          'Visible for today only. It closes automatically after the day ends.',
+                          'Visible until a newer maintenance day is created.',
                           style: TextStyle(
                             color: AppColors.primaryMaroon.withValues(
                               alpha: 0.78,
@@ -1631,6 +1677,13 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _handleLogout() {
+    _maintenanceDaysRefreshTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _maintenanceDays = <MaintenanceEvent>[];
+        _completionStatusByEvent.clear();
+      });
+    }
     Navigator.of(context).pushReplacementNamed('/login');
   }
 
@@ -2123,6 +2176,7 @@ class _HomeScreenState extends State<HomeScreen>
     _notificationSocketService?.dispose().ignore();
     _fabAnimationController.dispose();
     _homePhotosTimer?.cancel();
+    _maintenanceDaysRefreshTimer?.cancel();
     _pushSetupRetryTimer?.cancel();
     _homePhotosPageController.dispose();
     super.dispose();

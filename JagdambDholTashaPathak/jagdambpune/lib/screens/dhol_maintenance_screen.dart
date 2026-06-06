@@ -231,7 +231,16 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     if (!mounted) return;
     final created = await _openCreateEventForm();
     if (created && mounted) {
-      Navigator.of(context).maybePop();
+      FocusManager.instance.primaryFocus?.unfocus();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      if (!mounted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final route = ModalRoute.of(context);
+        if (route == null || route.isCurrent) {
+          Navigator.of(context).maybePop();
+        }
+      });
     }
   }
 
@@ -1355,11 +1364,11 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final formKey = GlobalKey<FormState>();
     final noteController = TextEditingController();
 
-    // Auto-select today's active maintenance event, if any.
-    final todayActiveEvent = _events
-        .where((event) => event.isActiveStatus && event.isScheduledForToday)
-        .firstOrNull;
-    final int? selectedEventId = todayActiveEvent?.id;
+    // Auto-select the latest active maintenance event, if any.
+    final int? selectedEventId = latestActiveMaintenanceEventId(_events);
+    final MaintenanceEvent? selectedEvent = selectedEventId == null
+        ? null
+        : _events.where((event) => event.id == selectedEventId).firstOrNull;
 
     final shouldSubmit = await showDialog<bool>(
       context: context,
@@ -1375,7 +1384,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                   'Current Available: ${item.quantityAvailable}',
                   style: const TextStyle(fontSize: 13, color: Colors.black54),
                 ),
-                if (todayActiveEvent != null) ...[
+                if (selectedEvent != null) ...[
                   const SizedBox(height: 8),
                   Container(
                     width: double.infinity,
@@ -1397,7 +1406,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
-                            '${todayActiveEvent.title} (${todayActiveEvent.eventDate})',
+                            '${selectedEvent.title} (${selectedEvent.eventDate})',
                             style: const TextStyle(
                               fontSize: 13,
                               color: AppColors.primaryMaroon,
@@ -1556,6 +1565,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final formKey = GlobalKey<FormState>();
     final titleController = TextEditingController();
     final descriptionController = TextEditingController();
+    String? successMessage;
     List<Map<String, dynamic>> availableGats = <Map<String, dynamic>>[];
     int? selectedGatId;
     var isSubmitting = false;
@@ -1747,11 +1757,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                                     : null,
                               ),
                             );
-                            _showSnack(
-                              response['message']?.toString() ??
-                                  'Maintenance event created successfully.',
-                            );
-                            await _loadEvents();
+                            successMessage =
+                                response['message']?.toString() ??
+                                'Maintenance event created successfully.';
                             if (context.mounted) {
                               Navigator.of(context).pop(true);
                             }
@@ -1789,6 +1797,10 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
 
     try {
+      if (successMessage != null && successMessage!.isNotEmpty) {
+        _showSnack(successMessage!);
+      }
+      await _loadEvents();
       return true;
     } finally {
       titleController.dispose();
@@ -1797,9 +1809,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   }
 
   Future<void> _openCompletionRequestForm(MaintenanceEvent event) async {
-    if (event.isClosedForUserAction) {
+    if (!isLatestActiveMaintenanceEvent(event, _events)) {
       _showSnack(
-        'This maintenance day is closed. Completion can only be handled automatically for the current day.',
+        'This maintenance day is closed. It stays open until a newer maintenance day is created.',
       );
       return;
     }
@@ -2857,6 +2869,10 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
             )
           else
             ..._events.map((event) {
+              final isUserActionableEvent = isLatestActiveMaintenanceEvent(
+                event,
+                _events,
+              );
               final hasPendingCompletion = userCompletionRequests.any(
                 (item) =>
                     item.event == event.id &&
@@ -2905,7 +2921,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                       if (event.assignedGatName.trim().isNotEmpty)
                         Text('Assigned Gat: ${event.assignedGatName}'),
                       const SizedBox(height: 8),
-                      if (event.shouldShowOnHome)
+                      if (isUserActionableEvent)
                         Align(
                           alignment: Alignment.centerRight,
                           child: hasPendingCompletion
@@ -2947,9 +2963,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                                   label: const Text('Submit'),
                                 ),
                         ),
-                      if (!event.shouldShowOnHome)
+                      if (!isUserActionableEvent)
                         const Text(
-                          'Closed for users. Only the current day stays open and it closes automatically after the day ends.',
+                          'Closed for users. This maintenance day remains open only until a newer maintenance day is created.',
                           style: TextStyle(color: Colors.black54),
                         ),
                     ],

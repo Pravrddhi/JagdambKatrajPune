@@ -12,6 +12,9 @@ import 'package:table_calendar/table_calendar.dart';
 
 import '../services/attendance_service.dart';
 import '../config/api_endpoints.dart';
+import '../models/maintenance_models.dart';
+import '../services/maintenance_service.dart';
+import '../services/user_service.dart';
 import '../theme/app_colors.dart';
 import '../utils/qr_download_helper.dart';
 import '../widgets/web_camera_qr_scanner.dart';
@@ -42,6 +45,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     with SingleTickerProviderStateMixin {
   static const int _checkoutCooldownMinutes = 30;
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
+  static const String _maintenanceCheckoutBlockedMessage =
+      'Maintenance request is not approved. Attendance is blocked.';
   static const String _checkoutCooldownUntilKeyBase =
       'attendance_checkout_cooldown_until';
   static const String _checkoutCooldownSourceKeyBase =
@@ -52,6 +57,9 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   late final TabController _tabController;
   final MobileScannerController _scannerController = MobileScannerController(
     autoStart: false,
+    formats: const <BarcodeFormat>[BarcodeFormat.qrCode],
+    detectionSpeed: DetectionSpeed.noDuplicates,
+    detectionTimeoutMs: 500,
   );
 
   bool _isGenerating = false;
@@ -76,7 +84,17 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   bool _hasMarkedFromCurrentScan = false;
   String? _scanInfo;
   VoidCallback? _stopWebCamera;
+  bool _isAttendanceBlocked = false;
+  String? _attendanceBlockedMessage;
+  bool _isCheckingAttendanceApproval = false;
+  bool _hasResolvedAttendanceApprovalGate = false;
+  Timer? _attendanceApprovalAutoRefreshTimer;
   DateTime? _lastSuccessfulCheckInAt;
+  DateTime? _todayCheckInFromHistoryAt;
+  DateTime? _todayCheckInSnapshotDay;
+  DateTime? _lastTodayCheckInLookupAt;
+  bool _isResolvingTodayCheckIn = false;
+  DateTime? _lastSuccessfulCheckOutAt;
   DateTime? _checkoutAllowedAtFromServer;
   int _serverClockOffsetSeconds = 0;
   Timer? _checkoutCooldownTimer;
@@ -94,12 +112,16 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   DateTime _calendarFocusDate = DateTime.now();
   DateTime _selectedDate = DateTime.now();
   final Map<DateTime, String> _attendanceByDate = <DateTime, String>{};
+  final Map<DateTime, Map<String, dynamic>> _attendanceRecordByDate =
+      <DateTime, Map<String, dynamic>>{};
 
   bool _isLoadingAttendanceByUser = false;
   DateTime _byUserFocusMonth = DateTime.now();
   List<Map<String, dynamic>> _attendanceByUser = <Map<String, dynamic>>[];
   final TextEditingController _nameSearchController = TextEditingController();
   String _nameFilter = '';
+  int? _cachedCurrentUserId;
+  String _cachedCurrentUserName = '';
 
   bool get _isSecureWebContext {
     if (!kIsWeb) return true;
@@ -115,6 +137,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     // Scan flow also needs configured check-in settings for timing validation.
     _loadConfiguredAttendanceLocation();
     _initCooldownStorageScope();
+    unawaited(_ensureAttendanceApprovalGate(force: true));
 
     if (widget.scanOnly) {
       _tabController = TabController(length: 1, vsync: this, initialIndex: 0);
@@ -147,6 +170,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   @override
   void dispose() {
     _checkoutCooldownTimer?.cancel();
+    _attendanceApprovalAutoRefreshTimer?.cancel();
     if (!widget.scanOnly) {
       _tabController.removeListener(_handleTabControllerTick);
     }
@@ -215,6 +239,229 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<int?> _resolveCurrentUserId() async {
+    if (_cachedCurrentUserId != null) {
+      return _cachedCurrentUserId;
+    }
+
+    final scopedUserId = int.tryParse(_cooldownUserScope);
+    if (scopedUserId != null) {
+      _cachedCurrentUserId = scopedUserId;
+      return scopedUserId;
+    }
+
+    final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
+    final tokenUserId = int.tryParse(_extractUserScopeFromToken(token) ?? '');
+    if (tokenUserId != null) {
+      _cachedCurrentUserId = tokenUserId;
+      return tokenUserId;
+    }
+
+    final rawToken = token?.trim();
+    if (rawToken == null || rawToken.isEmpty) {
+      return null;
+    }
+
+    try {
+      final userDetails = await UserService.fetchUserDetails(rawToken);
+      final userId = int.tryParse(
+        userDetails['id']?.toString() ??
+            userDetails['user_id']?.toString() ??
+            userDetails['userId']?.toString() ??
+            '',
+      );
+      final fullName = _extractUserFullName(userDetails);
+      if (fullName.isNotEmpty) {
+        _cachedCurrentUserName = fullName;
+      }
+      if (userId != null) {
+        _cachedCurrentUserId = userId;
+      }
+      return userId;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _extractUserFullName(Map<String, dynamic> userDetails) {
+    final firstName = userDetails['first_name']?.toString().trim() ?? '';
+    final lastName = userDetails['last_name']?.toString().trim() ?? '';
+    final fullName = '$firstName $lastName'.trim();
+    if (fullName.isNotEmpty) {
+      return fullName;
+    }
+    return userDetails['name']?.toString().trim() ?? '';
+  }
+
+  Future<String> _resolveCurrentUserName() async {
+    if (_cachedCurrentUserName.trim().isNotEmpty) {
+      return _cachedCurrentUserName.trim().toLowerCase();
+    }
+
+    final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
+    final rawToken = token?.trim();
+    if (rawToken == null || rawToken.isEmpty) {
+      return '';
+    }
+
+    try {
+      final userDetails = await UserService.fetchUserDetails(rawToken);
+      final fullName = _extractUserFullName(userDetails);
+      if (fullName.isNotEmpty) {
+        _cachedCurrentUserName = fullName;
+      }
+      return _cachedCurrentUserName.trim().toLowerCase();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  int _compareCompletionRequestRecency(
+    MaintenanceCompletionRequest left,
+    MaintenanceCompletionRequest right,
+  ) {
+    final leftUpdated = DateTime.tryParse(left.updatedAt);
+    final rightUpdated = DateTime.tryParse(right.updatedAt);
+    if (leftUpdated != null && rightUpdated != null) {
+      final comparison = leftUpdated.compareTo(rightUpdated);
+      if (comparison != 0) {
+        return comparison;
+      }
+    } else if (leftUpdated != null) {
+      return 1;
+    } else if (rightUpdated != null) {
+      return -1;
+    }
+
+    final leftCreated = DateTime.tryParse(left.createdAt);
+    final rightCreated = DateTime.tryParse(right.createdAt);
+    if (leftCreated != null && rightCreated != null) {
+      final comparison = leftCreated.compareTo(rightCreated);
+      if (comparison != 0) {
+        return comparison;
+      }
+    } else if (leftCreated != null) {
+      return 1;
+    } else if (rightCreated != null) {
+      return -1;
+    }
+
+    return left.id.compareTo(right.id);
+  }
+
+  MaintenanceCompletionRequest? _latestCompletionRequestForUser(
+    Iterable<MaintenanceCompletionRequest> requests,
+    int? userId,
+    String normalizedCurrentUserName,
+  ) {
+    MaintenanceCompletionRequest? latestRequest;
+
+    for (final request in requests) {
+      final matchesById = userId != null && request.submittedBy == userId;
+      final matchesByName =
+          normalizedCurrentUserName.isNotEmpty &&
+          request.submittedByName.trim().toLowerCase() ==
+              normalizedCurrentUserName;
+
+      if (!matchesById && !matchesByName) {
+        continue;
+      }
+
+      if (latestRequest == null ||
+          _compareCompletionRequestRecency(request, latestRequest) > 0) {
+        latestRequest = request;
+      }
+    }
+
+    return latestRequest;
+  }
+
+  Future<bool> _validateMaintenanceApprovalForCheckout() async {
+    try {
+      final userId = await _resolveCurrentUserId();
+      final normalizedCurrentUserName = await _resolveCurrentUserName();
+      if (userId == null && normalizedCurrentUserName.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _isAttendanceBlocked = true;
+            _attendanceBlockedMessage = _maintenanceCheckoutBlockedMessage;
+            _isCheckoutScannerUnlocked = true;
+          });
+        }
+        return false;
+      }
+
+      // Simple rule for checkout: user's latest maintenance request must be approved.
+      final completionRequests =
+          await MaintenanceService.fetchCompletionRequests();
+      if (completionRequests.isEmpty) {
+        if (mounted) {
+          setState(() {
+            _isAttendanceBlocked = true;
+            _attendanceBlockedMessage = _maintenanceCheckoutBlockedMessage;
+            _isCheckoutScannerUnlocked = true;
+          });
+        }
+        return false;
+      }
+
+      final latestRequest = _latestCompletionRequestForUser(
+        completionRequests,
+        userId,
+        normalizedCurrentUserName,
+      );
+
+      if (latestRequest?.normalizedStatus == 'approved') {
+        if (_isAttendanceBlocked && mounted) {
+          setState(() {
+            _isAttendanceBlocked = false;
+            _attendanceBlockedMessage = null;
+          });
+        }
+        return true;
+      }
+
+      if (mounted) {
+        setState(() {
+          _isAttendanceBlocked = true;
+          _attendanceBlockedMessage = _maintenanceCheckoutBlockedMessage;
+          _isCheckoutScannerUnlocked = true;
+        });
+      }
+      return false;
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isAttendanceBlocked = true;
+          _attendanceBlockedMessage = _maintenanceCheckoutBlockedMessage;
+          _isCheckoutScannerUnlocked = true;
+        });
+      }
+      return false;
+    }
+  }
+
+  Future<void> _ensureAttendanceApprovalGate({bool force = false}) async {
+    if (!mounted) return;
+    if (_isCheckingAttendanceApproval) return;
+    if (!force && _hasResolvedAttendanceApprovalGate) return;
+    if (!_isScanTabActive) return;
+    if (!_isWithinConfiguredSeason) return;
+    if (!_isCheckoutApprovalContext) return;
+
+    setState(() {
+      _isCheckingAttendanceApproval = true;
+    });
+
+    await _validateMaintenanceApprovalForCheckout();
+
+    if (!mounted) return;
+    setState(() {
+      _isCheckingAttendanceApproval = false;
+      _hasResolvedAttendanceApprovalGate = true;
+    });
+  }
+
   void _pauseNativeScanner() {
     if (kIsWeb) return;
     unawaited(_scannerController.stop());
@@ -239,6 +486,12 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   bool get _shouldDisableCamera {
     if (!_isScanTabActive) return true;
     if (!_isWithinConfiguredSeason) return true;
+    if (_isCheckingAttendanceApproval && _isCheckoutApprovalContext) {
+      return true;
+    }
+    if (_isAttendanceBlocked && _isCheckoutApprovalContext) {
+      return true;
+    }
     if (_shouldBlockScannerForCheckoutCooldown) return true;
     if (_shouldShowCheckoutScannerUnlockCard && !_isCheckoutScannerUnlocked) {
       return true;
@@ -246,7 +499,47 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     return false;
   }
 
+  bool get _isCheckoutApprovalContext {
+    return _isCheckoutScannerUnlocked;
+  }
+
+  bool get _hasCompletedCheckoutToday {
+    final checkedOutAt = _lastSuccessfulCheckOutAt;
+    if (checkedOutAt == null) return false;
+    return _isSameDate(checkedOutAt, DateTime.now());
+  }
+
+  void _startAttendanceApprovalAutoRefreshIfNeeded() {
+    if (_attendanceApprovalAutoRefreshTimer != null) return;
+    _attendanceApprovalAutoRefreshTimer = Timer.periodic(
+      const Duration(seconds: 12),
+      (_) {
+        if (!mounted ||
+            !_isScanTabActive ||
+            !_isAttendanceBlocked ||
+            !_isCheckoutApprovalContext) {
+          _stopAttendanceApprovalAutoRefresh();
+          return;
+        }
+        unawaited(_ensureAttendanceApprovalGate(force: true));
+      },
+    );
+  }
+
+  void _stopAttendanceApprovalAutoRefresh() {
+    _attendanceApprovalAutoRefreshTimer?.cancel();
+    _attendanceApprovalAutoRefreshTimer = null;
+  }
+
   void _syncScannerLifecycle() {
+    if (_isScanTabActive &&
+        _isAttendanceBlocked &&
+        _isCheckoutApprovalContext) {
+      _startAttendanceApprovalAutoRefreshIfNeeded();
+    } else {
+      _stopAttendanceApprovalAutoRefresh();
+    }
+
     if (_shouldDisableCamera) {
       _pauseAllScanners();
       return;
@@ -258,6 +551,9 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   }
 
   void _handleTabControllerTick() {
+    if (_isScanTabActive && _isCheckoutApprovalContext) {
+      unawaited(_ensureAttendanceApprovalGate(force: _isAttendanceBlocked));
+    }
     _syncScannerLifecycle();
     if (!mounted) return;
     setState(() {});
@@ -1058,6 +1354,29 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           ? 'check_out'
           : 'check_in';
 
+      if (requestedAction == 'check_out' &&
+          hasActiveCheckIn &&
+          !checkoutModeRequestedByUser) {
+        try {
+          final resolvedCheckIn = await _resolveTodayCheckInFromHistory();
+          if (resolvedCheckIn == null) {
+            requestedAction = 'check_in';
+          } else {
+            _lastSuccessfulCheckInAt = resolvedCheckIn;
+          }
+        } catch (_) {
+          // Fall back to current local state if history cannot be loaded.
+        }
+      }
+
+      if (requestedAction == 'check_out') {
+        final isMaintenanceApproved =
+            await _validateMaintenanceApprovalForCheckout();
+        if (!isMaintenanceApproved) {
+          return;
+        }
+      }
+
       Map<String, dynamic> response;
       try {
         response = await AttendanceService.markAttendance(
@@ -1127,7 +1446,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           _isCheckoutScannerUnlocked = !_isCheckoutCooldownActive;
           _hasMarkedFromCurrentScan = false;
           _scanInfo =
-              'Check-in already marked for today. Continue with checkout flow.';
+              'Check-in already marked for today. Proceeding with checkout.';
 
           if (_isCheckoutCooldownActive) {
             await _persistCheckoutCooldown(
@@ -1142,33 +1461,68 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           if (mounted) {
             setState(() {});
           }
-          return;
-        }
 
-        if (requestedAction == 'check_out' &&
-            looksLikeNoCheckIn &&
-            !checkoutModeRequestedByUser) {
-          // Backend has no check-in record; our local state was stale.
-          // Only retry as check_in if we're actually inside the valid check-in window.
-          final checkInNow = _todayAtConfiguredTime(_configuredCheckInTime);
-          final windowStart = checkInNow?.subtract(
-            Duration(minutes: _configuredAllowedBeforeMinutes),
-          );
-          final insideCheckInWindow =
-              windowStart == null || !DateTime.now().isBefore(windowStart);
-          if (!insideCheckInWindow) {
-            // Too early (or too late) to check in — clear stale state, show original error.
-            await _clearCheckoutCooldown();
-            rethrow;
+          // Cooldown has passed. Complete checkout in the same scan attempt.
+          final isMaintenanceApproved =
+              await _validateMaintenanceApprovalForCheckout();
+          if (!isMaintenanceApproved) {
+            return;
           }
-          await _clearCheckoutCooldown();
-          requestedAction = 'check_in';
+
+          requestedAction = 'check_out';
           response = await AttendanceService.markAttendance(
             qrData: qrData,
             latitude: current.latitude,
             longitude: current.longitude,
             action: requestedAction,
           );
+        }
+
+        if (requestedAction == 'check_out' && looksLikeNoCheckIn) {
+          // Reconcile against today's history first and retry checkout once.
+          // This avoids requiring a second scan when backend state is briefly stale.
+          DateTime? resolvedCheckIn;
+          try {
+            resolvedCheckIn = await _resolveTodayCheckInFromHistory();
+          } catch (_) {
+            // Non-fatal: fallback path below will handle the outcome.
+          }
+
+          if (resolvedCheckIn != null) {
+            _lastSuccessfulCheckInAt = resolvedCheckIn;
+            response = await AttendanceService.markAttendance(
+              qrData: qrData,
+              latitude: current.latitude,
+              longitude: current.longitude,
+              action: 'check_out',
+            );
+          } else if (!checkoutModeRequestedByUser) {
+            // Backend has no check-in record; our local state was stale.
+            // Only retry as check_in if we're actually inside the valid check-in window.
+            final checkInNow = _todayAtConfiguredTime(_configuredCheckInTime);
+            final windowStart = checkInNow?.subtract(
+              Duration(minutes: _configuredAllowedBeforeMinutes),
+            );
+            final insideCheckInWindow =
+                windowStart == null || !DateTime.now().isBefore(windowStart);
+            if (!insideCheckInWindow) {
+              // Too early (or too late) to check in — clear stale state, show original error.
+              await _clearCheckoutCooldown();
+              rethrow;
+            }
+            await _clearCheckoutCooldown();
+            requestedAction = 'check_in';
+            response = await AttendanceService.markAttendance(
+              qrData: qrData,
+              latitude: current.latitude,
+              longitude: current.longitude,
+              action: requestedAction,
+            );
+          } else {
+            // User explicitly requested checkout, but no check-in exists for today.
+            await _clearCheckoutCooldown();
+            rethrow;
+          }
         } else if (requestedAction == 'check_out' &&
             (normalized.contains('30 minutes') || serverAllowedAt != null)) {
           // Backend enforced the 30-min cooldown.
@@ -1241,6 +1595,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       String successMessage;
       if (isCheckoutAction) {
         popupTitle = 'Checkout Marked!';
+        _lastSuccessfulCheckOutAt = DateTime.now();
         final finalStatusLine = switch (statusText) {
           'present' || 'p' => '\nFinal status: Present.',
           'late' || 'l' => '\nFinal status: Late.',
@@ -1282,6 +1637,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
             : '';
         successMessage =
             '$baseMessage$statusLine$checkoutLine$missedCheckoutNote';
+        _todayCheckInSnapshotDay = _dateOnly(checkInRecordedAt);
+        _todayCheckInFromHistoryAt = checkInRecordedAt;
         _serverClockOffsetSeconds = _resolveServerOffsetSeconds(
           responseServerNow,
         );
@@ -1506,21 +1863,28 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
   DateTime? _extractAttendanceDate(Map<String, dynamic> row) {
     final dateStr =
-        row['date']?.toString() ??
-        row['attendance_date']?.toString() ??
-        row['marked_date']?.toString() ??
-        row['created_at']?.toString() ??
+        _firstValueFromAttendanceRow(row, const <String>[
+          'date',
+          'attendance_date',
+          'attendance_day',
+          'marked_date',
+          'day',
+          'created_at',
+        ])?.toString() ??
         '';
     if (dateStr.trim().isEmpty) return null;
-    final parsed = DateTime.tryParse(dateStr);
+    final parsed = _parseFlexibleDateTime(dateStr);
     if (parsed == null) return null;
     return _dateOnly(parsed);
   }
 
   String _extractAttendanceStatus(Map<String, dynamic> row) {
     final raw =
-        row['status']?.toString().toLowerCase().trim() ??
-        row['attendance_status']?.toString().toLowerCase().trim() ??
+        _firstValueFromAttendanceRow(row, const <String>[
+          'status',
+          'attendance_status',
+          'state',
+        ])?.toString().toLowerCase().trim() ??
         'present';
     if (raw == 'present' || raw == 'p') return 'present';
     if (raw == 'absent' || raw == 'a') return 'absent';
@@ -1535,21 +1899,27 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     DateTime? parseDateTimeCandidate(dynamic raw) {
       final text = raw?.toString().trim() ?? '';
       if (text.isEmpty) return null;
-      final dt = DateTime.tryParse(text);
+      final dt = _parseFlexibleDateTime(text);
       if (dt != null) return dt;
       final tod = _parseTimeOfDay(text);
       if (tod == null) return null;
       return DateTime(date.year, date.month, date.day, tod.hour, tod.minute);
     }
 
-    final candidates = <dynamic>[
-      row['check_in_at'],
-      row['checkin_at'],
-      row['in_time'],
-      row['check_in_time'],
-      row['check_in'],
-      row['created_at'],
-    ];
+    final candidates = <dynamic>[];
+    for (final key in const <String>[
+      'check_in_at',
+      'checkin_at',
+      'in_time',
+      'check_in_time',
+      'checkin_time',
+      'check_in',
+      'clock_in',
+      'login_time',
+      'created_at',
+    ]) {
+      candidates.add(_firstValueFromAttendanceRow(row, <String>[key]));
+    }
 
     for (final raw in candidates) {
       final parsed = parseDateTimeCandidate(raw);
@@ -1557,6 +1927,198 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         return parsed;
       }
     }
+    return null;
+  }
+
+  DateTime? _parseCheckOutDateTimeFromRow(Map<String, dynamic> row) {
+    final now = DateTime.now();
+    final date = _extractAttendanceDate(row) ?? _dateOnly(now);
+
+    DateTime? parseDateTimeCandidate(dynamic raw) {
+      final text = raw?.toString().trim() ?? '';
+      if (text.isEmpty) return null;
+      final dt = _parseFlexibleDateTime(text);
+      if (dt != null) return dt;
+      final tod = _parseTimeOfDay(text);
+      if (tod == null) return null;
+      return DateTime(date.year, date.month, date.day, tod.hour, tod.minute);
+    }
+
+    final candidates = <dynamic>[];
+    for (final key in const <String>[
+      'check_out_at',
+      'checkout_at',
+      'out_time',
+      'check_out_time',
+      'checkout_time',
+      'check_out',
+      'clock_out',
+      'logout_time',
+      'updated_at',
+    ]) {
+      candidates.add(_firstValueFromAttendanceRow(row, <String>[key]));
+    }
+
+    for (final raw in candidates) {
+      final parsed = parseDateTimeCandidate(raw);
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  double? _parseWorkedHoursFromRow(Map<String, dynamic> row) {
+    final candidates = <dynamic>[];
+    for (final key in const <String>[
+      'worked_hours',
+      'work_hours',
+      'present_hours',
+      'total_hours',
+      'duration_hours',
+      'hours',
+    ]) {
+      candidates.add(_firstValueFromAttendanceRow(row, <String>[key]));
+    }
+    for (final raw in candidates) {
+      final parsed = double.tryParse(raw?.toString() ?? '');
+      if (parsed != null && parsed >= 0) {
+        return parsed;
+      }
+    }
+    return null;
+  }
+
+  DateTime _rowRecencyTime(Map<String, dynamic> row) {
+    final candidates = <DateTime?>[
+      _parseCheckOutDateTimeFromRow(row),
+      _parseCheckInDateTimeFromRow(row),
+      _parseServerDateTime(row['updated_at']),
+      _parseServerDateTime(row['created_at']),
+      _extractAttendanceDate(row),
+    ];
+    for (final dt in candidates) {
+      if (dt != null) return dt;
+    }
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  dynamic _firstValueFromAttendanceRow(
+    Map<String, dynamic> row,
+    List<String> keys,
+  ) {
+    for (final key in keys) {
+      final direct = row[key];
+      if (direct != null && direct.toString().trim().isNotEmpty) {
+        return direct;
+      }
+    }
+
+    for (final containerKey in const <String>[
+      'data',
+      'attendance',
+      'record',
+      'details',
+    ]) {
+      final nestedRaw = row[containerKey];
+      if (nestedRaw is Map) {
+        final nested = Map<String, dynamic>.from(nestedRaw);
+        for (final key in keys) {
+          final value = nested[key];
+          if (value != null && value.toString().trim().isNotEmpty) {
+            return value;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  DateTime? _parseFlexibleDateTime(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return null;
+
+    final direct = DateTime.tryParse(trimmed);
+    if (direct != null) {
+      return direct;
+    }
+
+    final normalized = trimmed.replaceAll('/', '-');
+    final dateOnlyMatch = RegExp(
+      r'^(\d{1,2})-(\d{1,2})-(\d{4})$',
+    ).firstMatch(normalized);
+    if (dateOnlyMatch != null) {
+      final day = int.tryParse(dateOnlyMatch.group(1) ?? '');
+      final month = int.tryParse(dateOnlyMatch.group(2) ?? '');
+      final year = int.tryParse(dateOnlyMatch.group(3) ?? '');
+      if (day != null && month != null && year != null) {
+        return DateTime(year, month, day);
+      }
+    }
+
+    final dateTimeMatch = RegExp(
+      r'^(\d{1,2})-(\d{1,2})-(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$',
+    ).firstMatch(normalized);
+    if (dateTimeMatch != null) {
+      final day = int.tryParse(dateTimeMatch.group(1) ?? '');
+      final month = int.tryParse(dateTimeMatch.group(2) ?? '');
+      final year = int.tryParse(dateTimeMatch.group(3) ?? '');
+      final hour = int.tryParse(dateTimeMatch.group(4) ?? '');
+      final minute = int.tryParse(dateTimeMatch.group(5) ?? '');
+      final second = int.tryParse(dateTimeMatch.group(6) ?? '0') ?? 0;
+      if (day != null &&
+          month != null &&
+          year != null &&
+          hour != null &&
+          minute != null) {
+        return DateTime(year, month, day, hour, minute, second);
+      }
+    }
+
+    return null;
+  }
+
+  String _formatDurationLabel(Duration duration) {
+    final totalMinutes = duration.inMinutes;
+    if (totalMinutes <= 0) {
+      return '0m';
+    }
+    final hours = totalMinutes ~/ 60;
+    final minutes = totalMinutes % 60;
+    if (hours <= 0) {
+      return '${minutes}m';
+    }
+    if (minutes == 0) {
+      return '${hours}h';
+    }
+    return '${hours}h ${minutes}m';
+  }
+
+  Duration? _resolveDurationForDate(
+    Map<String, dynamic> row,
+    DateTime selectedDate,
+  ) {
+    final workedHours = _parseWorkedHoursFromRow(row);
+    if (workedHours != null) {
+      return Duration(minutes: (workedHours * 60).round());
+    }
+
+    final checkInAt = _parseCheckInDateTimeFromRow(row);
+    if (checkInAt == null) return null;
+
+    final checkOutAt = _parseCheckOutDateTimeFromRow(row);
+    if (checkOutAt != null && !checkOutAt.isBefore(checkInAt)) {
+      return checkOutAt.difference(checkInAt);
+    }
+
+    if (_isSameDate(selectedDate, DateTime.now())) {
+      final now = DateTime.now();
+      if (now.isAfter(checkInAt)) {
+        return now.difference(checkInAt);
+      }
+    }
+
     return null;
   }
 
@@ -1594,16 +2156,27 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           '${_calendarFocusDate.year}-${_calendarFocusDate.month.toString().padLeft(2, '0')}';
       final rows = await AttendanceService.fetchMyAttendance(month: month);
       final mapped = <DateTime, String>{};
+      final detailed = <DateTime, Map<String, dynamic>>{};
       for (final row in rows) {
         final date = _extractAttendanceDate(row);
         if (date == null) continue;
         mapped[date] = _extractAttendanceStatus(row);
+
+        final normalizedRow = Map<String, dynamic>.from(row);
+        final existing = detailed[date];
+        if (existing == null ||
+            _rowRecencyTime(normalizedRow).isAfter(_rowRecencyTime(existing))) {
+          detailed[date] = normalizedRow;
+        }
       }
       if (!mounted) return;
       setState(() {
         _attendanceByDate
           ..clear()
           ..addAll(mapped);
+        _attendanceRecordByDate
+          ..clear()
+          ..addAll(detailed);
       });
     } catch (e) {
       _showSnack(e.toString().replaceFirst('Exception: ', ''));
@@ -1613,6 +2186,51 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           _isLoadingMyAttendance = false;
         });
       }
+    }
+  }
+
+  Future<void> _ensureTodayCheckInSnapshot({bool force = false}) async {
+    if (!mounted || !_isScanTabActive) return;
+    if (_isResolvingTodayCheckIn) return;
+
+    final now = DateTime.now();
+    final today = _dateOnly(now);
+    if (!force &&
+        _todayCheckInSnapshotDay != null &&
+        _isSameDate(_todayCheckInSnapshotDay!, today) &&
+        _todayCheckInFromHistoryAt != null) {
+      return;
+    }
+
+    if (!force && _lastTodayCheckInLookupAt != null) {
+      if (now.difference(_lastTodayCheckInLookupAt!) <
+          const Duration(seconds: 12)) {
+        return;
+      }
+    }
+
+    _isResolvingTodayCheckIn = true;
+    _lastTodayCheckInLookupAt = now;
+    try {
+      final resolved = await _resolveTodayCheckInFromHistory();
+      if (!mounted) return;
+      setState(() {
+        _todayCheckInSnapshotDay = today;
+        _todayCheckInFromHistoryAt = resolved;
+        if (resolved != null) {
+          final local = _lastSuccessfulCheckInAt;
+          if (local == null || !_isSameDate(local, resolved)) {
+            _lastSuccessfulCheckInAt = resolved;
+          }
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _todayCheckInSnapshotDay = today;
+      });
+    } finally {
+      _isResolvingTodayCheckIn = false;
     }
   }
 
@@ -1690,6 +2308,28 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     }
   }
 
+  String? _statusForDate(DateTime day) {
+    final key = _dateOnly(day);
+    final fromMap = _attendanceByDate[key];
+    if (fromMap != null && fromMap.trim().isNotEmpty) {
+      return fromMap;
+    }
+
+    final record = _attendanceRecordByDate[key];
+    if (record == null) {
+      return null;
+    }
+
+    final raw =
+        record['status']?.toString().trim() ??
+        record['attendance_status']?.toString().trim() ??
+        '';
+    if (raw.isEmpty) {
+      return null;
+    }
+    return _extractAttendanceStatus(record);
+  }
+
   Map<String, int> _monthStatusCounts(DateTime month) {
     var present = 0;
     var absent = 0;
@@ -1763,6 +2403,26 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     );
   }
 
+  String _attendanceHoverDetails(DateTime day) {
+    final normalizedDay = _dateOnly(day);
+    final label = _selectedDateLabel(normalizedDay);
+    final status = _attendanceByDate[normalizedDay];
+    if (status == null || status.trim().isEmpty) {
+      return '$label\nNo attendance record';
+    }
+    return '$label\nStatus: ${_statusLabel(status)}';
+  }
+
+  Widget _tooltipDayCell(DateTime day, Widget child) {
+    return Tooltip(
+      message: _attendanceHoverDetails(day),
+      triggerMode: TooltipTriggerMode.tap,
+      showDuration: const Duration(seconds: 3),
+      preferBelow: false,
+      child: child,
+    );
+  }
+
   Widget _summaryCard({
     required String title,
     required int count,
@@ -1813,7 +2473,17 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     }
 
     final selectedKey = _dateOnly(_selectedDate);
-    final selectedStatus = _attendanceByDate[selectedKey];
+    final selectedStatus = _statusForDate(selectedKey);
+    final selectedRecord = _attendanceRecordByDate[selectedKey];
+    final selectedCheckInAt = selectedRecord == null
+        ? null
+        : _parseCheckInDateTimeFromRow(selectedRecord);
+    final selectedCheckOutAt = selectedRecord == null
+        ? null
+        : _parseCheckOutDateTimeFromRow(selectedRecord);
+    final selectedDuration = selectedRecord == null
+        ? null
+        : _resolveDurationForDate(selectedRecord, _selectedDate);
     final monthCounts = _monthStatusCounts(_calendarFocusDate);
     final monthPresent = monthCounts['present'] ?? 0;
     final monthAbsent = monthCounts['absent'] ?? 0;
@@ -1823,7 +2493,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
     List<String> eventLoader(DateTime day) {
       if (!_isDateInConfiguredSeason(day)) return <String>[];
-      final status = _attendanceByDate[_dateOnly(day)];
+      final status = _statusForDate(day);
       if (status == null || status.isEmpty) {
         return <String>[];
       }
@@ -1949,6 +2619,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                 _selectedDate = _dateOnly(selectedDay);
                 _calendarFocusDate = _clampMonthToSeason(focusedDay);
               });
+              unawaited(_loadMyAttendance());
             },
             onPageChanged: (focusedDay) {
               final normalized = _clampMonthToSeason(
@@ -1966,10 +2637,24 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
             ),
             calendarBuilders: CalendarBuilders(
               defaultBuilder: (context, day, focusedDay) {
-                return _attendanceDayCell(day, isSelected: false);
+                final cell =
+                    _attendanceDayCell(day, isSelected: false) ??
+                    Container(
+                      margin: const EdgeInsets.all(6),
+                      alignment: Alignment.center,
+                      child: Text(
+                        '${day.day}',
+                        style: const TextStyle(
+                          color: AppColors.primaryMaroon,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    );
+                return _tooltipDayCell(day, cell);
               },
               selectedBuilder: (context, day, focusedDay) {
-                return _attendanceDayCell(day, isSelected: true) ??
+                final cell =
+                    _attendanceDayCell(day, isSelected: true) ??
                     Container(
                       margin: const EdgeInsets.all(6),
                       alignment: Alignment.center,
@@ -1985,6 +2670,36 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                         ),
                       ),
                     );
+                return _tooltipDayCell(day, cell);
+              },
+              todayBuilder: (context, day, focusedDay) {
+                final isSelected = isSameDay(day, _selectedDate);
+                final cell =
+                    _attendanceDayCell(day, isSelected: isSelected) ??
+                    Container(
+                      margin: const EdgeInsets.all(6),
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? AppColors.primaryMaroon
+                            : AppColors.primaryMaroon.withValues(alpha: 0.12),
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: AppColors.primaryMaroon,
+                          width: 1.2,
+                        ),
+                      ),
+                      child: Text(
+                        '${day.day}',
+                        style: TextStyle(
+                          color: isSelected
+                              ? Colors.white
+                              : AppColors.primaryMaroon,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    );
+                return _tooltipDayCell(day, cell);
               },
               markerBuilder: (context, day, events) {
                 if (events.isEmpty) return const SizedBox.shrink();
@@ -2013,7 +2728,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                 color: AppColors.primaryMaroon.withValues(alpha: 0.2),
               ),
             ),
-            child: selectedStatus == null
+            child: (selectedStatus == null && selectedRecord == null)
                 ? Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -2042,26 +2757,59 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                         ),
                       ),
                       const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          Container(
-                            width: 10,
-                            height: 10,
-                            decoration: BoxDecoration(
-                              color: _statusColor(selectedStatus),
-                              shape: BoxShape.circle,
+                      if (selectedStatus != null)
+                        Row(
+                          children: [
+                            Container(
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                color: _statusColor(selectedStatus),
+                                shape: BoxShape.circle,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Status: ${_statusLabel(selectedStatus)}',
-                            style: TextStyle(
-                              color: _statusColor(selectedStatus),
-                              fontWeight: FontWeight.w700,
+                            const SizedBox(width: 8),
+                            Text(
+                              'Status: ${_statusLabel(selectedStatus)}',
+                              style: TextStyle(
+                                color: _statusColor(selectedStatus),
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
+                          ],
+                        ),
+                      if (selectedCheckInAt != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          'Check-in Time: ${_formatTimeLabel(selectedCheckInAt)}',
+                          style: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.w600,
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
+                      if (selectedCheckOutAt != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'Check-out Time: ${_formatTimeLabel(selectedCheckOutAt)}',
+                          style: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                      if (selectedDuration != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          selectedCheckOutAt == null
+                              ? 'Time Spent Since Check-in: ${_formatDurationLabel(selectedDuration)}'
+                              : 'Time Present: ${_formatDurationLabel(selectedDuration)}',
+                          style: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
           ),
@@ -2532,7 +3280,11 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     );
   }
 
-  Widget _buildSeasonUnavailableCard() {
+  Widget _buildBlockerCard({
+    required String title,
+    required String message,
+    IconData icon = Icons.event_busy_rounded,
+  }) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(18),
@@ -2553,16 +3305,12 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
               color: AppColors.primaryMaroon.withValues(alpha: 0.08),
               shape: BoxShape.circle,
             ),
-            child: const Icon(
-              Icons.event_busy_rounded,
-              color: AppColors.primaryMaroon,
-              size: 32,
-            ),
+            child: Icon(icon, color: AppColors.primaryMaroon, size: 32),
           ),
           const SizedBox(height: 12),
-          const Text(
-            'Attendance Season Closed',
-            style: TextStyle(
+          Text(
+            title,
+            style: const TextStyle(
               color: AppColors.primaryMaroon,
               fontSize: 17,
               fontWeight: FontWeight.w700,
@@ -2571,7 +3319,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           ),
           const SizedBox(height: 8),
           Text(
-            _seasonUnavailableMessage,
+            message,
             style: const TextStyle(
               color: AppColors.primaryMaroon,
               fontSize: 13,
@@ -2584,10 +3332,23 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     );
   }
 
+  Widget _buildSeasonUnavailableCard() {
+    return _buildBlockerCard(
+      title: 'Attendance Season Closed',
+      message: _seasonUnavailableMessage,
+      icon: Icons.event_busy_rounded,
+    );
+  }
+
   Widget _buildScanTab() {
     final isSecureWeb = _isSecureWebContext;
 
     if (_isLoadingConfiguredLocation) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_isCheckingAttendanceApproval && _isCheckoutApprovalContext) {
+      _pauseAllScanners();
       return const Center(child: CircularProgressIndicator());
     }
 
@@ -2596,6 +3357,79 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       return Padding(
         padding: const EdgeInsets.all(16),
         child: Center(child: _buildSeasonUnavailableCard()),
+      );
+    }
+
+    unawaited(_ensureTodayCheckInSnapshot());
+
+    if (_isAttendanceBlocked &&
+        _isCheckoutApprovalContext &&
+        !_shouldBlockScannerForCheckoutCooldown) {
+      _pauseAllScanners();
+      final message =
+          _attendanceBlockedMessage ?? _maintenanceCheckoutBlockedMessage;
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildBlockerCard(
+                title: 'Check Out Not Allowed Till You Do Maintenance',
+                message: message,
+                icon: Icons.block_rounded,
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: _isCheckingAttendanceApproval
+                      ? null
+                      : () {
+                          unawaited(_ensureAttendanceApprovalGate(force: true));
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryMaroon,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  icon: _isCheckingAttendanceApproval
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
+                          ),
+                        )
+                      : const Icon(Icons.refresh_rounded),
+                  label: Text(
+                    _isCheckingAttendanceApproval
+                        ? 'Checking...'
+                        : 'Check Again',
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (_hasCompletedCheckoutToday && _isCheckoutScannerUnlocked) {
+      _pauseAllScanners();
+      return Padding(
+        padding: const EdgeInsets.all(16),
+        child: Center(
+          child: _buildBlockerCard(
+            title: 'You Have Already Marked Checkout',
+            message:
+                'Checkout is already completed for today. Please scan again on the next attendance day.',
+            icon: Icons.verified_rounded,
+          ),
+        ),
       );
     }
 
@@ -2775,7 +3609,12 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton.icon(
-                    onPressed: () {
+                    onPressed: () async {
+                      final isApproved =
+                          await _validateMaintenanceApprovalForCheckout();
+                      if (!mounted || !isApproved) {
+                        return;
+                      }
                       setState(() {
                         _isCheckoutScannerUnlocked = true;
                         // Allow first scan attempt in checkout mode.
@@ -2803,6 +3642,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
     // Scanner widget: custom web-native scanner on web, MobileScanner on native.
     Widget scannerWidget;
+    final showScannerBracketOverlay = !(kIsWeb && !isSecureWeb);
     if (kIsWeb && !isSecureWeb) {
       _pauseAllScanners();
       scannerWidget = Container(
@@ -2847,14 +3687,20 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       scannerWidget = MobileScanner(
         controller: _scannerController,
         onDetect: (capture) {
-          final barcodes = capture.barcodes;
-          if (barcodes.isEmpty) return;
-          final raw = barcodes.first.rawValue;
-          if (raw == null || raw.trim().isEmpty) return;
-          _markAttendance(raw.trim());
+          final raw = capture.barcodes
+              .map((barcode) => barcode.rawValue?.trim() ?? '')
+              .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+          if (raw.isEmpty) return;
+          _markAttendance(raw);
         },
       );
     }
+
+    final todayCheckInAt =
+        (_lastSuccessfulCheckInAt != null &&
+            _isSameDate(_lastSuccessfulCheckInAt!, DateTime.now()))
+        ? _lastSuccessfulCheckInAt
+        : _todayCheckInFromHistoryAt;
 
     return Column(
       children: [
@@ -2872,6 +3718,28 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
             ),
           ),
         ),
+        if (todayCheckInAt != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.primaryMaroon.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: AppColors.primaryMaroon.withValues(alpha: 0.2),
+                ),
+              ),
+              child: Text(
+                'Check-in done on ${_selectedDateLabel(todayCheckInAt)} at ${_formatTimeLabel(todayCheckInAt)}',
+                style: const TextStyle(
+                  color: AppColors.primaryMaroon,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
         if (_scanInfo != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -2894,6 +3762,12 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
               child: Stack(
                 children: [
                   Positioned.fill(child: scannerWidget),
+                  if (showScannerBracketOverlay)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: _buildScannerBracketOverlay(),
+                      ),
+                    ),
                   if (_isMarking)
                     Container(
                       color: Colors.black.withValues(alpha: 0.4),
@@ -2924,6 +3798,74 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildScannerBracketOverlay() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final shortestSide = constraints.maxWidth < constraints.maxHeight
+            ? constraints.maxWidth
+            : constraints.maxHeight;
+        final frameSize = (shortestSide * 0.62).clamp(160.0, 300.0);
+
+        return Center(
+          child: SizedBox(
+            width: frameSize,
+            height: frameSize,
+            child: Stack(
+              children: [
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  child: _buildScannerBracketCorner(top: true, left: true),
+                ),
+                Positioned(
+                  top: 0,
+                  right: 0,
+                  child: _buildScannerBracketCorner(top: true, left: false),
+                ),
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  child: _buildScannerBracketCorner(top: false, left: true),
+                ),
+                Positioned(
+                  bottom: 0,
+                  right: 0,
+                  child: _buildScannerBracketCorner(top: false, left: false),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildScannerBracketCorner({required bool top, required bool left}) {
+    const bracketLength = 34.0;
+    const strokeWidth = 4.0;
+
+    return Container(
+      width: bracketLength,
+      height: bracketLength,
+      decoration: BoxDecoration(
+        border: Border(
+          top: top
+              ? const BorderSide(color: Colors.white, width: strokeWidth)
+              : BorderSide.none,
+          bottom: !top
+              ? const BorderSide(color: Colors.white, width: strokeWidth)
+              : BorderSide.none,
+          left: left
+              ? const BorderSide(color: Colors.white, width: strokeWidth)
+              : BorderSide.none,
+          right: !left
+              ? const BorderSide(color: Colors.white, width: strokeWidth)
+              : BorderSide.none,
+        ),
+      ),
     );
   }
 
