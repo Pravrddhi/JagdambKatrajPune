@@ -202,6 +202,43 @@ class AttendanceService {
     throw Exception('Failed to load attendance by user.');
   }
 
+  static Future<Map<String, dynamic>> fetchMyCurrentAttendanceStatus() async {
+    final response = await AuthorizedApiService.sendWithAutoRefresh(
+      null,
+      (token) => http.get(
+        Uri.parse(ApiEndpoints.myCurrentAttendanceStatus),
+        headers: ApiEndpoints.authorizedHeaders(token),
+      ),
+    );
+
+    if (response == null) {
+      throw Exception('Session expired. Please login again.');
+    }
+
+    final decoded = response.body.isNotEmpty
+        ? jsonDecode(response.body)
+        : <String, dynamic>{};
+
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      if (decoded is Map<String, dynamic>) {
+        final data = decoded['data'];
+        if (data is Map) {
+          return Map<String, dynamic>.from(data);
+        }
+        return decoded;
+      }
+      return <String, dynamic>{};
+    }
+
+    if (decoded is Map<String, dynamic>) {
+      throw Exception(
+        decoded['message']?.toString() ??
+            'Failed to load current attendance status.',
+      );
+    }
+    throw Exception('Failed to load current attendance status.');
+  }
+
   static Future<Map<String, dynamic>> setAttendanceLocation({
     required double latitude,
     required double longitude,

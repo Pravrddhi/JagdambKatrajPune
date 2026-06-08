@@ -208,6 +208,10 @@ class ApiEndpoints {
   /// List my attendance entries (calendar view)
   static final String myAttendance = '$baseUrl/attendance/my/';
 
+  /// Get my current attendance status (checked-in / checked-out)
+  static final String myCurrentAttendanceStatus =
+      '$baseUrl/attendance/me/current-status/';
+
   /// List attendance grouped by user (pathak_admin and gat_pramukh)
   static final String attendanceByUser = '$baseUrl/attendance/by-user/';
 
@@ -348,6 +352,46 @@ class ApiEndpoints {
 
   /// Maintenance audit logs
   static final String maintenanceAuditLogs = '$baseUrl/maintenance/audit-logs/';
+
+  /// Create dhol number ranges for the pathak
+  static final String maintenanceDholRanges =
+      '$baseUrl/maintenance/dhol-ranges/';
+
+  /// List dhols created for the pathak
+  static final String maintenancePathakDhols =
+      '$baseUrl/maintenance/pathak-dhols/';
+
+  /// Update a specific pathak dhol status
+  static String getMaintenancePathakDholStatus(int dholId) =>
+      '$baseUrl/maintenance/pathak-dhols/$dholId/status/';
+
+  /// Checked-in members eligible to join pathak instrument maintenance
+  static final String maintenanceCheckedInMembers =
+      '$baseUrl/maintenance/pathak-instruments/checked-in-members/';
+
+  /// Start a pathak instrument maintenance
+  static final String maintenanceStartPathakInstrument =
+      '$baseUrl/maintenance/pathak-instruments/maintenances/start/';
+
+  /// Active pathak instrument maintenances for current user/role
+  static final String maintenanceMyActivePathakInstruments =
+      '$baseUrl/maintenance/pathak-instruments/maintenances/my-active/';
+
+  /// Role-aware pathak instrument maintenance list (admin/reviewer queues)
+  static final String maintenancePathakInstrumentMaintenances =
+      '$baseUrl/maintenance/pathak-instruments/maintenances/';
+
+  /// Pathak instrument maintenance detail
+  static String getPathakInstrumentMaintenanceDetail(int maintenanceId) =>
+      '$baseUrl/maintenance/pathak-instruments/maintenances/$maintenanceId/';
+
+  /// Submit pathak instrument maintenance work
+  static String getPathakInstrumentMaintenanceSubmit(int maintenanceId) =>
+      '$baseUrl/maintenance/pathak-instruments/maintenances/$maintenanceId/submit/';
+
+  /// Approve or reject pathak instrument maintenance
+  static String getPathakInstrumentMaintenanceAction(int maintenanceId) =>
+      '$baseUrl/maintenance/pathak-instruments/maintenances/$maintenanceId/action/';
 
   // -------------------
   // Miscellaneous Constants

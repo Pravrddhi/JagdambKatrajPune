@@ -12,9 +12,7 @@ import 'package:table_calendar/table_calendar.dart';
 
 import '../services/attendance_service.dart';
 import '../config/api_endpoints.dart';
-import '../models/maintenance_models.dart';
 import '../services/maintenance_service.dart';
-import '../services/user_service.dart';
 import '../theme/app_colors.dart';
 import '../utils/qr_download_helper.dart';
 import '../widgets/web_camera_qr_scanner.dart';
@@ -46,7 +44,15 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   static const int _checkoutCooldownMinutes = 30;
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
   static const String _maintenanceCheckoutBlockedMessage =
-      'Maintenance request is not approved. Attendance is blocked.';
+      'Complete and get your Dhol maintenance approved to unlock checkout.';
+  static const String _maintenanceCheckoutPendingApprovalMessage =
+      'Please get your Dhol maintenance approved before checkout.';
+  static const String _maintenanceCheckoutUnderMaintenanceMessage =
+      'Complete your Dhol maintenance and get it approved before checkout.';
+  static const String _maintenanceCheckoutRejectedMessage =
+      'Your maintenance was rejected. Resolve the issue and get approval before checkout.';
+  static const String _assignedDholMaintenanceBlockedMessage =
+      'Please submit assigned Dhol maintenance before checkout.';
   static const String _checkoutCooldownUntilKeyBase =
       'attendance_checkout_cooldown_until';
   static const String _checkoutCooldownSourceKeyBase =
@@ -91,9 +97,11 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   Timer? _attendanceApprovalAutoRefreshTimer;
   DateTime? _lastSuccessfulCheckInAt;
   DateTime? _todayCheckInFromHistoryAt;
-  DateTime? _todayCheckInSnapshotDay;
   DateTime? _lastTodayCheckInLookupAt;
   bool _isResolvingTodayCheckIn = false;
+  bool? _isCheckedInFromCurrentStatus;
+  bool? _isCheckedOutFromCurrentStatus;
+  bool _isRefreshingCurrentAttendanceStatus = false;
   DateTime? _lastSuccessfulCheckOutAt;
   DateTime? _checkoutAllowedAtFromServer;
   int _serverClockOffsetSeconds = 0;
@@ -120,8 +128,6 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   List<Map<String, dynamic>> _attendanceByUser = <Map<String, dynamic>>[];
   final TextEditingController _nameSearchController = TextEditingController();
   String _nameFilter = '';
-  int? _cachedCurrentUserId;
-  String _cachedCurrentUserName = '';
 
   bool get _isSecureWebContext {
     if (!kIsWeb) return true;
@@ -239,205 +245,160 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<int?> _resolveCurrentUserId() async {
-    if (_cachedCurrentUserId != null) {
-      return _cachedCurrentUserId;
-    }
-
-    final scopedUserId = int.tryParse(_cooldownUserScope);
-    if (scopedUserId != null) {
-      _cachedCurrentUserId = scopedUserId;
-      return scopedUserId;
-    }
-
-    final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
-    final tokenUserId = int.tryParse(_extractUserScopeFromToken(token) ?? '');
-    if (tokenUserId != null) {
-      _cachedCurrentUserId = tokenUserId;
-      return tokenUserId;
-    }
-
-    final rawToken = token?.trim();
-    if (rawToken == null || rawToken.isEmpty) {
-      return null;
-    }
-
-    try {
-      final userDetails = await UserService.fetchUserDetails(rawToken);
-      final userId = int.tryParse(
-        userDetails['id']?.toString() ??
-            userDetails['user_id']?.toString() ??
-            userDetails['userId']?.toString() ??
-            '',
-      );
-      final fullName = _extractUserFullName(userDetails);
-      if (fullName.isNotEmpty) {
-        _cachedCurrentUserName = fullName;
-      }
-      if (userId != null) {
-        _cachedCurrentUserId = userId;
-      }
-      return userId;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  String _extractUserFullName(Map<String, dynamic> userDetails) {
-    final firstName = userDetails['first_name']?.toString().trim() ?? '';
-    final lastName = userDetails['last_name']?.toString().trim() ?? '';
-    final fullName = '$firstName $lastName'.trim();
-    if (fullName.isNotEmpty) {
-      return fullName;
-    }
-    return userDetails['name']?.toString().trim() ?? '';
-  }
-
-  Future<String> _resolveCurrentUserName() async {
-    if (_cachedCurrentUserName.trim().isNotEmpty) {
-      return _cachedCurrentUserName.trim().toLowerCase();
-    }
-
-    final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
-    final rawToken = token?.trim();
-    if (rawToken == null || rawToken.isEmpty) {
-      return '';
-    }
-
-    try {
-      final userDetails = await UserService.fetchUserDetails(rawToken);
-      final fullName = _extractUserFullName(userDetails);
-      if (fullName.isNotEmpty) {
-        _cachedCurrentUserName = fullName;
-      }
-      return _cachedCurrentUserName.trim().toLowerCase();
-    } catch (_) {
-      return '';
-    }
-  }
-
-  int _compareCompletionRequestRecency(
-    MaintenanceCompletionRequest left,
-    MaintenanceCompletionRequest right,
-  ) {
-    final leftUpdated = DateTime.tryParse(left.updatedAt);
-    final rightUpdated = DateTime.tryParse(right.updatedAt);
-    if (leftUpdated != null && rightUpdated != null) {
-      final comparison = leftUpdated.compareTo(rightUpdated);
-      if (comparison != 0) {
-        return comparison;
-      }
-    } else if (leftUpdated != null) {
-      return 1;
-    } else if (rightUpdated != null) {
-      return -1;
-    }
-
-    final leftCreated = DateTime.tryParse(left.createdAt);
-    final rightCreated = DateTime.tryParse(right.createdAt);
-    if (leftCreated != null && rightCreated != null) {
-      final comparison = leftCreated.compareTo(rightCreated);
-      if (comparison != 0) {
-        return comparison;
-      }
-    } else if (leftCreated != null) {
-      return 1;
-    } else if (rightCreated != null) {
-      return -1;
-    }
-
-    return left.id.compareTo(right.id);
-  }
-
-  MaintenanceCompletionRequest? _latestCompletionRequestForUser(
-    Iterable<MaintenanceCompletionRequest> requests,
-    int? userId,
-    String normalizedCurrentUserName,
-  ) {
-    MaintenanceCompletionRequest? latestRequest;
-
-    for (final request in requests) {
-      final matchesById = userId != null && request.submittedBy == userId;
-      final matchesByName =
-          normalizedCurrentUserName.isNotEmpty &&
-          request.submittedByName.trim().toLowerCase() ==
-              normalizedCurrentUserName;
-
-      if (!matchesById && !matchesByName) {
-        continue;
-      }
-
-      if (latestRequest == null ||
-          _compareCompletionRequestRecency(request, latestRequest) > 0) {
-        latestRequest = request;
-      }
-    }
-
-    return latestRequest;
-  }
-
   Future<bool> _validateMaintenanceApprovalForCheckout() async {
     try {
-      final userId = await _resolveCurrentUserId();
-      final normalizedCurrentUserName = await _resolveCurrentUserName();
-      if (userId == null && normalizedCurrentUserName.isEmpty) {
+      final maintenances =
+          await MaintenanceService.fetchMyActiveInstrumentMaintenances();
+      final hasAssignedMaintenance = maintenances.isNotEmpty;
+
+      if (!hasAssignedMaintenance) {
+        final completionBlockMessage =
+            await _resolveCheckoutBlockFromCompletionRequests();
+        if (completionBlockMessage == null) {
+          if (mounted && _isAttendanceBlocked) {
+            setState(() {
+              _isAttendanceBlocked = false;
+              _attendanceBlockedMessage = null;
+            });
+          }
+          return true;
+        }
+
         if (mounted) {
           setState(() {
             _isAttendanceBlocked = true;
-            _attendanceBlockedMessage = _maintenanceCheckoutBlockedMessage;
-            _isCheckoutScannerUnlocked = true;
+            _attendanceBlockedMessage = completionBlockMessage;
           });
         }
         return false;
       }
 
-      // Simple rule for checkout: user's latest maintenance request must be approved.
-      final completionRequests =
-          await MaintenanceService.fetchCompletionRequests();
-      if (completionRequests.isEmpty) {
+      String? blockedMessage;
+      for (final item in maintenances) {
+        final status = item.normalizedStatus.trim().toLowerCase();
+        if (status == 'approved') {
+          continue;
+        }
+
+        if (status == 'rejected') {
+          blockedMessage = _maintenanceCheckoutRejectedMessage;
+          break;
+        }
+
+        if (status == 'under_maintenance' ||
+            status == 'in_progress' ||
+            status == 'active' ||
+            status == 'started' ||
+            status == 'not_started' ||
+            status == 'notstarted') {
+          blockedMessage = _maintenanceCheckoutUnderMaintenanceMessage;
+          continue;
+        }
+
+        if (status == 'pending_approval' ||
+            status == 'pending' ||
+            status == 'submitted') {
+          blockedMessage ??= _maintenanceCheckoutPendingApprovalMessage;
+          continue;
+        }
+
+        blockedMessage ??= _maintenanceCheckoutBlockedMessage;
+      }
+
+      if (blockedMessage != null) {
         if (mounted) {
           setState(() {
             _isAttendanceBlocked = true;
-            _attendanceBlockedMessage = _maintenanceCheckoutBlockedMessage;
-            _isCheckoutScannerUnlocked = true;
+            _attendanceBlockedMessage = blockedMessage;
           });
         }
         return false;
       }
 
-      final latestRequest = _latestCompletionRequestForUser(
-        completionRequests,
-        userId,
-        normalizedCurrentUserName,
-      );
-
-      if (latestRequest?.normalizedStatus == 'approved') {
-        if (_isAttendanceBlocked && mounted) {
-          setState(() {
-            _isAttendanceBlocked = false;
-            _attendanceBlockedMessage = null;
-          });
-        }
-        return true;
-      }
-
-      if (mounted) {
+      if (mounted && _isAttendanceBlocked) {
         setState(() {
-          _isAttendanceBlocked = true;
-          _attendanceBlockedMessage = _maintenanceCheckoutBlockedMessage;
-          _isCheckoutScannerUnlocked = true;
+          _isAttendanceBlocked = false;
+          _attendanceBlockedMessage = null;
         });
       }
-      return false;
+      return true;
     } catch (_) {
-      if (mounted) {
+      // Keep checkout flow resilient on transient validation errors.
+      if (mounted && _isAttendanceBlocked) {
         setState(() {
-          _isAttendanceBlocked = true;
-          _attendanceBlockedMessage = _maintenanceCheckoutBlockedMessage;
-          _isCheckoutScannerUnlocked = true;
+          _isAttendanceBlocked = false;
+          _attendanceBlockedMessage = null;
         });
       }
-      return false;
+      return true;
+    }
+  }
+
+  Future<String?> _resolveCheckoutBlockFromCompletionRequests() async {
+    try {
+      final requests = await MaintenanceService.fetchCompletionRequests();
+      if (requests.isEmpty) {
+        return _maintenanceCheckoutBlockedMessage;
+      }
+
+      final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
+      final currentUserId = _extractUserScopeFromToken(token);
+      final userScopedRequests = currentUserId == null
+          ? requests
+          : requests
+                .where(
+                  (item) =>
+                      item.submittedBy != null &&
+                      item.submittedBy!.toString() == currentUserId,
+                )
+                .toList();
+
+      if (userScopedRequests.isEmpty) {
+        return _maintenanceCheckoutBlockedMessage;
+      }
+
+      userScopedRequests.sort((a, b) {
+        DateTime? parse(String raw) => DateTime.tryParse(raw.trim());
+        final bUpdated = parse(b.updatedAt);
+        final aUpdated = parse(a.updatedAt);
+        if (bUpdated != null && aUpdated != null) {
+          final cmp = bUpdated.compareTo(aUpdated);
+          if (cmp != 0) return cmp;
+        }
+
+        final bCreated = parse(b.createdAt);
+        final aCreated = parse(a.createdAt);
+        if (bCreated != null && aCreated != null) {
+          final cmp = bCreated.compareTo(aCreated);
+          if (cmp != 0) return cmp;
+        }
+
+        return b.id.compareTo(a.id);
+      });
+
+      final latest = userScopedRequests.first;
+      final rawStatus = latest.status.trim().toLowerCase();
+      final status =
+          (rawStatus.isEmpty &&
+              ((latest.approvedBy != null && latest.approvedBy! > 0) ||
+                  latest.approvedAt.trim().isNotEmpty))
+          ? 'approved'
+          : rawStatus;
+      if (status == 'approved') {
+        return null;
+      }
+      if (status == 'rejected') {
+        return _maintenanceCheckoutRejectedMessage;
+      }
+      if (status == 'pending' ||
+          status == 'pending_approval' ||
+          status == 'submitted') {
+        return _maintenanceCheckoutPendingApprovalMessage;
+      }
+
+      return _maintenanceCheckoutBlockedMessage;
+    } catch (_) {
+      return _maintenanceCheckoutBlockedMessage;
     }
   }
 
@@ -447,7 +408,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     if (!force && _hasResolvedAttendanceApprovalGate) return;
     if (!_isScanTabActive) return;
     if (!_isWithinConfiguredSeason) return;
-    if (!_isCheckoutApprovalContext) return;
+    if (!_isCheckoutGateContext) return;
 
     setState(() {
       _isCheckingAttendanceApproval = true;
@@ -503,6 +464,12 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     return _isCheckoutScannerUnlocked;
   }
 
+  bool get _isCheckoutGateContext {
+    return _isCheckoutScannerUnlocked ||
+        _shouldBlockScannerForCheckoutCooldown ||
+        _shouldShowCheckoutScannerUnlockCard;
+  }
+
   bool get _hasCompletedCheckoutToday {
     final checkedOutAt = _lastSuccessfulCheckOutAt;
     if (checkedOutAt == null) return false;
@@ -517,7 +484,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         if (!mounted ||
             !_isScanTabActive ||
             !_isAttendanceBlocked ||
-            !_isCheckoutApprovalContext) {
+            !_isCheckoutGateContext) {
           _stopAttendanceApprovalAutoRefresh();
           return;
         }
@@ -696,6 +663,72 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     final parsed = DateTime.tryParse(text);
     if (parsed == null) return null;
     return parsed.isUtc ? parsed.toLocal() : parsed;
+  }
+
+  bool _coerceBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    final normalized = value?.toString().trim().toLowerCase() ?? '';
+    return normalized == '1' || normalized == 'true' || normalized == 'yes';
+  }
+
+  bool get _hasActiveCheckInFromCurrentStatus {
+    return (_isCheckedInFromCurrentStatus ?? false) &&
+        !(_isCheckedOutFromCurrentStatus ?? false);
+  }
+
+  Future<void> _refreshCurrentAttendanceStatus({bool force = false}) async {
+    if (!mounted) return;
+    if (_isRefreshingCurrentAttendanceStatus) return;
+
+    final now = DateTime.now();
+    if (!force && _lastTodayCheckInLookupAt != null) {
+      if (now.difference(_lastTodayCheckInLookupAt!) <
+          const Duration(seconds: 8)) {
+        return;
+      }
+    }
+
+    _isRefreshingCurrentAttendanceStatus = true;
+    _lastTodayCheckInLookupAt = now;
+    try {
+      final data = await AttendanceService.fetchMyCurrentAttendanceStatus();
+      final isCheckedIn = _coerceBool(data['is_checked_in']);
+      final isCheckedOut = _coerceBool(data['is_checked_out']);
+      final checkInAt = _parseServerDateTime(data['check_in_at']);
+      final checkOutAt = _parseServerDateTime(data['check_out_at']);
+
+      if (!mounted) return;
+      setState(() {
+        _isCheckedInFromCurrentStatus = isCheckedIn;
+        _isCheckedOutFromCurrentStatus = isCheckedOut;
+
+        if (isCheckedIn && !isCheckedOut) {
+          final effectiveCheckInAt = checkInAt;
+          if (effectiveCheckInAt != null) {
+            _lastSuccessfulCheckInAt = effectiveCheckInAt;
+            _todayCheckInFromHistoryAt = effectiveCheckInAt;
+          }
+          _lastSuccessfulCheckOutAt = null;
+        } else if (isCheckedOut) {
+          _lastSuccessfulCheckInAt = null;
+          _todayCheckInFromHistoryAt = null;
+          _lastSuccessfulCheckOutAt = checkOutAt ?? now;
+          _checkoutAllowedAtFromServer = null;
+          _isCheckoutScannerUnlocked = false;
+        } else {
+          _lastSuccessfulCheckInAt = null;
+          _todayCheckInFromHistoryAt = null;
+          _lastSuccessfulCheckOutAt = null;
+          _checkoutAllowedAtFromServer = null;
+          _isCheckoutScannerUnlocked = false;
+        }
+      });
+    } catch (_) {
+      // Keep previous local state when status refresh fails.
+    } finally {
+      _isRefreshingCurrentAttendanceStatus = false;
+    }
   }
 
   int _resolveServerOffsetSeconds(DateTime? serverNow) {
@@ -1274,6 +1307,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       return;
     }
 
+    await _refreshCurrentAttendanceStatus(force: true);
+
     final now = DateTime.now();
     final checkInToday = _todayAtConfiguredTime(_configuredCheckInTime);
     final checkOutToday = _todayAtConfiguredTime(_configuredCheckOutTime);
@@ -1287,8 +1322,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       await _clearCheckoutCooldown();
     }
 
-    final lastCheckInAt = _lastSuccessfulCheckInAt;
-    final hasActiveCheckIn = lastCheckInAt != null;
+    final hasActiveCheckIn = _hasActiveCheckInFromCurrentStatus;
     final checkoutModeRequestedByUser = _isCheckoutScannerUnlocked;
     final checkoutAllowedAt = _checkoutAllowedAt;
     if (checkoutAllowedAt != null && !checkoutModeRequestedByUser) {
@@ -1354,21 +1388,6 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           ? 'check_out'
           : 'check_in';
 
-      if (requestedAction == 'check_out' &&
-          hasActiveCheckIn &&
-          !checkoutModeRequestedByUser) {
-        try {
-          final resolvedCheckIn = await _resolveTodayCheckInFromHistory();
-          if (resolvedCheckIn == null) {
-            requestedAction = 'check_in';
-          } else {
-            _lastSuccessfulCheckInAt = resolvedCheckIn;
-          }
-        } catch (_) {
-          // Fall back to current local state if history cannot be loaded.
-        }
-      }
-
       if (requestedAction == 'check_out') {
         final isMaintenanceApproved =
             await _validateMaintenanceApprovalForCheckout();
@@ -1390,10 +1409,15 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         final normalized = errorText.toLowerCase();
         final apiError = e is AttendanceApiException ? e : null;
         final errorPayload = apiError?.data ?? const <String, dynamic>{};
+        final backendMessage =
+            errorPayload['message']?.toString().trim() ?? errorText.trim();
         final serverAllowedAt = _parseServerDateTime(
           errorPayload['checkout_allowed_at'],
         );
         final serverNow = _parseServerDateTime(errorPayload['server_now']);
+        final isAssignedDholMaintenanceBlocked =
+            requestedAction == 'check_out' &&
+            backendMessage == _assignedDholMaintenanceBlockedMessage;
         final looksLikeAlreadyMarkedToday =
             normalized.contains('attendance already marked for today') ||
             normalized.contains('already marked for today');
@@ -1418,13 +1442,6 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
             );
             source = 'server';
           } else {
-            DateTime? checkInAt;
-            try {
-              checkInAt = await _resolveTodayCheckInFromHistory();
-            } catch (_) {
-              // Non-fatal: fallback below.
-            }
-
             final nowTime = DateTime.now();
             final configuredCheckInToday = _todayAtConfiguredTime(
               _configuredCheckInTime,
@@ -1434,7 +1451,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                     nowTime.isAfter(configuredCheckInToday)
                 ? configuredCheckInToday
                 : null;
-            inferredCheckInAt = checkInAt ?? configuredFallback ?? nowTime;
+            inferredCheckInAt = configuredFallback ?? nowTime;
             effectiveAllowedAt = inferredCheckInAt.add(
               const Duration(minutes: _checkoutCooldownMinutes),
             );
@@ -1478,18 +1495,29 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           );
         }
 
-        if (requestedAction == 'check_out' && looksLikeNoCheckIn) {
-          // Reconcile against today's history first and retry checkout once.
-          // This avoids requiring a second scan when backend state is briefly stale.
-          DateTime? resolvedCheckIn;
-          try {
-            resolvedCheckIn = await _resolveTodayCheckInFromHistory();
-          } catch (_) {
-            // Non-fatal: fallback path below will handle the outcome.
+        if (isAssignedDholMaintenanceBlocked) {
+          const blockedMessage = _maintenanceCheckoutBlockedMessage;
+          if (mounted) {
+            setState(() {
+              _isAttendanceBlocked = true;
+              _attendanceBlockedMessage = blockedMessage;
+              _isCheckoutScannerUnlocked = true;
+              _hasMarkedFromCurrentScan = false;
+            });
           }
+          await _showScanResultPopupAndNavigateHome(
+            title: 'Checkout Blocked',
+            message: blockedMessage,
+            isSuccess: false,
+          );
+          return;
+        }
 
-          if (resolvedCheckIn != null) {
-            _lastSuccessfulCheckInAt = resolvedCheckIn;
+        if (requestedAction == 'check_out' && looksLikeNoCheckIn) {
+          // Reconcile with authoritative current-status first and retry checkout once.
+          await _refreshCurrentAttendanceStatus(force: true);
+
+          if (_hasActiveCheckInFromCurrentStatus) {
             response = await AttendanceService.markAttendance(
               qrData: qrData,
               latitude: current.latitude,
@@ -1595,6 +1623,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       String successMessage;
       if (isCheckoutAction) {
         popupTitle = 'Checkout Marked!';
+        _isCheckedOutFromCurrentStatus = true;
+        _isCheckedInFromCurrentStatus = true;
         _lastSuccessfulCheckOutAt = DateTime.now();
         final finalStatusLine = switch (statusText) {
           'present' || 'p' => '\nFinal status: Present.',
@@ -1607,6 +1637,8 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
             : '';
         successMessage = '$baseMessage$workedHoursLine$finalStatusLine';
       } else if (isCheckInAction) {
+        _isCheckedInFromCurrentStatus = true;
+        _isCheckedOutFromCurrentStatus = false;
         final isLateStatus =
             statusText == 'late' || statusText == 'l' || isLateWindow;
         final responseAllowedAt = _parseServerDateTime(
@@ -1637,7 +1669,6 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
             : '';
         successMessage =
             '$baseMessage$statusLine$checkoutLine$missedCheckoutNote';
-        _todayCheckInSnapshotDay = _dateOnly(checkInRecordedAt);
         _todayCheckInFromHistoryAt = checkInRecordedAt;
         _serverClockOffsetSeconds = _resolveServerOffsetSeconds(
           responseServerNow,
@@ -2122,26 +2153,6 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     return null;
   }
 
-  Future<DateTime?> _resolveTodayCheckInFromHistory() async {
-    final now = DateTime.now();
-    final month = '${now.year}-${now.month.toString().padLeft(2, '0')}';
-    final rows = await AttendanceService.fetchMyAttendance(month: month);
-
-    DateTime? best;
-    for (final row in rows) {
-      final date = _extractAttendanceDate(row);
-      if (date == null || !_isSameDate(date, now)) {
-        continue;
-      }
-      final parsed = _parseCheckInDateTimeFromRow(row);
-      if (parsed == null) continue;
-      if (best == null || parsed.isAfter(best)) {
-        best = parsed;
-      }
-    }
-    return best;
-  }
-
   Future<void> _loadMyAttendance() async {
     if (_isLoadingMyAttendance) return;
 
@@ -2193,42 +2204,9 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     if (!mounted || !_isScanTabActive) return;
     if (_isResolvingTodayCheckIn) return;
 
-    final now = DateTime.now();
-    final today = _dateOnly(now);
-    if (!force &&
-        _todayCheckInSnapshotDay != null &&
-        _isSameDate(_todayCheckInSnapshotDay!, today) &&
-        _todayCheckInFromHistoryAt != null) {
-      return;
-    }
-
-    if (!force && _lastTodayCheckInLookupAt != null) {
-      if (now.difference(_lastTodayCheckInLookupAt!) <
-          const Duration(seconds: 12)) {
-        return;
-      }
-    }
-
     _isResolvingTodayCheckIn = true;
-    _lastTodayCheckInLookupAt = now;
     try {
-      final resolved = await _resolveTodayCheckInFromHistory();
-      if (!mounted) return;
-      setState(() {
-        _todayCheckInSnapshotDay = today;
-        _todayCheckInFromHistoryAt = resolved;
-        if (resolved != null) {
-          final local = _lastSuccessfulCheckInAt;
-          if (local == null || !_isSameDate(local, resolved)) {
-            _lastSuccessfulCheckInAt = resolved;
-          }
-        }
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _todayCheckInSnapshotDay = today;
-      });
+      await _refreshCurrentAttendanceStatus(force: force);
     } finally {
       _isResolvingTodayCheckIn = false;
     }
@@ -3375,7 +3353,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
             mainAxisSize: MainAxisSize.min,
             children: [
               _buildBlockerCard(
-                title: 'Check Out Not Allowed Till You Do Maintenance',
+                title: 'Maintenance Approval Required',
                 message: message,
                 icon: Icons.block_rounded,
               ),
@@ -3555,7 +3533,19 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     }
 
     if (_shouldShowCheckoutScannerUnlockCard && !_isCheckoutScannerUnlocked) {
+      if (!_hasResolvedAttendanceApprovalGate &&
+          !_isCheckingAttendanceApproval) {
+        unawaited(_ensureAttendanceApprovalGate(force: true));
+      }
+
       _pauseAllScanners();
+      final isGatePending =
+          !_hasResolvedAttendanceApprovalGate || _isCheckingAttendanceApproval;
+      final maintenanceBlocked = _isAttendanceBlocked || isGatePending;
+      final maintenanceBlockedMessage = isGatePending
+          ? _maintenanceCheckoutBlockedMessage
+          : (_attendanceBlockedMessage ?? _maintenanceCheckoutBlockedMessage);
+
       return Padding(
         padding: const EdgeInsets.all(16),
         child: Center(
@@ -3586,9 +3576,11 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                   ),
                 ),
                 const SizedBox(height: 12),
-                const Text(
-                  'Checkout Ready',
-                  style: TextStyle(
+                Text(
+                  maintenanceBlocked
+                      ? 'Maintenance Approval Required'
+                      : 'Check Out Ready',
+                  style: const TextStyle(
                     color: AppColors.primaryMaroon,
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
@@ -3596,43 +3588,47 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 10),
-                const Text(
-                  'Cooldown finished. Tap the button below to open scanner and mark checkout.',
+                Text(
+                  maintenanceBlocked
+                      ? maintenanceBlockedMessage
+                      : 'Tap the button below to open scanner and mark checkout.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
+                  style: const TextStyle(
                     color: AppColors.primaryMaroon,
                     fontSize: 13,
                     height: 1.45,
                   ),
                 ),
-                const SizedBox(height: 14),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () async {
-                      final isApproved =
-                          await _validateMaintenanceApprovalForCheckout();
-                      if (!mounted || !isApproved) {
-                        return;
-                      }
-                      setState(() {
-                        _isCheckoutScannerUnlocked = true;
-                        // Allow first scan attempt in checkout mode.
-                        _hasMarkedFromCurrentScan = false;
-                      });
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primaryMaroon,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                if (!maintenanceBlocked) ...[
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: () async {
+                        final isApproved =
+                            await _validateMaintenanceApprovalForCheckout();
+                        if (!mounted || !isApproved) {
+                          return;
+                        }
+                        setState(() {
+                          _isCheckoutScannerUnlocked = true;
+                          // Allow first scan attempt in checkout mode.
+                          _hasMarkedFromCurrentScan = false;
+                        });
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryMaroon,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                       ),
+                      icon: const Icon(Icons.qr_code_scanner_rounded),
+                      label: const Text('Open Scanner For Checkout'),
                     ),
-                    icon: const Icon(Icons.qr_code_scanner_rounded),
-                    label: const Text('Open Scanner For Checkout'),
                   ),
-                ),
+                ],
               ],
             ),
           ),

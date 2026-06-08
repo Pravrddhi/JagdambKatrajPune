@@ -230,6 +230,242 @@ class DholMaintenanceEntry {
   }
 }
 
+class PathakDhol {
+  final int id;
+  final String dholNumber;
+  final String status;
+
+  const PathakDhol({
+    required this.id,
+    required this.dholNumber,
+    required this.status,
+  });
+
+  factory PathakDhol.fromJson(Map<String, dynamic> json) {
+    final resolvedId =
+        _toInt(json['id']) ?? _toInt(json['dhol_id']) ?? _toInt(json['dhol']);
+    final resolvedNumber =
+        json['dhol_number']?.toString() ?? json['number']?.toString() ?? '';
+
+    return PathakDhol(
+      id: resolvedId ?? 0,
+      dholNumber: resolvedNumber,
+      status: json['status']?.toString() ?? '',
+    );
+  }
+
+  String get normalizedStatus {
+    final value = status.trim();
+    if (value.isEmpty) return 'damaged';
+
+    final lowered = value
+        .toLowerCase()
+        .replaceAll('-', '_')
+        .replaceAll(' ', '_');
+    if (lowered == 'good_condition') return 'good_condition';
+    if (lowered == 'under_maintenance') return 'under_maintenance';
+    if (lowered == 'damaged') return 'damaged';
+    return lowered;
+  }
+}
+
+class CheckedInMaintenancePartner {
+  final int userId;
+  final String fullName;
+  final String phone;
+  final String instrument;
+
+  const CheckedInMaintenancePartner({
+    required this.userId,
+    required this.fullName,
+    required this.phone,
+    required this.instrument,
+  });
+
+  factory CheckedInMaintenancePartner.fromJson(Map<String, dynamic> json) {
+    return CheckedInMaintenancePartner(
+      userId:
+          _toInt(json['user_id']) ??
+          _toInt(json['id']) ??
+          _toInt(json['user']) ??
+          0,
+      fullName:
+          json['full_name']?.toString() ??
+          json['name']?.toString() ??
+          json['user_name']?.toString() ??
+          '',
+      phone:
+          json['phone']?.toString() ??
+          json['mobile']?.toString() ??
+          json['phone_number']?.toString() ??
+          '',
+      instrument:
+          json['instrument']?.toString() ??
+          json['instrument_name']?.toString() ??
+          '',
+    );
+  }
+}
+
+class InstrumentMaintenanceParticipant {
+  final int userId;
+  final String fullName;
+  final String phone;
+
+  const InstrumentMaintenanceParticipant({
+    required this.userId,
+    required this.fullName,
+    required this.phone,
+  });
+
+  factory InstrumentMaintenanceParticipant.fromJson(Map<String, dynamic> json) {
+    return InstrumentMaintenanceParticipant(
+      userId:
+          _toInt(json['user_id']) ??
+          _toInt(json['id']) ??
+          _toInt(json['user']) ??
+          0,
+      fullName:
+          json['full_name']?.toString() ??
+          json['name']?.toString() ??
+          json['user_name']?.toString() ??
+          '',
+      phone:
+          json['phone']?.toString() ??
+          json['mobile']?.toString() ??
+          json['phone_number']?.toString() ??
+          '',
+    );
+  }
+}
+
+class PathakInstrumentMaintenance {
+  final int id;
+  final int instrumentId;
+  final int? maintenanceEventId;
+  final String maintenanceEventTitle;
+  final String maintenanceEventDate;
+  final String dholNumber;
+  final String status;
+  final int? startedByUserId;
+  final String startedByName;
+  final String startedAt;
+  final String workPerformed;
+  final String remarks;
+  final String approverNote;
+  final String rejectionRemarks;
+  final List<String> beforeImages;
+  final List<String> afterImages;
+  final List<InstrumentMaintenanceParticipant> participants;
+
+  const PathakInstrumentMaintenance({
+    required this.id,
+    required this.instrumentId,
+    required this.maintenanceEventId,
+    required this.maintenanceEventTitle,
+    required this.maintenanceEventDate,
+    required this.dholNumber,
+    required this.status,
+    required this.startedByUserId,
+    required this.startedByName,
+    required this.startedAt,
+    required this.workPerformed,
+    required this.remarks,
+    required this.approverNote,
+    required this.rejectionRemarks,
+    required this.beforeImages,
+    required this.afterImages,
+    required this.participants,
+  });
+
+  factory PathakInstrumentMaintenance.fromJson(Map<String, dynamic> json) {
+    final participantsJson =
+        json['participants'] ??
+        json['participant_users'] ??
+        json['participant_user_ids'];
+    final instrumentJson = json['instrument'] is Map
+        ? Map<String, dynamic>.from(json['instrument'] as Map)
+        : json['pathak_instrument_detail'] is Map
+        ? Map<String, dynamic>.from(json['pathak_instrument_detail'] as Map)
+        : json['pathak_instrument_obj'] is Map
+        ? Map<String, dynamic>.from(json['pathak_instrument_obj'] as Map)
+        : <String, dynamic>{};
+
+    return PathakInstrumentMaintenance(
+      id: _toInt(json['id']) ?? 0,
+      instrumentId:
+          _toInt(json['instrument_id']) ??
+          _toInt(json['instrument']) ??
+          _toInt(json['pathak_instrument']) ??
+          _toInt(instrumentJson['id']) ??
+          _toInt(instrumentJson['instrument_id']) ??
+          _toInt(instrumentJson['pathak_instrument_id']) ??
+          0,
+      maintenanceEventId:
+          _toInt(json['maintenance_event_id']) ??
+          _toInt(json['maintenance_event']) ??
+          _toInt(json['event_id']) ??
+          _toInt(json['event']) ??
+          _toInt(instrumentJson['maintenance_event_id']) ??
+          _toInt(instrumentJson['event_id']),
+      maintenanceEventTitle:
+          json['maintenance_event_title']?.toString() ??
+          json['event_title']?.toString() ??
+          '',
+      maintenanceEventDate:
+          json['maintenance_event_date']?.toString() ??
+          json['event_date']?.toString() ??
+          '',
+      dholNumber:
+          json['dhol_number']?.toString() ??
+          json['instrument_number']?.toString() ??
+          json['instrument_display']?.toString() ??
+          instrumentJson['dhol_number']?.toString() ??
+          instrumentJson['instrument_number']?.toString() ??
+          instrumentJson['number']?.toString() ??
+          instrumentJson['instrument_display']?.toString() ??
+          '',
+      status: json['status']?.toString() ?? '',
+      startedByUserId:
+          _toInt(json['started_by']) ??
+          _toInt(json['started_by_user_id']) ??
+          _toInt(json['created_by']),
+      startedByName:
+          json['started_by_name']?.toString() ??
+          json['started_by_user_name']?.toString() ??
+          json['created_by_name']?.toString() ??
+          '',
+      startedAt:
+          json['started_at']?.toString() ??
+          json['created_at']?.toString() ??
+          '',
+      workPerformed: json['work_performed']?.toString() ?? '',
+      remarks: json['remarks']?.toString() ?? '',
+      approverNote: json['approver_note']?.toString() ?? '',
+      rejectionRemarks: json['rejection_remarks']?.toString() ?? '',
+      beforeImages: _toStringList(json['before_images']),
+      afterImages: _toStringList(json['after_images']),
+      participants: _parseMaintenanceParticipants(participantsJson),
+    );
+  }
+
+  String get normalizedStatus {
+    final value = status
+        .trim()
+        .toLowerCase()
+        .replaceAll('-', '_')
+        .replaceAll(' ', '_');
+    if (value.isEmpty) return 'active';
+    return value;
+  }
+
+  DateTime? get linkedEventDay {
+    final parsed = DateTime.tryParse(maintenanceEventDate);
+    if (parsed == null) return null;
+    return DateTime(parsed.year, parsed.month, parsed.day);
+  }
+}
+
 class MaintenanceAnalysisSummary {
   final int totalStockItems;
   final int totalAvailableUnits;
@@ -618,6 +854,9 @@ class MaintenanceCompletionRequest {
   final int event;
   final String eventTitle;
   final String eventDate;
+  final int? instrumentMaintenanceId;
+  final int? instrumentId;
+  final String dholNumber;
   final int? assignedGatId;
   final String? assignedGatName;
   final int? assignedGatPramukhId;
@@ -627,12 +866,15 @@ class MaintenanceCompletionRequest {
   final String submittedByName;
   final String? submitterGatPramukhName;
   final String workNotes;
+  final String workPerformed;
+  final String remarks;
   final String status;
   final int? approvedBy;
   final String approvedAt;
   final String approverNote;
   final String createdAt;
   final String updatedAt;
+  final List<InstrumentMaintenanceParticipant> participants;
   final List<CompletionUsedItem> usedItems;
 
   const MaintenanceCompletionRequest({
@@ -640,6 +882,9 @@ class MaintenanceCompletionRequest {
     required this.event,
     required this.eventTitle,
     required this.eventDate,
+    required this.instrumentMaintenanceId,
+    required this.instrumentId,
+    required this.dholNumber,
     required this.assignedGatId,
     required this.assignedGatName,
     required this.assignedGatPramukhId,
@@ -649,22 +894,65 @@ class MaintenanceCompletionRequest {
     required this.submittedByName,
     required this.submitterGatPramukhName,
     required this.workNotes,
+    required this.workPerformed,
+    required this.remarks,
     required this.status,
     required this.approvedBy,
     required this.approvedAt,
     required this.approverNote,
     required this.createdAt,
     required this.updatedAt,
+    required this.participants,
     required this.usedItems,
   });
 
   factory MaintenanceCompletionRequest.fromJson(Map<String, dynamic> json) {
+    final instrumentMaintenanceJson = json['instrument_maintenance'] is Map
+        ? Map<String, dynamic>.from(json['instrument_maintenance'] as Map)
+        : json['maintenance'] is Map
+        ? Map<String, dynamic>.from(json['maintenance'] as Map)
+        : json['instrument_maintenance_detail'] is Map
+        ? Map<String, dynamic>.from(
+            json['instrument_maintenance_detail'] as Map,
+          )
+        : <String, dynamic>{};
+    final participantsJson =
+        json['participants'] ??
+        json['maintenance_participants'] ??
+        instrumentMaintenanceJson['participants'] ??
+        instrumentMaintenanceJson['maintenance_participants'];
     final usedItemsJson = json['used_items'];
     return MaintenanceCompletionRequest(
       id: _toInt(json['id']) ?? 0,
-      event: _toInt(json['event']) ?? 0,
-      eventTitle: json['event_title']?.toString() ?? '',
-      eventDate: json['event_date']?.toString() ?? '',
+      event:
+          _toInt(json['event']) ??
+          _toInt(json['event_id']) ??
+          _toInt(json['maintenance_event_id']) ??
+          0,
+      eventTitle:
+          json['event_title']?.toString() ??
+          json['maintenance_event_title']?.toString() ??
+          '',
+      eventDate:
+          json['event_date']?.toString() ??
+          json['maintenance_event_date']?.toString() ??
+          '',
+      instrumentMaintenanceId:
+          _toInt(json['instrument_maintenance_id']) ??
+          _toInt(json['maintenance_id']) ??
+          _toInt(json['instrument_maintenance']) ??
+          _toInt(instrumentMaintenanceJson['id']),
+      instrumentId:
+          _toInt(json['instrument_id']) ??
+          _toInt(instrumentMaintenanceJson['instrument_id']) ??
+          _toInt(instrumentMaintenanceJson['pathak_instrument_id']),
+      dholNumber:
+          json['dhol_number']?.toString() ??
+          json['instrument_number']?.toString() ??
+          instrumentMaintenanceJson['dhol_number']?.toString() ??
+          instrumentMaintenanceJson['instrument_number']?.toString() ??
+          instrumentMaintenanceJson['number']?.toString() ??
+          '',
       assignedGatId: _toInt(json['assigned_gat_id']),
       assignedGatName: json['assigned_gat_name']?.toString(),
       assignedGatPramukhId: _toInt(json['assigned_gat_pramukh_id']),
@@ -674,15 +962,27 @@ class MaintenanceCompletionRequest {
           json['is_actionable_for_current_user']?.toString().toLowerCase() ==
               'true',
       submittedBy: _toInt(json['submitted_by']),
-      submittedByName: json['submitted_by_name']?.toString() ?? '',
+      submittedByName:
+          json['submitted_by_name']?.toString() ??
+          json['completion_requested_by_name']?.toString() ??
+          '',
       submitterGatPramukhName: json['submitter_gat_pramukh_name']?.toString(),
       workNotes: json['work_notes']?.toString() ?? '',
+      workPerformed:
+          json['work_performed']?.toString() ??
+          instrumentMaintenanceJson['work_performed']?.toString() ??
+          '',
+      remarks:
+          json['remarks']?.toString() ??
+          instrumentMaintenanceJson['remarks']?.toString() ??
+          '',
       status: json['status']?.toString() ?? '',
       approvedBy: _toInt(json['approved_by']),
       approvedAt: json['approved_at']?.toString() ?? '',
       approverNote: json['approver_note']?.toString() ?? '',
       createdAt: json['created_at']?.toString() ?? '',
       updatedAt: json['updated_at']?.toString() ?? '',
+      participants: _parseMaintenanceParticipants(participantsJson),
       usedItems: usedItemsJson is List
           ? usedItemsJson
                 .whereType<Map>()
@@ -721,4 +1021,41 @@ int? _toInt(dynamic value) {
   if (value is int) return value;
   if (value is num) return value.toInt();
   return int.tryParse(value?.toString() ?? '');
+}
+
+List<String> _toStringList(dynamic value) {
+  if (value is! List) return <String>[];
+  return value
+      .map((item) {
+        if (item is Map) {
+          final map = Map<String, dynamic>.from(item);
+          return map['url']?.toString() ??
+              map['image']?.toString() ??
+              map['file']?.toString() ??
+              '';
+        }
+        return item?.toString() ?? '';
+      })
+      .where((item) => item.trim().isNotEmpty)
+      .toList();
+}
+
+List<InstrumentMaintenanceParticipant> _parseMaintenanceParticipants(
+  dynamic value,
+) {
+  if (value is! List) return <InstrumentMaintenanceParticipant>[];
+
+  return value.map((item) {
+    if (item is Map) {
+      return InstrumentMaintenanceParticipant.fromJson(
+        Map<String, dynamic>.from(item),
+      );
+    }
+
+    return InstrumentMaintenanceParticipant(
+      userId: _toInt(item) ?? 0,
+      fullName: item?.toString() ?? '',
+      phone: '',
+    );
+  }).toList();
 }

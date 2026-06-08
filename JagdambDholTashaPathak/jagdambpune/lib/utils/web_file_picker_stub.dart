@@ -4,3 +4,7 @@ import 'dart:typed_data';
 Future<MapEntry<Uint8List, String>?> pickJpegFile({
   bool useCamera = false,
 }) async => null;
+
+Future<List<MapEntry<Uint8List, String>>> pickJpegFiles({
+  bool useCamera = false,
+}) async => <MapEntry<Uint8List, String>>[];
