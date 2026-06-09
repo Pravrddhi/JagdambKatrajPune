@@ -64,6 +64,8 @@ class _HomeScreenState extends State<HomeScreen>
   List<Map<String, dynamic>> _events = []; // User's upcoming events
   List<MaintenanceEvent> _maintenanceDays = <MaintenanceEvent>[];
   final Map<int, String> _completionStatusByEvent = <int, String>{};
+  List<MaintenanceCompletionRequest> _completionRequests =
+      <MaintenanceCompletionRequest>[];
   List<PathakInstrumentMaintenance> _activeInstrumentMaintenances =
       <PathakInstrumentMaintenance>[];
   bool _isLoadingActiveInstrumentMaintenances = false;
@@ -386,7 +388,9 @@ class _HomeScreenState extends State<HomeScreen>
       final events = await MaintenanceService.fetchMaintenanceEvents();
       if (!mounted) return;
 
-      final latestEventId = latestActiveMaintenanceEventId(events);
+      final latestEventId =
+          latestActiveMaintenanceEventId(events) ??
+          latestMaintenanceEventId(events);
       final current = events
           .where((event) => latestEventId != null && event.id == latestEventId)
           .toList();
@@ -426,15 +430,31 @@ class _HomeScreenState extends State<HomeScreen>
 
     try {
       final requests = await MaintenanceService.fetchCompletionRequests();
-      final userScopedRequests = _filterCompletionRequestsForCurrentUser(
-        requests,
-      );
+
       final eventIds = _maintenanceDays.map((event) => event.id).toSet();
+      final participantMaintenances = _activeInstrumentMaintenances
+          .where(_isInstrumentMaintenanceParticipant)
+          .toList();
+      final participantMaintenanceIds = participantMaintenances
+          .map((item) => item.maintenanceId)
+          .toSet();
 
       final grouped = <int, Set<String>>{};
-      for (final request in userScopedRequests) {
+      for (final request in requests) {
         if (!eventIds.contains(request.event)) continue;
-        final status = request.status.trim().toLowerCase();
+        final maintenanceId = request.maintenanceId;
+        final isExactParticipantMaintenance =
+            maintenanceId != null &&
+            participantMaintenanceIds.contains(maintenanceId);
+        final isParticipantScopedRequest = _isCompletionRequestForCurrentUser(
+          request,
+        );
+
+        if (!isExactParticipantMaintenance && !isParticipantScopedRequest) {
+          continue;
+        }
+
+        final status = request.normalizedStatus.trim().toLowerCase();
         if (status.isEmpty) continue;
         grouped.putIfAbsent(request.event, () => <String>{}).add(status);
       }
@@ -457,6 +477,7 @@ class _HomeScreenState extends State<HomeScreen>
 
       if (!mounted) return;
       setState(() {
+        _completionRequests = requests;
         _completionStatusByEvent
           ..clear()
           ..addAll(resolved);
@@ -919,6 +940,23 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     DateTime? submitLoaderStart;
 
+    if (event.isClosedStatus) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Message'),
+          content: const Text('Maintenance event is closed.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     if (!isLatestActiveMaintenanceEvent(event, _maintenanceDays)) {
       await showDialog<void>(
         context: context,
@@ -977,8 +1015,17 @@ class _HomeScreenState extends State<HomeScreen>
         return;
       }
 
+      final selectedMaintenance = _maintenanceForEventOrLatestParticipant(
+        event,
+      );
+      final selectedMaintenanceId = selectedMaintenance?.maintenanceId ?? 0;
+
       final requests = await MaintenanceService.fetchInventoryRequests();
       final eventScopedRequests = requests.where((request) {
+        if (request.maintenanceId != null && selectedMaintenanceId > 0) {
+          return request.maintenanceId == selectedMaintenanceId;
+        }
+
         if (request.maintenanceEventId != null) {
           return request.maintenanceEventId == event.id;
         }
@@ -992,36 +1039,20 @@ class _HomeScreenState extends State<HomeScreen>
         return false;
       }).toList();
 
-      final userScopedStockRequests = eventScopedRequests
-          .where(_isInventoryRequestOwnedByCurrentUser)
-          .toList();
+      final maintenanceScopedStockRequests = eventScopedRequests;
 
-      final hasPendingStockRequest = userScopedStockRequests.any(
-        _isPendingInventoryRequest,
-      );
+      final hasPendingStockRequest = selectedMaintenanceId > 0
+          ? _hasPendingStockRequestForMaintenance(
+              selectedMaintenanceId,
+              maintenanceScopedStockRequests,
+            )
+          : maintenanceScopedStockRequests.any(_isPendingInventoryRequest);
       if (hasPendingStockRequest) {
-        if (!mounted) return;
-        await showDialog<void>(
-          context: context,
-          builder: (dialogContext) {
-            return AlertDialog(
-              title: const Text('Pending Stock Request'),
-              content: const Text(
-                'You have pending stock approval request(s). Submit maintenance completion only after stock approval.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('OK'),
-                ),
-              ],
-            );
-          },
-        );
+        await _showPendingStockValidationDialog();
         return;
       }
 
-      final approvedRequests = userScopedStockRequests
+      final approvedRequests = maintenanceScopedStockRequests
           .where((req) => req.normalizedStatus == 'approved')
           .toList();
 
@@ -1046,6 +1077,7 @@ class _HomeScreenState extends State<HomeScreen>
       }
 
       final response = await MaintenanceService.createCompletionRequest(
+        maintenanceId: selectedMaintenanceId,
         eventId: event.id,
         workNotes: submission.workNotes,
         usedItems: submission.usedItems,
@@ -1268,9 +1300,40 @@ class _HomeScreenState extends State<HomeScreen>
                                       ?.trim()
                                       .toLowerCase();
                               final userMaintenanceStatusItem =
-                                  _currentUserLatestMaintenanceStatusItem;
+                                  _maintenanceForEventOrLatestParticipant(item);
+                              final userMaintenanceStatus =
+                                  userMaintenanceStatusItem == null
+                                  ? ''
+                                  : _effectiveInstrumentMaintenanceStatus(
+                                      userMaintenanceStatusItem,
+                                    );
+                              final effectiveStatus =
+                                  _effectiveMaintenanceStatusForEvent(item);
+
+                              if (item.isClosedStatus) {
+                                _debugHomeMaintenanceAction(
+                                  event: item,
+                                  selectedAction: 'Maintenance Closed',
+                                  maintenance: userMaintenanceStatusItem,
+                                  effectiveStatus: effectiveStatus,
+                                );
+                                return OutlinedButton.icon(
+                                  onPressed: null,
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.blueGrey,
+                                  ),
+                                  icon: const Icon(Icons.lock_outline),
+                                  label: const Text('Maintenance Closed'),
+                                );
+                              }
 
                               if (completionStatus == 'pending') {
+                                _debugHomeMaintenanceAction(
+                                  event: item,
+                                  selectedAction: 'Pending Approval',
+                                  maintenance: userMaintenanceStatusItem,
+                                  effectiveStatus: effectiveStatus,
+                                );
                                 return OutlinedButton.icon(
                                   onPressed: null,
                                   style: OutlinedButton.styleFrom(
@@ -1282,6 +1345,12 @@ class _HomeScreenState extends State<HomeScreen>
                               }
 
                               if (completionStatus == 'approved') {
+                                _debugHomeMaintenanceAction(
+                                  event: item,
+                                  selectedAction: 'Approved',
+                                  maintenance: userMaintenanceStatusItem,
+                                  effectiveStatus: effectiveStatus,
+                                );
                                 return OutlinedButton.icon(
                                   onPressed: null,
                                   style: OutlinedButton.styleFrom(
@@ -1293,6 +1362,12 @@ class _HomeScreenState extends State<HomeScreen>
                               }
 
                               if (completionStatus == 'rejected') {
+                                _debugHomeMaintenanceAction(
+                                  event: item,
+                                  selectedAction: 'Submit Maintenance',
+                                  maintenance: userMaintenanceStatusItem,
+                                  effectiveStatus: effectiveStatus,
+                                );
                                 return OutlinedButton.icon(
                                   onPressed: () =>
                                       _openMaintenanceCompletionFromHome(item),
@@ -1305,12 +1380,17 @@ class _HomeScreenState extends State<HomeScreen>
                               }
 
                               if (userMaintenanceStatusItem != null) {
-                                final status =
-                                    userMaintenanceStatusItem.normalizedStatus;
+                                final status = userMaintenanceStatus;
                                 if (status == 'under_maintenance' ||
                                     status == 'in_progress' ||
                                     status == 'active' ||
                                     status == 'started') {
+                                  _debugHomeMaintenanceAction(
+                                    event: item,
+                                    selectedAction: 'Submit Maintenance',
+                                    maintenance: userMaintenanceStatusItem,
+                                    effectiveStatus: status,
+                                  );
                                   return OutlinedButton.icon(
                                     onPressed: () =>
                                         _openSubmitInstrumentMaintenanceDialogFromHome(
@@ -1329,6 +1409,12 @@ class _HomeScreenState extends State<HomeScreen>
                                 if (status == 'pending_approval' ||
                                     status == 'pending' ||
                                     status == 'submitted') {
+                                  _debugHomeMaintenanceAction(
+                                    event: item,
+                                    selectedAction: 'Pending Approval',
+                                    maintenance: userMaintenanceStatusItem,
+                                    effectiveStatus: status,
+                                  );
                                   return OutlinedButton.icon(
                                     onPressed: null,
                                     style: OutlinedButton.styleFrom(
@@ -1340,6 +1426,12 @@ class _HomeScreenState extends State<HomeScreen>
                                 }
 
                                 if (status == 'approved') {
+                                  _debugHomeMaintenanceAction(
+                                    event: item,
+                                    selectedAction: 'Approved',
+                                    maintenance: userMaintenanceStatusItem,
+                                    effectiveStatus: status,
+                                  );
                                   return OutlinedButton.icon(
                                     onPressed: null,
                                     style: OutlinedButton.styleFrom(
@@ -1353,6 +1445,12 @@ class _HomeScreenState extends State<HomeScreen>
                                 }
 
                                 if (status == 'rejected') {
+                                  _debugHomeMaintenanceAction(
+                                    event: item,
+                                    selectedAction: 'Rejected',
+                                    maintenance: userMaintenanceStatusItem,
+                                    effectiveStatus: status,
+                                  );
                                   return OutlinedButton.icon(
                                     onPressed: null,
                                     style: OutlinedButton.styleFrom(
@@ -1364,6 +1462,21 @@ class _HomeScreenState extends State<HomeScreen>
                                 }
                               }
 
+                              final fallbackActionLabel =
+                                  effectiveStatus == 'pending_approval'
+                                  ? 'Pending Approval'
+                                  : effectiveStatus == 'approved'
+                                  ? 'Approved'
+                                  : effectiveStatus == 'rejected'
+                                  ? 'Rejected'
+                                  : 'Start Maintenance';
+                              _debugHomeMaintenanceAction(
+                                event: item,
+                                selectedAction: fallbackActionLabel,
+                                maintenance: userMaintenanceStatusItem,
+                                effectiveStatus: effectiveStatus,
+                              );
+
                               return OutlinedButton.icon(
                                 onPressed: _canStartMaintenanceFromHome
                                     ? _openStartMaintenanceDialogFromHome
@@ -1372,7 +1485,7 @@ class _HomeScreenState extends State<HomeScreen>
                                   foregroundColor: AppColors.primaryMaroon,
                                 ),
                                 icon: const Icon(Icons.play_circle_outline),
-                                label: const Text('Start Maintenance'),
+                                label: Text(fallbackActionLabel),
                               );
                             },
                           ),
@@ -1513,8 +1626,10 @@ class _HomeScreenState extends State<HomeScreen>
     final isParticipant = _isInstrumentMaintenanceParticipant(item);
     final canSubmit = _canSubmitInstrumentMaintenanceItem(item);
     final userLatestMaintenanceStatus = _currentUserLatestMaintenanceStatusItem;
-    final normalizedUserStatus =
-        userLatestMaintenanceStatus?.normalizedStatus ?? '';
+    final normalizedUserStatus = userLatestMaintenanceStatus == null
+        ? ''
+        : _effectiveInstrumentMaintenanceStatus(userLatestMaintenanceStatus);
+    final effectiveItemStatus = _effectiveInstrumentMaintenanceStatus(item);
     final isUserPendingApproval =
         normalizedUserStatus == 'pending_approval' ||
         normalizedUserStatus == 'pending' ||
@@ -1528,16 +1643,21 @@ class _HomeScreenState extends State<HomeScreen>
         normalizedUserStatus == 'started';
     final hasPendingApprovalStatusForCard =
         isUserPendingApproval ||
-        item.normalizedStatus == 'pending_approval' ||
-        item.normalizedStatus == 'pending' ||
-        item.normalizedStatus == 'submitted';
+        effectiveItemStatus == 'pending_approval' ||
+        effectiveItemStatus == 'pending' ||
+        effectiveItemStatus == 'submitted';
 
     String primaryActionLabel;
     IconData primaryActionIcon;
     bool primaryActionEnabled;
     late Future<void> Function() primaryAction;
 
-    if (isUserPendingApproval) {
+    if (_isLatestMaintenanceEventClosed) {
+      primaryActionLabel = 'Maintenance Closed';
+      primaryActionIcon = Icons.lock_outline;
+      primaryActionEnabled = false;
+      primaryAction = () async {};
+    } else if (isUserPendingApproval) {
       primaryActionLabel = 'Pending Approval';
       primaryActionIcon = Icons.hourglass_top;
       primaryActionEnabled = false;
@@ -1558,7 +1678,7 @@ class _HomeScreenState extends State<HomeScreen>
       primaryActionEnabled = true;
       primaryAction = () async {
         await _openMaintenanceScreenFromHome(
-          maintenanceId: userLatestMaintenanceStatus.id,
+          maintenanceId: userLatestMaintenanceStatus.maintenanceId,
           openSubmitOnStart: true,
         );
       };
@@ -1571,7 +1691,7 @@ class _HomeScreenState extends State<HomeScreen>
       };
     }
 
-    final isHighlighted = item.normalizedStatus == 'under_maintenance';
+    final isHighlighted = effectiveItemStatus == 'under_maintenance';
     final participantsText = item.participants
         .map((participant) => participant.fullName.trim())
         .where((name) => name.isNotEmpty)
@@ -1580,7 +1700,7 @@ class _HomeScreenState extends State<HomeScreen>
 
     return InkWell(
       onTap: () => _openMaintenanceScreenFromHome(
-        maintenanceId: item.id,
+        maintenanceId: item.maintenanceId,
         openSubmitOnStart: false,
       ),
       borderRadius: BorderRadius.circular(16),
@@ -1698,7 +1818,7 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
                 _buildMaintenanceInfoChip(
                   label: 'Status',
-                  value: _instrumentMaintenanceStatusLabel(item.status),
+                  value: _instrumentMaintenanceStatusLabel(effectiveItemStatus),
                 ),
                 _buildMaintenanceInfoChip(
                   label: 'Started Time',
@@ -1784,8 +1904,9 @@ class _HomeScreenState extends State<HomeScreen>
                   icon: Icons.visibility_outlined,
                   isCompact: isCompact,
                   isEnabled: true,
-                  onPressed: () =>
-                      _openMaintenanceScreenFromHome(maintenanceId: item.id),
+                  onPressed: () => _openMaintenanceScreenFromHome(
+                    maintenanceId: item.maintenanceId,
+                  ),
                 ),
                 _buildMaintenanceActionButton(
                   label: primaryActionLabel,
@@ -1802,8 +1923,9 @@ class _HomeScreenState extends State<HomeScreen>
                       : Icons.fact_check_outlined,
                   isCompact: isCompact,
                   isEnabled: true,
-                  onPressed: () =>
-                      _openMaintenanceScreenFromHome(maintenanceId: item.id),
+                  onPressed: () => _openMaintenanceScreenFromHome(
+                    maintenanceId: item.maintenanceId,
+                  ),
                 ),
               ],
             ),
@@ -2019,10 +2141,21 @@ class _HomeScreenState extends State<HomeScreen>
 
   int? get _currentUserId {
     final details = _userDetails;
+    final nested = details?['data'];
     return int.tryParse(
       details?['id']?.toString() ??
           details?['user_id']?.toString() ??
           details?['userId']?.toString() ??
+          (nested is Map<String, dynamic> ? nested['id']?.toString() : null) ??
+          (nested is Map<String, dynamic>
+              ? nested['user_id']?.toString()
+              : null) ??
+          (nested is Map<String, dynamic>
+              ? nested['userId']?.toString()
+              : null) ??
+          (nested is Map ? nested['id']?.toString() : null) ??
+          (nested is Map ? nested['user_id']?.toString() : null) ??
+          (nested is Map ? nested['userId']?.toString() : null) ??
           '',
     );
   }
@@ -2057,6 +2190,44 @@ class _HomeScreenState extends State<HomeScreen>
         '';
   }
 
+  String get _currentUserPhone {
+    final details = _userDetails;
+    final nested = details?['data'];
+    return (details?['phone']?.toString() ??
+            details?['phone_number']?.toString() ??
+            details?['mobile']?.toString() ??
+            (nested is Map<String, dynamic>
+                ? nested['phone']?.toString()
+                : null) ??
+            (nested is Map<String, dynamic>
+                ? nested['phone_number']?.toString()
+                : null) ??
+            (nested is Map ? nested['phone']?.toString() : null) ??
+            (nested is Map ? nested['phone_number']?.toString() : null) ??
+            widget.phoneNumber)
+        .trim();
+  }
+
+  bool _isCurrentUserMaintenancePartner(CheckedInMaintenancePartner partner) {
+    final currentId = _currentUserId;
+    if (currentId != null && partner.userId == currentId) {
+      return true;
+    }
+
+    final normalizedCurrentName = _currentUserName.trim().toLowerCase();
+    if (normalizedCurrentName.isNotEmpty &&
+        partner.fullName.trim().toLowerCase() == normalizedCurrentName) {
+      return true;
+    }
+
+    final currentPhone = _currentUserPhone;
+    if (currentPhone.isNotEmpty && partner.phone.trim() == currentPhone) {
+      return true;
+    }
+
+    return false;
+  }
+
   bool _isCompletionRequestOwnedByCurrentUser(
     MaintenanceCompletionRequest request,
   ) {
@@ -2083,24 +2254,6 @@ class _HomeScreenState extends State<HomeScreen>
     return requests.where(_isCompletionRequestOwnedByCurrentUser).toList();
   }
 
-  bool _isInventoryRequestOwnedByCurrentUser(InventoryRequestItem request) {
-    final currentUserId = _currentUserId;
-    if (currentUserId != null && request.requestedBy == currentUserId) {
-      return true;
-    }
-
-    final normalizedCurrentUserName = _currentUserName.trim().toLowerCase();
-    final normalizedRequestedByName = request.requestedByName
-        .trim()
-        .toLowerCase();
-    if (normalizedCurrentUserName.isEmpty ||
-        normalizedRequestedByName.isEmpty) {
-      return false;
-    }
-
-    return normalizedCurrentUserName == normalizedRequestedByName;
-  }
-
   bool _isPendingInventoryRequest(InventoryRequestItem request) {
     final normalizedStatus = request.normalizedStatus.trim().toLowerCase();
     if (normalizedStatus == 'pending' ||
@@ -2113,6 +2266,22 @@ class _HomeScreenState extends State<HomeScreen>
     return rawStatus == 'pending' ||
         rawStatus.startsWith('pending') ||
         rawStatus.contains('pending');
+  }
+
+  bool _hasPendingStockRequestForMaintenance(
+    int maintenanceId,
+    Iterable<InventoryRequestItem> requests,
+  ) {
+    if (maintenanceId <= 0) {
+      return false;
+    }
+
+    return requests.any((request) {
+      if (request.maintenanceId != maintenanceId) {
+        return false;
+      }
+      return _isPendingInventoryRequest(request);
+    });
   }
 
   bool _isUpcomingMirvnuk(Map<String, dynamic> event) {
@@ -2336,7 +2505,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   bool _canSubmitInstrumentMaintenanceItem(PathakInstrumentMaintenance item) {
-    final normalizedStatus = item.normalizedStatus;
+    final normalizedStatus = _effectiveInstrumentMaintenanceStatus(item);
     return _isInstrumentMaintenanceParticipant(item) &&
         normalizedStatus != 'pending_approval' &&
         normalizedStatus != 'pending' &&
@@ -2351,10 +2520,171 @@ class _HomeScreenState extends State<HomeScreen>
         return false;
       }
 
-      final normalizedStatus = item.normalizedStatus;
+      final normalizedStatus = _effectiveInstrumentMaintenanceStatus(item);
       return normalizedStatus == 'under_maintenance' ||
           normalizedStatus == 'pending_approval';
     });
+  }
+
+  int _completionRequestTimestamp(MaintenanceCompletionRequest request) {
+    final updated = DateTime.tryParse(request.updatedAt);
+    if (updated != null) {
+      return updated.millisecondsSinceEpoch;
+    }
+
+    final created = DateTime.tryParse(request.createdAt);
+    if (created != null) {
+      return created.millisecondsSinceEpoch;
+    }
+
+    return request.id;
+  }
+
+  bool _isCompletionForInstrumentMaintenance(
+    MaintenanceCompletionRequest request,
+    PathakInstrumentMaintenance maintenance,
+  ) {
+    final requestMaintenanceId = request.maintenanceId;
+    if (requestMaintenanceId != null && requestMaintenanceId > 0) {
+      return requestMaintenanceId == maintenance.maintenanceId;
+    }
+
+    return false;
+  }
+
+  bool _isCompletionRequestForCurrentUser(
+    MaintenanceCompletionRequest request,
+  ) {
+    final currentUserId = _currentUserId;
+    if (currentUserId != null &&
+        request.participants.any(
+          (participant) => participant.userId == currentUserId,
+        )) {
+      return true;
+    }
+
+    final normalizedCurrentName = _currentUserName.trim().toLowerCase();
+    if (normalizedCurrentName.isNotEmpty &&
+        request.participants.any(
+          (participant) =>
+              participant.fullName.trim().toLowerCase() ==
+              normalizedCurrentName,
+        )) {
+      return true;
+    }
+
+    final currentPhone = _currentUserPhone;
+    if (currentPhone.isNotEmpty &&
+        request.participants.any(
+          (participant) => participant.phone.trim() == currentPhone,
+        )) {
+      return true;
+    }
+
+    // Fallback for payloads that omit participants but still identify submitter.
+    if (request.participants.isEmpty) {
+      if (currentUserId != null && request.submittedBy == currentUserId) {
+        return true;
+      }
+
+      final normalizedSubmittedByName = request.submittedByName
+          .trim()
+          .toLowerCase();
+      if (normalizedCurrentName.isNotEmpty &&
+          normalizedSubmittedByName.isNotEmpty &&
+          normalizedCurrentName == normalizedSubmittedByName) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  bool _doesCompletionShareParticipantsWithMaintenance(
+    MaintenanceCompletionRequest request,
+    PathakInstrumentMaintenance maintenance,
+  ) {
+    if (request.participants.isEmpty || maintenance.participants.isEmpty) {
+      return false;
+    }
+
+    final maintenanceParticipantIds = maintenance.participants
+        .map((participant) => participant.userId)
+        .where((id) => id > 0)
+        .toSet();
+    final requestParticipantIds = request.participants
+        .map((participant) => participant.userId)
+        .where((id) => id > 0)
+        .toSet();
+    if (maintenanceParticipantIds.isNotEmpty &&
+        requestParticipantIds.isNotEmpty) {
+      return requestParticipantIds.any(maintenanceParticipantIds.contains);
+    }
+
+    final maintenanceNames = maintenance.participants
+        .map((participant) => participant.fullName.trim().toLowerCase())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final requestNames = request.participants
+        .map((participant) => participant.fullName.trim().toLowerCase())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    if (maintenanceNames.isNotEmpty && requestNames.isNotEmpty) {
+      return requestNames.any(maintenanceNames.contains);
+    }
+
+    final maintenancePhones = maintenance.participants
+        .map((participant) => participant.phone.trim())
+        .where((phone) => phone.isNotEmpty)
+        .toSet();
+    final requestPhones = request.participants
+        .map((participant) => participant.phone.trim())
+        .where((phone) => phone.isNotEmpty)
+        .toSet();
+    if (maintenancePhones.isNotEmpty && requestPhones.isNotEmpty) {
+      return requestPhones.any(maintenancePhones.contains);
+    }
+
+    return false;
+  }
+
+  String _effectiveInstrumentMaintenanceStatus(
+    PathakInstrumentMaintenance maintenance,
+  ) {
+    final matchingRequests =
+        _completionRequests
+            .where(
+              (request) =>
+                  _isCompletionForInstrumentMaintenance(request, maintenance) &&
+                  (_isCompletionRequestForCurrentUser(request) ||
+                      (request.maintenanceId != null &&
+                          request.maintenanceId == maintenance.maintenanceId) ||
+                      _doesCompletionShareParticipantsWithMaintenance(
+                        request,
+                        maintenance,
+                      )),
+            )
+            .toList()
+          ..sort(
+            (left, right) => _completionRequestTimestamp(
+              right,
+            ).compareTo(_completionRequestTimestamp(left)),
+          );
+
+    if (matchingRequests.isEmpty) {
+      return maintenance.normalizedStatus;
+    }
+
+    final completionStatus = matchingRequests.first.normalizedStatus;
+    if (completionStatus == 'pending') {
+      return 'pending_approval';
+    }
+
+    if (completionStatus == 'approved' || completionStatus == 'rejected') {
+      return completionStatus;
+    }
+
+    return maintenance.normalizedStatus;
   }
 
   bool _coerceBool(dynamic value) {
@@ -2375,16 +2705,27 @@ class _HomeScreenState extends State<HomeScreen>
     return _isStartMaintenanceEligible;
   }
 
+  bool get _isLatestMaintenanceEventClosed {
+    if (_maintenanceDays.isEmpty) {
+      return false;
+    }
+    return _maintenanceDays.first.isClosedStatus;
+  }
+
   Future<void> _refreshStartMaintenanceEligibility({
     bool forceBackendRefresh = false,
   }) async {
-    final hasActiveMaintenanceDay = _maintenanceDays.isNotEmpty;
+    final hasActiveMaintenanceDay = _maintenanceDays.any(
+      (event) => event.isActiveStatus,
+    );
     final hasBlockingAssignment = _hasBlockingActiveMaintenanceAssignment;
 
     var eligibleByDefaults = hasActiveMaintenanceDay && !hasBlockingAssignment;
     String? reason;
 
-    if (!hasActiveMaintenanceDay) {
+    if (_isLatestMaintenanceEventClosed) {
+      reason = 'Maintenance event is closed.';
+    } else if (!hasActiveMaintenanceDay) {
       reason = 'Maintenance day is not active.';
     } else if (hasBlockingAssignment) {
       reason = 'You already have an active maintenance assigned.';
@@ -2444,6 +2785,7 @@ class _HomeScreenState extends State<HomeScreen>
 
       final isEligible =
           hasActiveMaintenanceDay &&
+          !_isLatestMaintenanceEventClosed &&
           !hasBlockingAssignment &&
           damagedDhols.isNotEmpty &&
           isCurrentUserCheckedIn &&
@@ -2451,7 +2793,9 @@ class _HomeScreenState extends State<HomeScreen>
 
       setState(() {
         _isStartMaintenanceEligible = isEligible;
-        if (!hasActiveMaintenanceDay) {
+        if (_isLatestMaintenanceEventClosed) {
+          _startMaintenanceIneligibilityReason = 'Maintenance event is closed.';
+        } else if (!hasActiveMaintenanceDay) {
           _startMaintenanceIneligibilityReason =
               'Maintenance day is not active.';
         } else if (hasBlockingAssignment) {
@@ -2491,7 +2835,7 @@ class _HomeScreenState extends State<HomeScreen>
         return false;
       }
 
-      final status = item.normalizedStatus;
+      final status = _effectiveInstrumentMaintenanceStatus(item);
       return status == 'under_maintenance' ||
           status == 'in_progress' ||
           status == 'active' ||
@@ -2508,7 +2852,7 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     int statusPriority(PathakInstrumentMaintenance item) {
-      switch (item.normalizedStatus) {
+      switch (_effectiveInstrumentMaintenanceStatus(item)) {
         case 'under_maintenance':
         case 'in_progress':
         case 'active':
@@ -2550,6 +2894,108 @@ class _HomeScreenState extends State<HomeScreen>
     return items.first;
   }
 
+  PathakInstrumentMaintenance? _maintenanceForEvent(MaintenanceEvent event) {
+    final eventDate = event.parsedEventDate;
+    final matching = _activeInstrumentMaintenances.where((item) {
+      if (!_isInstrumentMaintenanceParticipant(item)) {
+        return false;
+      }
+
+      if (item.maintenanceEventId != null) {
+        return item.maintenanceEventId == event.id;
+      }
+
+      if (item.linkedEventDay != null && eventDate != null) {
+        return item.linkedEventDay == eventDate;
+      }
+
+      return false;
+    }).toList();
+
+    if (matching.isEmpty) {
+      return null;
+    }
+
+    matching.sort((a, b) {
+      final priorityDelta =
+          _instrumentMaintenanceStatusPriority(a) -
+          _instrumentMaintenanceStatusPriority(b);
+      if (priorityDelta != 0) {
+        return priorityDelta;
+      }
+
+      final startedAtA = _tryParseMaintenanceDate(a.startedAt);
+      final startedAtB = _tryParseMaintenanceDate(b.startedAt);
+      if (startedAtA == null && startedAtB == null) {
+        return b.id.compareTo(a.id);
+      }
+      if (startedAtA == null) {
+        return 1;
+      }
+      if (startedAtB == null) {
+        return -1;
+      }
+      return startedAtB.compareTo(startedAtA);
+    });
+
+    return matching.first;
+  }
+
+  PathakInstrumentMaintenance? _maintenanceForEventOrLatestParticipant(
+    MaintenanceEvent event,
+  ) {
+    return _maintenanceForEvent(event) ??
+        _currentUserLatestMaintenanceStatusItem;
+  }
+
+  String _effectiveMaintenanceStatusForEvent(MaintenanceEvent event) {
+    if (event.isClosedStatus) {
+      return 'closed';
+    }
+
+    final completionStatus = _completionStatusByEvent[event.id]
+        ?.trim()
+        .toLowerCase();
+    if (completionStatus != null && completionStatus.isNotEmpty) {
+      return completionStatus;
+    }
+
+    final maintenance = _maintenanceForEventOrLatestParticipant(event);
+    if (maintenance == null) {
+      return '';
+    }
+
+    return _effectiveInstrumentMaintenanceStatus(maintenance);
+  }
+
+  void _debugHomeMaintenanceAction({
+    required MaintenanceEvent event,
+    required String selectedAction,
+    PathakInstrumentMaintenance? maintenance,
+    required String effectiveStatus,
+  }) {
+    if (!kDebugMode) {
+      return;
+    }
+
+    final participantIds =
+        (maintenance?.participants ??
+                const <InstrumentMaintenanceParticipant>[])
+            .map((participant) => participant.userId)
+            .where((id) => id > 0)
+            .toList();
+
+    debugPrint(
+      '[HomeMaintenanceDebug] '
+      'Current User ID: ${_currentUserId ?? '-'} | '
+      'Event ID: ${event.id} | '
+      'Active Maintenance ID: ${maintenance?.id ?? '-'} | '
+      'Maintenance Status: ${effectiveStatus.isEmpty ? '-' : effectiveStatus} | '
+      'Participant IDs: ${participantIds.isEmpty ? '[]' : participantIds} | '
+      'Home Card Action Selected: $selectedAction',
+    );
+  }
+
   String _instrumentMaintenanceStatusLabel(String status) {
     switch (status
         .trim()
@@ -2576,7 +3022,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   int _instrumentMaintenanceStatusPriority(PathakInstrumentMaintenance item) {
-    switch (item.normalizedStatus) {
+    switch (_effectiveInstrumentMaintenanceStatus(item)) {
       case 'under_maintenance':
       case 'in_progress':
       case 'active':
@@ -2690,12 +3136,37 @@ class _HomeScreenState extends State<HomeScreen>
         ),
       ),
     );
+    await _loadMaintenanceDays();
     await _loadActiveInstrumentMaintenances();
+  }
+
+  Future<void> _showPendingStockValidationDialog() async {
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Pending Stock Request'),
+        content: const Text(
+          'Some stock requests are still pending approval. Please wait for approval or rejection before submitting maintenance.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showHomeSnack(String message) {
     if (!mounted) return;
-    final normalized = message.trim();
+    final normalizedInput = message.replaceFirst('Exception: ', '').trim();
+    final normalized =
+        normalizedInput.toLowerCase().contains('maintenance event is closed')
+        ? 'Maintenance event is closed.'
+        : normalizedInput;
     if (normalized.isEmpty) return;
 
     ScaffoldMessenger.of(context)
@@ -2706,6 +3177,9 @@ class _HomeScreenState extends State<HomeScreen>
   String _normalizeStartMaintenanceErrorMessage(String rawMessage) {
     final trimmed = rawMessage.replaceFirst('Exception: ', '').trim();
     final normalized = trimmed.toLowerCase();
+    if (normalized.contains('maintenance event is closed')) {
+      return 'Maintenance event is closed.';
+    }
     if (normalized.contains('no active maintenance event found')) {
       return 'No active maintenance event available.';
     }
@@ -2740,10 +3214,18 @@ class _HomeScreenState extends State<HomeScreen>
       builder: (dialogContext) {
         var searchQuery = '';
         final working = <int>{...initialSelected};
+        final visiblePartners = partners
+            .where((partner) => !_isCurrentUserMaintenancePartner(partner))
+            .toList();
+        final visiblePartnerIds = visiblePartners
+            .map((partner) => partner.userId)
+            .toSet();
+
+        working.removeWhere((id) => !visiblePartnerIds.contains(id));
 
         return StatefulBuilder(
           builder: (context, setSheetState) {
-            final filteredPartners = partners.where((partner) {
+            final filteredPartners = visiblePartners.where((partner) {
               final query = searchQuery.trim().toLowerCase();
               if (query.isEmpty) return true;
               final name = partner.fullName.toLowerCase();
@@ -2838,6 +3320,11 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _openStartMaintenanceDialogFromHome() async {
+    if (_isLatestMaintenanceEventClosed) {
+      _showHomeSnack('Maintenance event is closed.');
+      return;
+    }
+
     List<PathakDhol> damagedDhols;
     try {
       damagedDhols = await MaintenanceService.fetchDamagedPathakDhols();
@@ -2860,6 +3347,12 @@ class _HomeScreenState extends State<HomeScreen>
     int? selectedDholId;
     final selectedPartnerIds = <int>{};
     String? successMessage;
+    final visiblePartners = partners
+        .where((partner) => !_isCurrentUserMaintenancePartner(partner))
+        .toList();
+    final visiblePartnerIds = visiblePartners
+        .map((partner) => partner.userId)
+        .toSet();
 
     final started = await showDialog<bool>(
       context: context,
@@ -2926,7 +3419,7 @@ class _HomeScreenState extends State<HomeScreen>
                                 child: Wrap(
                                   spacing: 6,
                                   runSpacing: 6,
-                                  children: partners
+                                  children: visiblePartners
                                       .where(
                                         (partner) => selectedPartnerIds
                                             .contains(partner.userId),
@@ -2949,7 +3442,7 @@ class _HomeScreenState extends State<HomeScreen>
                                           await _openMaintenancePartnerSelectorFromHome(
                                             parentContext: dialogContext,
                                             initialSelected: selectedPartnerIds,
-                                            partners: partners,
+                                            partners: visiblePartners,
                                           );
                                       if (selected == null ||
                                           !dialogContext.mounted) {
@@ -2958,7 +3451,12 @@ class _HomeScreenState extends State<HomeScreen>
                                       setDialogState(() {
                                         selectedPartnerIds
                                           ..clear()
-                                          ..addAll(selected);
+                                          ..addAll(
+                                            selected.where(
+                                              (id) => visiblePartnerIds
+                                                  .contains(id),
+                                            ),
+                                          );
                                       });
                                     },
                               icon: const Icon(Icons.group_add_outlined),
@@ -3022,6 +3520,9 @@ class _HomeScreenState extends State<HomeScreen>
                                 await MaintenanceService.startInstrumentMaintenance(
                                   instrumentId: selectedDholId!,
                                   participantUserIds: selectedPartnerIds
+                                      .where(
+                                        (id) => visiblePartnerIds.contains(id),
+                                      )
                                       .toList(),
                                 );
                             successMessage =
@@ -3068,47 +3569,14 @@ class _HomeScreenState extends State<HomeScreen>
     }
   }
 
-  Future<String?> _validateStockRulesForHomeInstrumentSubmit({
-    required PathakInstrumentMaintenance maintenance,
-  }) async {
-    final explicitEventId = maintenance.maintenanceEventId;
-    final explicitEventDay = maintenance.linkedEventDay;
-    if (explicitEventId == null && explicitEventDay == null) {
-      return null;
-    }
-
-    final requests = await MaintenanceService.fetchInventoryRequests();
-    final eventScopedRequests = requests.where((request) {
-      if (explicitEventId != null && request.maintenanceEventId != null) {
-        return request.maintenanceEventId == explicitEventId;
-      }
-
-      final linkedEventDay = request.linkedEventDay;
-      if (linkedEventDay != null && explicitEventDay != null) {
-        return linkedEventDay == explicitEventDay;
-      }
-
-      return false;
-    }).toList();
-
-    final userScopedStockRequests = eventScopedRequests
-        .where(_isInventoryRequestOwnedByCurrentUser)
-        .toList();
-
-    final hasPendingStockRequest = userScopedStockRequests.any(
-      _isPendingInventoryRequest,
-    );
-
-    if (hasPendingStockRequest) {
-      return 'You have pending stock approval request(s). Submit maintenance only after stock approval.';
-    }
-
-    return null;
-  }
-
   Future<void> _openSubmitInstrumentMaintenanceDialogFromHome(
     PathakInstrumentMaintenance item,
   ) async {
+    if (_isLatestMaintenanceEventClosed) {
+      _showHomeSnack('Maintenance event is closed.');
+      return;
+    }
+
     PathakInstrumentMaintenance detail;
     try {
       detail = await MaintenanceService.fetchInstrumentMaintenanceDetail(
@@ -3140,6 +3608,17 @@ class _HomeScreenState extends State<HomeScreen>
       allRequests = <InventoryRequestItem>[];
     }
 
+    final hasPendingStockRequest = _hasPendingStockRequestForMaintenance(
+      detail.maintenanceId,
+      allRequests,
+    );
+    if (hasPendingStockRequest) {
+      await _showPendingStockValidationDialog();
+      workPerformedController.dispose();
+      remarksController.dispose();
+      return;
+    }
+
     String? successMessage;
     int? createdCompletionRequestId;
     final resolvedDholNumber = detail.dholNumber.trim().isNotEmpty
@@ -3167,17 +3646,24 @@ class _HomeScreenState extends State<HomeScreen>
         var canSubmit = workPerformedController.text.trim().isNotEmpty;
         String? submitErrorMessage;
 
-        List<InventoryRequestItem> eventScopedUserStockRequests() {
-          final scopedByUser = allRequests
-              .where(_isInventoryRequestOwnedByCurrentUser)
-              .toList();
+        List<InventoryRequestItem> eventScopedMaintenanceStockRequests() {
+          final approvedOrPendingScoped = List<InventoryRequestItem>.from(
+            allRequests,
+          );
+          final explicitMaintenanceId = detail.maintenanceId;
           final explicitEventId = detail.maintenanceEventId;
           final explicitEventDay = detail.linkedEventDay;
-          if (explicitEventId == null && explicitEventDay == null) {
-            return scopedByUser;
+          if (explicitMaintenanceId == 0 &&
+              explicitEventId == null &&
+              explicitEventDay == null) {
+            return approvedOrPendingScoped;
           }
 
-          return scopedByUser.where((request) {
+          return approvedOrPendingScoped.where((request) {
+            if (explicitMaintenanceId > 0 && request.maintenanceId != null) {
+              return request.maintenanceId == explicitMaintenanceId;
+            }
+
             if (explicitEventId != null && request.maintenanceEventId != null) {
               return request.maintenanceEventId == explicitEventId;
             }
@@ -3192,39 +3678,25 @@ class _HomeScreenState extends State<HomeScreen>
         }
 
         List<CompletionUsedItemPreview> stockUsedPreviews() {
-          final approvedRequests = eventScopedUserStockRequests()
+          if (detail.approvedStockUsed.isNotEmpty) {
+            return detail.approvedStockUsed
+                .map(
+                  (item) => CompletionUsedItemPreview(
+                    inventoryItemId: item.inventoryItem,
+                    inventoryItemName: item.inventoryItemName,
+                    quantityUsed: item.quantityUsed,
+                  ),
+                )
+                .toList();
+          }
+
+          final approvedRequests = eventScopedMaintenanceStockRequests()
               .where(
                 (request) =>
                     request.normalizedStatus.trim().toLowerCase() == 'approved',
               )
               .toList();
           return buildCompletionUsedItems(approvedRequests);
-        }
-
-        String? stockAvailabilityValidationMessage(
-          List<CompletionUsedItemPreview> usedItems,
-        ) {
-          for (final usedItem in usedItems) {
-            final inventoryMatch = homeInventory
-                .where((inv) => inv.id == usedItem.inventoryItemId)
-                .toList();
-            if (inventoryMatch.isEmpty) {
-              final itemName = usedItem.inventoryItemName.trim().isNotEmpty
-                  ? usedItem.inventoryItemName.trim()
-                  : 'Item #${usedItem.inventoryItemId}';
-              return 'Stock item "$itemName" is not available in inventory.';
-            }
-
-            final inventoryItem = inventoryMatch.first;
-            if (usedItem.quantityUsed > inventoryItem.quantityAvailable) {
-              final itemName = usedItem.inventoryItemName.trim().isNotEmpty
-                  ? usedItem.inventoryItemName.trim()
-                  : inventoryItem.name;
-              return 'Insufficient stock for "$itemName". Available: ${inventoryItem.quantityAvailable}, required: ${usedItem.quantityUsed}.';
-            }
-          }
-
-          return null;
         }
 
         return StatefulBuilder(
@@ -3311,7 +3783,7 @@ class _HomeScreenState extends State<HomeScreen>
                       ),
                       const SizedBox(height: 14),
                       const Text(
-                        'Stock Used',
+                        'Approved Stock Used',
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 14,
@@ -3322,7 +3794,7 @@ class _HomeScreenState extends State<HomeScreen>
                         const Align(
                           alignment: Alignment.centerLeft,
                           child: Text(
-                            'No approved stock usage for this maintenance day.',
+                            'No approved stock usage returned for this maintenance.',
                             style: TextStyle(color: Colors.black54),
                           ),
                         )
@@ -3413,39 +3885,9 @@ class _HomeScreenState extends State<HomeScreen>
                           });
 
                           try {
-                            final availabilityMessage =
-                                stockAvailabilityValidationMessage(
-                                  autoStockUsedItems,
-                                );
-                            if (availabilityMessage != null) {
-                              if (!dialogContext.mounted) {
-                                return;
-                              }
-                              setDialogState(() {
-                                isSubmitting = false;
-                                submitErrorMessage = availabilityMessage;
-                              });
-                              return;
-                            }
-
-                            final stockValidationMessage =
-                                await _validateStockRulesForHomeInstrumentSubmit(
-                                  maintenance: detail,
-                                );
-                            if (stockValidationMessage != null) {
-                              if (!dialogContext.mounted) {
-                                return;
-                              }
-                              setDialogState(() {
-                                isSubmitting = false;
-                                submitErrorMessage = stockValidationMessage;
-                              });
-                              return;
-                            }
-
                             final response =
                                 await MaintenanceService.submitInstrumentMaintenance(
-                                  maintenanceId: detail.id,
+                                  maintenanceId: detail.maintenanceId,
                                   workPerformed: workPerformedController.text
                                       .trim(),
                                   remarks: remarksController.text.trim(),
@@ -3471,54 +3913,27 @@ class _HomeScreenState extends State<HomeScreen>
                                         true
                                   ? map['status_display']!.toString().trim()
                                   : null;
-
-                              if (updatedStatus != null && mounted) {
-                                final updatedItem = PathakInstrumentMaintenance(
-                                  id: detail.id,
-                                  instrumentId: detail.instrumentId,
-                                  maintenanceEventId: detail.maintenanceEventId,
-                                  maintenanceEventTitle:
-                                      detail.maintenanceEventTitle,
-                                  maintenanceEventDate:
-                                      detail.maintenanceEventDate,
-                                  dholNumber: detail.dholNumber,
-                                  status: updatedStatus,
-                                  startedByUserId: detail.startedByUserId,
-                                  startedByName: detail.startedByName,
-                                  startedAt: detail.startedAt,
-                                  workPerformed: detail.workPerformed,
-                                  remarks: detail.remarks,
-                                  approverNote: detail.approverNote,
-                                  rejectionRemarks: detail.rejectionRemarks,
-                                  beforeImages: detail.beforeImages,
-                                  afterImages: detail.afterImages,
-                                  participants: detail.participants,
-                                );
-
-                                setState(() {
-                                  final index = _activeInstrumentMaintenances
-                                      .indexWhere(
-                                        (item) => item.id == detail.id,
-                                      );
-                                  if (index >= 0) {
-                                    _activeInstrumentMaintenances[index] =
-                                        updatedItem;
-                                  } else {
-                                    _activeInstrumentMaintenances = [
-                                      updatedItem,
-                                      ..._activeInstrumentMaintenances,
-                                    ];
-                                  }
-                                });
+                              // Local status update is intentionally deferred.
+                              // The screen refresh after dialog close is the
+                              // single source of truth to avoid cross-route
+                              // rebuild scope issues on web.
+                              if (updatedStatus != null) {
+                                // no-op: kept to preserve payload parsing side effects
                               }
                             }
 
                             successMessage =
                                 response['message']?.toString() ??
                                 'Maintenance submitted successfully.';
-                            if (dialogContext.mounted) {
-                              Navigator.of(dialogContext).pop(true);
+                            if (!dialogContext.mounted) {
+                              return;
                             }
+
+                            Navigator.of(
+                              dialogContext,
+                              rootNavigator: true,
+                            ).pop(true);
+                            return;
                           } catch (e) {
                             if (!dialogContext.mounted) {
                               return;

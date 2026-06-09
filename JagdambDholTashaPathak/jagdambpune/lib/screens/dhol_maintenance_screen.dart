@@ -684,7 +684,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
 
   Future<void> _refreshInstrumentMaintenanceDataSilently() async {
     final maintenances = await _withApiLoader(
-      MaintenanceService.fetchMyActiveInstrumentMaintenances,
+      MaintenanceService.fetchInstrumentMaintenancesForReview,
     );
     final pathakDhols = await _withApiLoader(
       MaintenanceService.fetchPathakDhols,
@@ -948,6 +948,8 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         );
       }
 
+      items = await _hydrateCompletionRequestParticipants(items);
+
       if (!mounted) return;
       setState(() {
         _completionRequests = items;
@@ -961,6 +963,67 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         });
       }
     }
+  }
+
+  Future<List<MaintenanceCompletionRequest>>
+  _hydrateCompletionRequestParticipants(
+    List<MaintenanceCompletionRequest> requests,
+  ) async {
+    final idsToFetch = <int>{};
+
+    for (final request in requests) {
+      if (request.participants.isNotEmpty) {
+        continue;
+      }
+
+      final maintenanceId = request.maintenanceId;
+      if (maintenanceId == null || maintenanceId <= 0) {
+        continue;
+      }
+
+      final cached = _instrumentMaintenanceDetails[maintenanceId];
+      if (cached != null && cached.participants.isNotEmpty) {
+        continue;
+      }
+
+      idsToFetch.add(maintenanceId);
+    }
+
+    if (idsToFetch.isNotEmpty) {
+      await Future.wait<void>(
+        idsToFetch.map((maintenanceId) async {
+          try {
+            final detail =
+                await MaintenanceService.fetchInstrumentMaintenanceDetail(
+                  maintenanceId,
+                );
+            _instrumentMaintenanceDetails[maintenanceId] = detail;
+          } catch (_) {
+            // Keep completion requests visible even when optional hydration fails.
+          }
+        }),
+      );
+    }
+
+    return requests.map((request) {
+      if (request.participants.isNotEmpty) {
+        return request;
+      }
+
+      final maintenanceId = request.maintenanceId;
+      if (maintenanceId == null || maintenanceId <= 0) {
+        return request;
+      }
+
+      final linked = _instrumentMaintenanceDetails[maintenanceId];
+      final participants =
+          linked?.participants ?? const <InstrumentMaintenanceParticipant>[];
+      if (participants.isEmpty) {
+        return request;
+      }
+
+      return request.copyWith(participants: participants);
+    }).toList();
   }
 
   Future<void> _loadPathakDhols() async {
@@ -1043,7 +1106,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
 
     try {
       final items = await _withApiLoader(
-        MaintenanceService.fetchMyActiveInstrumentMaintenances,
+        MaintenanceService.fetchInstrumentMaintenancesForReview,
       );
       if (!mounted) return;
       setState(() {
@@ -1622,6 +1685,12 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   }
 
   Future<void> _openSingleStockRequestForm(InventoryItem item) async {
+    final latestClosed = await _isLatestMaintenanceEventClosed();
+    if (latestClosed) {
+      _showSnack('Maintenance event is closed.');
+      return;
+    }
+
     final formKey = GlobalKey<FormState>();
     final noteController = TextEditingController();
 
@@ -1630,6 +1699,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final MaintenanceEvent? selectedEvent = selectedEventId == null
         ? null
         : _events.where((event) => event.id == selectedEventId).firstOrNull;
+    final selectedMaintenance = selectedEvent == null
+        ? null
+        : _currentUserMaintenanceForEvent(selectedEvent);
 
     final shouldSubmit = await showDialog<bool>(
       context: context,
@@ -1744,6 +1816,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           inventoryItemId: item.id,
           requestedQuantity: 1,
           note: noteController.text.trim(),
+          maintenanceId: selectedMaintenance?.maintenanceId,
           eventId: selectedEventId,
         ),
       );
@@ -1756,6 +1829,26 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       _showSnack(e.toString());
     } finally {
       noteController.dispose();
+    }
+  }
+
+  Future<bool> _isLatestMaintenanceEventClosed() async {
+    try {
+      final events = await _withApiLoader(
+        MaintenanceService.fetchMaintenanceEvents,
+      );
+      final latestEventId = latestMaintenanceEventId(events);
+      if (latestEventId == null) {
+        return false;
+      }
+
+      final latestEvent = events
+          .where((event) => event.id == latestEventId)
+          .firstOrNull;
+      return latestEvent?.isClosedStatus ?? false;
+    } catch (_) {
+      // If status cannot be determined, do not hard-block locally.
+      return false;
     }
   }
 
@@ -2069,7 +2162,70 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
   }
 
+  Future<void> _closeMaintenanceEvent(MaintenanceEvent event) async {
+    if (!widget.canCreateMaintenanceEvents) {
+      _showSnack('You are not allowed to close maintenance events.');
+      return;
+    }
+
+    if (event.isClosedStatus) {
+      _showSnack('Maintenance event is already closed.');
+      return;
+    }
+
+    final shouldClose = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Close Maintenance Event'),
+          content: const Text(
+            'Are you sure you want to close this maintenance event?\n\nThis will stop all new maintenance activities for this event.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              style: ElevatedButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Close Maintenance Event'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldClose != true) return;
+
+    try {
+      final response = await _withApiLoader(
+        () => MaintenanceService.closeMaintenanceEvent(eventId: event.id),
+      );
+      _showSnack(
+        response['message']?.toString() ?? 'Maintenance event closed.',
+      );
+      await Future.wait<void>([
+        _loadEvents(),
+        _loadCompletionRequests(),
+        _loadInstrumentMaintenanceData(),
+      ]);
+    } catch (e) {
+      _showSnack(e.toString());
+    }
+  }
+
   Future<void> _openCompletionRequestForm(MaintenanceEvent event) async {
+    if (event.isClosedStatus) {
+      _showSnack('Maintenance event is closed.');
+      return;
+    }
+
     if (!isLatestActiveMaintenanceEvent(event, _events)) {
       _showSnack(
         'This maintenance day is closed. It stays open until a newer maintenance day is created.',
@@ -2109,23 +2265,16 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       return;
     }
 
-    final userScopedStockRequests = _requests
-        .where(_isInventoryRequestOwnedByCurrentUser)
-        .toList();
+    final selectedMaintenance = _currentUserMaintenanceForEvent(event);
+    final selectedMaintenanceId = selectedMaintenance?.maintenanceId ?? 0;
 
-    final hasPendingStockRequest = userScopedStockRequests.any(
-      _isPendingInventoryRequest,
-    );
-    if (hasPendingStockRequest) {
-      _showSnack(
-        'You have pending stock approval request(s). Submit maintenance completion only after stock approval.',
-      );
-      return;
-    }
+    final maintenanceScopedStockRequests = _requests;
 
-    final eventScopedApprovedRequests = userScopedStockRequests.where((
-      request,
-    ) {
+    final eventScopedRequests = maintenanceScopedStockRequests.where((request) {
+      if (request.maintenanceId != null && selectedMaintenanceId > 0) {
+        return request.maintenanceId == selectedMaintenanceId;
+      }
+
       if (request.maintenanceEventId != null) {
         return request.maintenanceEventId == event.id;
       }
@@ -2139,9 +2288,22 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       return false;
     }).toList();
 
+    final hasPendingStockRequest = selectedMaintenanceId > 0
+        ? _hasPendingStockRequestForMaintenance(
+            selectedMaintenanceId,
+            eventScopedRequests,
+          )
+        : eventScopedRequests.any(_isPendingInventoryRequest);
+    if (hasPendingStockRequest) {
+      _showSnack(
+        'Some stock requests are still pending approval. Please wait for approval or rejection before submitting maintenance.',
+      );
+      return;
+    }
+
     // Stock usage is optional. If the user has approved stock requests for this
     // maintenance day, include only those as used_items.
-    final approvedRequests = eventScopedApprovedRequests
+    final approvedRequests = eventScopedRequests
         .where((req) => req.normalizedStatus == 'approved')
         .toList();
 
@@ -2160,6 +2322,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     try {
       final response = await _withApiLoader(
         () => MaintenanceService.createCompletionRequest(
+          maintenanceId: selectedMaintenanceId,
           eventId: event.id,
           workNotes: submission.workNotes,
           usedItems: submission.usedItems,
@@ -2248,6 +2411,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         _loadCompletionRequests(),
         _loadInventory(),
         _loadEvents(),
+        _loadActiveInstrumentMaintenances(),
       ]);
     } catch (e) {
       _showSnack(e.toString());
@@ -2364,22 +2528,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     return normalizedCurrentName == normalizedSubmittedByName;
   }
 
-  bool _isInventoryRequestOwnedByCurrentUser(InventoryRequestItem item) {
-    final currentUserId = widget.currentUserId;
-    if (currentUserId != null && item.requestedBy == currentUserId) {
-      return true;
-    }
-
-    final normalizedCurrentName =
-        widget.currentUserName?.trim().toLowerCase() ?? '';
-    final normalizedRequestedByName = item.requestedByName.trim().toLowerCase();
-    if (normalizedCurrentName.isEmpty || normalizedRequestedByName.isEmpty) {
-      return false;
-    }
-
-    return normalizedCurrentName == normalizedRequestedByName;
-  }
-
   bool _isPendingInventoryRequest(InventoryRequestItem item) {
     final normalizedStatus = item.normalizedStatus.trim().toLowerCase();
     if (normalizedStatus == 'pending' ||
@@ -2392,6 +2540,22 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     return rawStatus == 'pending' ||
         rawStatus.startsWith('pending') ||
         rawStatus.contains('pending');
+  }
+
+  bool _hasPendingStockRequestForMaintenance(
+    int maintenanceId,
+    Iterable<InventoryRequestItem> requests,
+  ) {
+    if (maintenanceId <= 0) {
+      return false;
+    }
+
+    return requests.any((request) {
+      if (request.maintenanceId != maintenanceId) {
+        return false;
+      }
+      return _isPendingInventoryRequest(request);
+    });
   }
 
   Future<bool> _isStockRequestBlockedByCompletion({int? eventId}) async {
@@ -2424,6 +2588,22 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     Iterable<MaintenanceCompletionRequest> requests,
   ) {
     return requests.where(_isCompletionRequestOwnedByCurrentUser).toList();
+  }
+
+  bool _isInventoryRequestOwnedByCurrentUser(InventoryRequestItem item) {
+    final currentUserId = widget.currentUserId;
+    if (currentUserId != null && item.requestedBy == currentUserId) {
+      return true;
+    }
+
+    final normalizedCurrentName =
+        widget.currentUserName?.trim().toLowerCase() ?? '';
+    final normalizedRequestedByName = item.requestedByName.trim().toLowerCase();
+    if (normalizedCurrentName.isEmpty || normalizedRequestedByName.isEmpty) {
+      return false;
+    }
+
+    return normalizedCurrentName == normalizedRequestedByName;
   }
 
   bool get _hasBlockingCompletionForCurrentUser {
@@ -2531,7 +2711,14 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   Future<void> _showSnack(String message) async {
     if (!mounted) return;
 
-    final normalized = message.toLowerCase();
+    final trimmed = message.replaceFirst('Exception: ', '').trim();
+    final closedNormalized = trimmed.toLowerCase();
+    final displayMessage =
+        closedNormalized.contains('maintenance event is closed')
+        ? 'Maintenance event is closed.'
+        : trimmed;
+
+    final normalized = displayMessage.toLowerCase();
     final isMaintenanceAnalysisAccessMessage =
         normalized.contains('maintenance analysis') &&
         normalized.contains('pathak admin') &&
@@ -2554,7 +2741,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Message'),
-        content: Text(message),
+        content: Text(displayMessage),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
@@ -2568,6 +2755,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   String _normalizeStartMaintenanceErrorMessage(String rawMessage) {
     final trimmed = rawMessage.replaceFirst('Exception: ', '').trim();
     final normalized = trimmed.toLowerCase();
+    if (normalized.contains('maintenance event is closed')) {
+      return 'Maintenance event is closed.';
+    }
     if (normalized.contains('no active maintenance event found')) {
       return 'No active maintenance event available.';
     }
@@ -2603,6 +2793,8 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         return Colors.green.shade700;
       case 'rejected':
         return Colors.red.shade700;
+      case 'closed':
+        return Colors.blueGrey.shade700;
       default:
         return Colors.orange.shade700;
     }
@@ -3090,6 +3282,102 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
   }
 
+  int _completionRequestTimestamp(MaintenanceCompletionRequest request) {
+    final updated = DateTime.tryParse(request.updatedAt);
+    if (updated != null) {
+      return updated.millisecondsSinceEpoch;
+    }
+
+    final created = DateTime.tryParse(request.createdAt);
+    if (created != null) {
+      return created.millisecondsSinceEpoch;
+    }
+
+    return request.id;
+  }
+
+  bool _isCompletionForInstrumentMaintenance(
+    MaintenanceCompletionRequest request,
+    PathakInstrumentMaintenance maintenance,
+  ) {
+    final requestMaintenanceId = request.maintenanceId;
+    if (requestMaintenanceId != null && requestMaintenanceId > 0) {
+      return requestMaintenanceId == maintenance.maintenanceId;
+    }
+
+    return false;
+  }
+
+  PathakInstrumentMaintenance? _currentUserMaintenanceForEvent(
+    MaintenanceEvent event,
+  ) {
+    final eventDay = event.parsedEventDate;
+    final matches = _activeInstrumentMaintenances.where((maintenance) {
+      if (!_isInstrumentMaintenanceParticipant(maintenance)) {
+        return false;
+      }
+
+      if (maintenance.maintenanceEventId != null) {
+        return maintenance.maintenanceEventId == event.id;
+      }
+
+      if (maintenance.linkedEventDay != null && eventDay != null) {
+        return maintenance.linkedEventDay == eventDay;
+      }
+
+      return false;
+    }).toList();
+
+    if (matches.isEmpty) {
+      return null;
+    }
+
+    matches.sort((left, right) {
+      final leftStarted = DateTime.tryParse(left.startedAt);
+      final rightStarted = DateTime.tryParse(right.startedAt);
+      if (leftStarted == null && rightStarted == null) {
+        return right.maintenanceId.compareTo(left.maintenanceId);
+      }
+      if (leftStarted == null) return 1;
+      if (rightStarted == null) return -1;
+      return rightStarted.compareTo(leftStarted);
+    });
+
+    return matches.first;
+  }
+
+  String _effectiveInstrumentMaintenanceStatus(
+    PathakInstrumentMaintenance maintenance,
+  ) {
+    final matchingRequests =
+        _completionRequests
+            .where(
+              (request) =>
+                  _isCompletionForInstrumentMaintenance(request, maintenance),
+            )
+            .toList()
+          ..sort(
+            (left, right) => _completionRequestTimestamp(
+              right,
+            ).compareTo(_completionRequestTimestamp(left)),
+          );
+
+    if (matchingRequests.isEmpty) {
+      return maintenance.normalizedStatus;
+    }
+
+    final completionStatus = matchingRequests.first.normalizedStatus;
+    if (completionStatus == 'pending') {
+      return 'pending_approval';
+    }
+
+    if (completionStatus == 'approved' || completionStatus == 'rejected') {
+      return completionStatus;
+    }
+
+    return maintenance.normalizedStatus;
+  }
+
   bool _isInstrumentMaintenanceParticipant(PathakInstrumentMaintenance item) {
     final currentUserId = widget.currentUserId;
     if (currentUserId != null &&
@@ -3112,13 +3400,123 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   }
 
   bool _canSubmitInstrumentMaintenanceItem(PathakInstrumentMaintenance item) {
-    final normalizedStatus = item.normalizedStatus;
+    final normalizedStatus = _effectiveInstrumentMaintenanceStatus(item);
     return _isInstrumentMaintenanceParticipant(item) &&
+        !_hasPendingStockRequestForMaintenance(item.maintenanceId, _requests) &&
         normalizedStatus != 'pending_approval' &&
         normalizedStatus != 'pending' &&
         normalizedStatus != 'submitted' &&
         normalizedStatus != 'approved' &&
         normalizedStatus != 'rejected';
+  }
+
+  bool _isCurrentUserMaintenancePartner(CheckedInMaintenancePartner partner) {
+    final currentUserId = widget.currentUserId;
+    if (currentUserId != null && partner.userId == currentUserId) {
+      return true;
+    }
+
+    final normalizedCurrentName =
+        widget.currentUserName?.trim().toLowerCase() ?? '';
+    if (normalizedCurrentName.isNotEmpty &&
+        partner.fullName.trim().toLowerCase() == normalizedCurrentName) {
+      return true;
+    }
+
+    return false;
+  }
+
+  String _completionParticipantDisplay(
+    InstrumentMaintenanceParticipant participant,
+  ) {
+    final name = participant.fullName.trim();
+    final phone = participant.phone.trim();
+
+    if (name.isNotEmpty && phone.isNotEmpty) {
+      return '$name ($phone)';
+    }
+    if (name.isNotEmpty) {
+      return name;
+    }
+    return phone;
+  }
+
+  String _completionParticipantsText(
+    List<InstrumentMaintenanceParticipant> participants,
+  ) {
+    return participants
+        .map(_completionParticipantDisplay)
+        .where((value) => value.isNotEmpty)
+        .join(', ');
+  }
+
+  bool _matchesCompletionEvent(
+    InventoryRequestItem request,
+    MaintenanceCompletionRequest completion,
+  ) {
+    final requestMaintenanceId = request.maintenanceId;
+    final completionMaintenanceId = completion.maintenanceId;
+    if (requestMaintenanceId == null || completionMaintenanceId == null) {
+      return false;
+    }
+
+    return requestMaintenanceId == completionMaintenanceId;
+  }
+
+  List<CompletionUsedItem> _resolvedCompletionUsedItems(
+    MaintenanceCompletionRequest completion,
+  ) {
+    if (completion.approvedStockUsed.isNotEmpty) {
+      return completion.approvedStockUsed;
+    }
+
+    if (completion.usedItems.isNotEmpty) {
+      return completion.usedItems;
+    }
+
+    final approvedRequests = _requests.where((request) {
+      final status = request.normalizedStatus.trim().toLowerCase();
+      if (status != 'approved') {
+        return false;
+      }
+
+      return _matchesCompletionEvent(request, completion);
+    }).toList();
+
+    if (approvedRequests.isEmpty) {
+      return <CompletionUsedItem>[];
+    }
+
+    final usedItemByInventoryId = <int, CompletionUsedItem>{};
+    for (final request in approvedRequests) {
+      final existing = usedItemByInventoryId[request.inventoryItem];
+      if (existing == null) {
+        usedItemByInventoryId[request.inventoryItem] = CompletionUsedItem(
+          id: request.id,
+          inventoryItem: request.inventoryItem,
+          inventoryItemName: request.inventoryItemName,
+          quantityUsed: request.requestedQuantity,
+          requestedByName: request.requestedByName,
+          status: 'approved',
+          quantityBeforeUpdate: null,
+          quantityAfterUpdate: null,
+        );
+        continue;
+      }
+
+      usedItemByInventoryId[request.inventoryItem] = CompletionUsedItem(
+        id: existing.id,
+        inventoryItem: existing.inventoryItem,
+        inventoryItemName: existing.inventoryItemName,
+        quantityUsed: existing.quantityUsed + request.requestedQuantity,
+        requestedByName: existing.requestedByName,
+        status: 'approved',
+        quantityBeforeUpdate: existing.quantityBeforeUpdate,
+        quantityAfterUpdate: existing.quantityAfterUpdate,
+      );
+    }
+
+    return usedItemByInventoryId.values.toList();
   }
 
   Future<Set<int>?> _openMaintenancePartnerSelector({
@@ -3131,6 +3529,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
 
     final partners =
         List<CheckedInMaintenancePartner>.from(_eligibleMaintenancePartners)
+          ..removeWhere(_isCurrentUserMaintenancePartner)
           ..sort(
             (a, b) =>
                 a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase()),
@@ -3253,6 +3652,12 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   }
 
   Future<void> _openStartInstrumentMaintenanceDialog() async {
+    final latestClosed = await _isLatestMaintenanceEventClosed();
+    if (latestClosed) {
+      await _showSnack('Maintenance event is closed.');
+      return;
+    }
+
     if (_damagedMaintenanceDhols.isEmpty) {
       await _loadDamagedMaintenanceDhols();
     }
@@ -3264,6 +3669,12 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     int? selectedDholId;
     final selectedPartnerIds = <int>{};
     String? successMessage;
+    final visiblePartners = _eligibleMaintenancePartners
+        .where((partner) => !_isCurrentUserMaintenancePartner(partner))
+        .toList();
+    final visiblePartnerIds = visiblePartners
+        .map((partner) => partner.userId)
+        .toSet();
 
     final created = await showDialog<bool>(
       context: context,
@@ -3322,7 +3733,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                             Wrap(
                               spacing: 6,
                               runSpacing: 6,
-                              children: _eligibleMaintenancePartners
+                              children: visiblePartners
                                   .where(
                                     (partner) => selectedPartnerIds.contains(
                                       partner.userId,
@@ -3350,7 +3761,11 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                                 setDialogState(() {
                                   selectedPartnerIds
                                     ..clear()
-                                    ..addAll(selected);
+                                    ..addAll(
+                                      selected.where(
+                                        (id) => visiblePartnerIds.contains(id),
+                                      ),
+                                    );
                                 });
                               },
                               icon: const Icon(Icons.group_add_outlined),
@@ -3389,6 +3804,10 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                                   MaintenanceService.startInstrumentMaintenance(
                                     instrumentId: selectedDholId!,
                                     participantUserIds: selectedPartnerIds
+                                        .where(
+                                          (id) =>
+                                              visiblePartnerIds.contains(id),
+                                        )
                                         .toList(),
                                   ),
                             );
@@ -3432,6 +3851,12 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   Future<void> _openSubmitInstrumentMaintenanceDialog(
     PathakInstrumentMaintenance item,
   ) async {
+    final latestClosed = await _isLatestMaintenanceEventClosed();
+    if (latestClosed) {
+      await _showSnack('Maintenance event is closed.');
+      return;
+    }
+
     final detail = await _withApiLoader(
       () => MaintenanceService.fetchInstrumentMaintenanceDetail(item.id),
     );
@@ -3462,6 +3887,17 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       }
     }
 
+    final hasPendingStockRequest = _hasPendingStockRequestForMaintenance(
+      detail.maintenanceId,
+      allRequests,
+    );
+    if (hasPendingStockRequest) {
+      await _showSnack(
+        'Some stock requests are still pending approval. Please wait for approval or rejection before submitting maintenance.',
+      );
+      return;
+    }
+
     final workPerformedController = TextEditingController(
       text: detail.workPerformed,
     );
@@ -3479,17 +3915,24 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         var canSubmit = workPerformedController.text.trim().isNotEmpty;
         String? submitErrorMessage;
 
-        List<InventoryRequestItem> eventScopedUserStockRequests() {
-          final scopedByUser = allRequests
-              .where(_isInventoryRequestOwnedByCurrentUser)
-              .toList();
+        List<InventoryRequestItem> eventScopedMaintenanceStockRequests() {
+          final approvedOrPendingScoped = List<InventoryRequestItem>.from(
+            allRequests,
+          );
+          final explicitMaintenanceId = detail.maintenanceId;
           final explicitEventId = detail.maintenanceEventId;
           final explicitEventDay = detail.linkedEventDay;
-          if (explicitEventId == null && explicitEventDay == null) {
-            return scopedByUser;
+          if (explicitMaintenanceId == 0 &&
+              explicitEventId == null &&
+              explicitEventDay == null) {
+            return approvedOrPendingScoped;
           }
 
-          return scopedByUser.where((request) {
+          return approvedOrPendingScoped.where((request) {
+            if (explicitMaintenanceId > 0 && request.maintenanceId != null) {
+              return request.maintenanceId == explicitMaintenanceId;
+            }
+
             if (explicitEventId != null && request.maintenanceEventId != null) {
               return request.maintenanceEventId == explicitEventId;
             }
@@ -3504,36 +3947,22 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         }
 
         List<CompletionUsedItemPreview> stockUsedPreviews() {
-          final approvedRequests = eventScopedUserStockRequests()
+          if (detail.approvedStockUsed.isNotEmpty) {
+            return detail.approvedStockUsed
+                .map(
+                  (item) => CompletionUsedItemPreview(
+                    inventoryItemId: item.inventoryItem,
+                    inventoryItemName: item.inventoryItemName,
+                    quantityUsed: item.quantityUsed,
+                  ),
+                )
+                .toList();
+          }
+
+          final approvedRequests = eventScopedMaintenanceStockRequests()
               .where((request) => request.normalizedStatus == 'approved')
               .toList();
           return buildCompletionUsedItems(approvedRequests);
-        }
-
-        String? stockAvailabilityValidationMessage(
-          List<CompletionUsedItemPreview> usedItems,
-        ) {
-          for (final usedItem in usedItems) {
-            final inventoryMatch = dialogInventory
-                .where((inv) => inv.id == usedItem.inventoryItemId)
-                .toList();
-            if (inventoryMatch.isEmpty) {
-              final itemName = usedItem.inventoryItemName.trim().isNotEmpty
-                  ? usedItem.inventoryItemName.trim()
-                  : 'Item #${usedItem.inventoryItemId}';
-              return 'Stock item "$itemName" is not available in inventory.';
-            }
-
-            final inventoryItem = inventoryMatch.first;
-            if (usedItem.quantityUsed > inventoryItem.quantityAvailable) {
-              final itemName = usedItem.inventoryItemName.trim().isNotEmpty
-                  ? usedItem.inventoryItemName.trim()
-                  : inventoryItem.name;
-              return 'Insufficient stock for "$itemName". Available: ${inventoryItem.quantityAvailable}, required: ${usedItem.quantityUsed}.';
-            }
-          }
-
-          return null;
         }
 
         return StatefulBuilder(
@@ -3621,7 +4050,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                       ),
                       const SizedBox(height: 14),
                       const Text(
-                        'Stock Used',
+                        'Approved Stock Used',
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           fontSize: 14,
@@ -3632,7 +4061,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                         const Align(
                           alignment: Alignment.centerLeft,
                           child: Text(
-                            'No approved stock usage for this maintenance day.',
+                            'No approved stock usage returned for this maintenance.',
                             style: TextStyle(color: Colors.black54),
                           ),
                         )
@@ -3723,43 +4152,13 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                           });
 
                           try {
-                            final availabilityMessage =
-                                stockAvailabilityValidationMessage(
-                                  autoStockUsedItems,
+                            final response =
+                                await MaintenanceService.submitInstrumentMaintenance(
+                                  maintenanceId: detail.maintenanceId,
+                                  workPerformed: workPerformedController.text
+                                      .trim(),
+                                  remarks: remarksController.text.trim(),
                                 );
-                            if (availabilityMessage != null) {
-                              if (dialogContext.mounted) {
-                                setDialogState(() {
-                                  isSubmitting = false;
-                                  submitErrorMessage = availabilityMessage;
-                                });
-                              }
-                              return;
-                            }
-
-                            final stockValidationMessage =
-                                await _validateStockRulesForInstrumentSubmit(
-                                  maintenance: detail,
-                                );
-                            if (stockValidationMessage != null) {
-                              if (dialogContext.mounted) {
-                                setDialogState(() {
-                                  isSubmitting = false;
-                                  submitErrorMessage = stockValidationMessage;
-                                });
-                              }
-                              return;
-                            }
-
-                            final response = await _withApiLoader(
-                              () =>
-                                  MaintenanceService.submitInstrumentMaintenance(
-                                    maintenanceId: detail.id,
-                                    workPerformed: workPerformedController.text
-                                        .trim(),
-                                    remarks: remarksController.text.trim(),
-                                  ),
-                            );
                             _lastSubmittedCompletionRequestId = int.tryParse(
                               response['completion_request_id']?.toString() ??
                                   '',
@@ -3771,12 +4170,16 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                               Navigator.of(dialogContext).pop(true);
                             }
                           } catch (e) {
-                            if (dialogContext.mounted) {
-                              setDialogState(() {
-                                isSubmitting = false;
-                              });
+                            if (!dialogContext.mounted) {
+                              return;
                             }
-                            await _showSnack(e.toString());
+                            setDialogState(() {
+                              isSubmitting = false;
+                              submitErrorMessage = e.toString().replaceFirst(
+                                'Exception: ',
+                                '',
+                              );
+                            });
                           }
                         },
                   style: ElevatedButton.styleFrom(
@@ -3806,46 +4209,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
   }
 
-  Future<String?> _validateStockRulesForInstrumentSubmit({
-    required PathakInstrumentMaintenance maintenance,
-  }) async {
-    final explicitEventId = maintenance.maintenanceEventId;
-    final explicitEventDay = maintenance.linkedEventDay;
-    if (explicitEventId == null && explicitEventDay == null) {
-      return null;
-    }
-
-    final requests = await _withApiLoader(
-      MaintenanceService.fetchInventoryRequests,
-    );
-    final eventScopedRequests = requests.where((request) {
-      if (explicitEventId != null && request.maintenanceEventId != null) {
-        return request.maintenanceEventId == explicitEventId;
-      }
-
-      final linkedEventDay = request.linkedEventDay;
-      if (linkedEventDay != null && explicitEventDay != null) {
-        return linkedEventDay == explicitEventDay;
-      }
-
-      return false;
-    }).toList();
-
-    final userScopedStockRequests = eventScopedRequests
-        .where(_isInventoryRequestOwnedByCurrentUser)
-        .toList();
-
-    final hasPendingStockRequest = userScopedStockRequests.any(
-      _isPendingInventoryRequest,
-    );
-
-    if (hasPendingStockRequest) {
-      return 'You have pending stock approval request(s). Submit maintenance only after stock approval.';
-    }
-
-    return null;
-  }
-
   Future<void> _openInstrumentMaintenanceDetail(
     PathakInstrumentMaintenance item, {
     bool openSubmitOnStart = false,
@@ -3869,6 +4232,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       final action = await showDialog<String>(
         context: context,
         builder: (dialogContext) {
+          final detailStatus = _effectiveInstrumentMaintenanceStatus(detail);
           final participantsText = detail.participants
               .map((participant) => participant.fullName)
               .where((name) => name.trim().isNotEmpty)
@@ -3911,7 +4275,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      'Status: ${_instrumentMaintenanceStatusLabel(detail.status)}',
+                      'Status: ${_instrumentMaintenanceStatusLabel(detailStatus)}',
                     ),
                     const SizedBox(height: 6),
                     Text(
@@ -4108,7 +4472,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                               Chip(
                                 label: Text(
                                   _instrumentMaintenanceStatusLabel(
-                                    item.status,
+                                    _effectiveInstrumentMaintenanceStatus(item),
                                   ),
                                 ),
                               ),
@@ -4139,8 +4503,14 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
 
   Widget _buildCategoryTab(String category) {
     final query = (_categorySearch[category] ?? '').trim().toLowerCase();
+    final latestEventId = latestMaintenanceEventId(_events);
+    final latestEvent = latestEventId == null
+        ? null
+        : _events.where((event) => event.id == latestEventId).firstOrNull;
+    final isLatestEventClosed = latestEvent?.isClosedStatus ?? false;
     final shouldDisableRequestButton =
-        !widget.canManageInventory && _hasBlockingCompletionForCurrentUser;
+        !widget.canManageInventory &&
+        (_hasBlockingCompletionForCurrentUser || isLatestEventClosed);
     final items = _inventory
         .where((item) => item.category.toLowerCase() == category)
         .where((item) {
@@ -4530,6 +4900,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                   items: const [
                     DropdownMenuItem(value: 'all', child: Text('All')),
                     DropdownMenuItem(value: 'active', child: Text('Active')),
+                    DropdownMenuItem(value: 'closed', child: Text('Closed')),
                     DropdownMenuItem(
                       value: 'completed',
                       child: Text('Completed'),
@@ -4689,6 +5060,29 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                       Text('Date: ${event.eventDate}'),
                       if (event.assignedGatName.trim().isNotEmpty)
                         Text('Assigned Gat: ${event.assignedGatName}'),
+                      if (event.isClosedStatus)
+                        Text(
+                          'Closed By: ${event.closedByName.trim().isEmpty ? '-' : event.closedByName}',
+                        ),
+                      if (event.isClosedStatus)
+                        Text(
+                          'Closed At: ${event.closedAt.trim().isEmpty ? '-' : event.closedAt}',
+                        ),
+                      if (widget.canCreateMaintenanceEvents &&
+                          !event.isClosedStatus) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _closeMaintenanceEvent(event),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.red.shade700,
+                            ),
+                            icon: const Icon(Icons.lock_outline),
+                            label: const Text('Close Maintenance Event'),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 8),
                       if (isUserActionableEvent)
                         Align(
@@ -4733,9 +5127,11 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                                 ),
                         ),
                       if (!isUserActionableEvent)
-                        const Text(
-                          'Closed for users. This maintenance day remains open only until a newer maintenance day is created.',
-                          style: TextStyle(color: Colors.black54),
+                        Text(
+                          event.isClosedStatus
+                              ? 'Maintenance Closed. Event is read-only.'
+                              : 'Closed for users. This maintenance day remains open only until a newer maintenance day is created.',
+                          style: const TextStyle(color: Colors.black54),
                         ),
                     ],
                   ),
@@ -4885,8 +5281,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
               child: Center(child: Text('No completion requests found.')),
             )
           else
-            ...visibleCompletionRequests.map(
-              (item) => Card(
+            ...visibleCompletionRequests.map((item) {
+              final usedItems = _resolvedCompletionUsedItems(item);
+              return Card(
                 margin: const EdgeInsets.only(bottom: 10),
                 child: Padding(
                   padding: const EdgeInsets.all(12),
@@ -4923,7 +5320,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                         style: const TextStyle(color: Colors.black54),
                       ),
                       const SizedBox(height: 6),
-                      if (item.instrumentMaintenanceId != null ||
+                      if (item.maintenanceId != null ||
                           item.dholNumber.trim().isNotEmpty ||
                           item.participants.isNotEmpty ||
                           item.workPerformed.trim().isNotEmpty ||
@@ -4933,14 +5330,12 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                           style: TextStyle(fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: 4),
-                        if (item.instrumentMaintenanceId != null)
-                          Text(
-                            'Maintenance ID: #${item.instrumentMaintenanceId}',
-                          ),
+                        if (item.maintenanceId != null)
+                          Text('Maintenance ID: #${item.maintenanceId}'),
                         if (item.dholNumber.trim().isNotEmpty)
                           Text('Dhol Number: Dhol #${item.dholNumber}'),
                         Text(
-                          'Participants: ${item.participants.map((participant) => participant.fullName.trim()).where((name) => name.isNotEmpty).join(', ').isEmpty ? '-' : item.participants.map((participant) => participant.fullName.trim()).where((name) => name.isNotEmpty).join(', ')}',
+                          'Participants: ${_completionParticipantsText(item.participants).isEmpty ? '-' : _completionParticipantsText(item.participants)}',
                         ),
                         Text(
                           'Work Performed: ${item.workPerformed.trim().isNotEmpty ? item.workPerformed : item.workNotes}',
@@ -4966,21 +5361,21 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                       ],
                       const SizedBox(height: 8),
                       const Text(
-                        'Used Items',
+                        'Approved Stock Used',
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 6),
-                      if (item.usedItems.isEmpty)
+                      if (usedItems.isEmpty)
                         const Text(
                           'No stock items recorded.',
                           style: TextStyle(color: Colors.black54),
                         )
                       else
-                        ...item.usedItems.map(
+                        ...usedItems.map(
                           (usedItem) => Padding(
                             padding: const EdgeInsets.only(bottom: 4),
                             child: Text(
-                              '- ${usedItem.inventoryItemName.isNotEmpty ? usedItem.inventoryItemName : 'Item #${usedItem.inventoryItem}'} x${usedItem.quantityUsed} (${usedItem.normalizedDisplayStatus})',
+                              '${usedItem.inventoryItemName.trim().isNotEmpty ? usedItem.inventoryItemName.trim() : 'Item'} × ${usedItem.quantityUsed}${usedItem.requestedByName.trim().isNotEmpty ? ' • ${usedItem.requestedByName.trim()}' : ''}',
                             ),
                           ),
                         ),
@@ -5013,8 +5408,8 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                     ],
                   ),
                 ),
-              ),
-            ),
+              );
+            }),
         ],
       ),
     );

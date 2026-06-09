@@ -338,6 +338,10 @@ class ApiEndpoints {
   static String getMaintenanceEventDetail(int eventId) =>
       '$baseUrl/maintenance/events/$eventId/';
 
+  /// Close a maintenance event
+  static String getMaintenanceEventClose(int eventId) =>
+      '$baseUrl/maintenance/events/$eventId/close/';
+
   /// Submit completion request for a maintenance event
   static String getMaintenanceEventCompletionRequests(int eventId) =>
       '$baseUrl/maintenance/events/$eventId/completion-requests/';

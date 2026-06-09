@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
@@ -160,12 +161,14 @@ class MaintenanceService {
     required int inventoryItemId,
     required int requestedQuantity,
     String note = '',
+    int? maintenanceId,
     int? eventId,
   }) async {
     final payload = <String, dynamic>{
       'inventory_item_id': inventoryItemId,
       'requested_quantity': requestedQuantity,
       'note': note,
+      if (maintenanceId != null) 'maintenance_id': maintenanceId,
       if (eventId != null) 'event_id': eventId,
     };
 
@@ -233,9 +236,11 @@ class MaintenanceService {
       );
     }
 
-    final decoded = response.body.isNotEmpty
-        ? jsonDecode(response.body)
-        : <String, dynamic>{};
+    final decoded = _decodeBodySafely(
+      response,
+      fallbackError: 'Failed to load maintenance entries.',
+      apiName: 'fetchEntries',
+    );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final errorMessage = decoded is Map<String, dynamic>
@@ -404,6 +409,23 @@ class MaintenanceService {
     );
   }
 
+  static Future<Map<String, dynamic>> closeMaintenanceEvent({
+    required int eventId,
+  }) async {
+    final response = await AuthorizedApiService.sendWithAutoRefresh(
+      null,
+      (token) => http.post(
+        Uri.parse(ApiEndpoints.getMaintenanceEventClose(eventId)),
+        headers: ApiEndpoints.authorizedHeaders(token),
+      ),
+    );
+
+    return _decodeAndValidate(
+      response,
+      fallbackError: 'Failed to close maintenance event.',
+    );
+  }
+
   static Future<List<MaintenanceCompletionRequest>> fetchCompletionRequests({
     String? status,
     int? eventId,
@@ -442,17 +464,19 @@ class MaintenanceService {
   }
 
   static Future<Map<String, dynamic>> createCompletionRequest({
-    required int eventId,
+    required int maintenanceId,
+    int? eventId,
     required String workNotes,
     List<Map<String, int>> usedItems = const <Map<String, int>>[],
   }) async {
     Future<Map<String, dynamic>> submit(Map<String, dynamic> payload) async {
+      final endpoint = eventId != null
+          ? ApiEndpoints.getMaintenanceEventCompletionRequests(eventId)
+          : ApiEndpoints.maintenanceCompletionRequests;
       final response = await AuthorizedApiService.sendWithAutoRefresh(
         null,
         (token) => http.post(
-          Uri.parse(
-            ApiEndpoints.getMaintenanceEventCompletionRequests(eventId),
-          ),
+          Uri.parse(endpoint),
           headers: ApiEndpoints.authorizedHeaders(token),
           body: jsonEncode(payload),
         ),
@@ -477,20 +501,32 @@ class MaintenanceService {
         )
         .toList();
 
-    final payloadCandidates = <Map<String, dynamic>>[];
-
-    if (normalizedUsedItems.isEmpty) {
-      payloadCandidates.addAll(<Map<String, dynamic>>[
-        <String, dynamic>{'work_notes': workNotes, 'used_items': const []},
-        <String, dynamic>{'work_notes': workNotes, 'used_items': null},
-        <String, dynamic>{'work_notes': workNotes},
-      ]);
-    } else {
-      payloadCandidates.add(<String, dynamic>{
+    final payloadCandidates = <Map<String, dynamic>>[
+      // Maintenance-aware flow: backend derives approved stock from approved
+      // stock requests linked to this maintenance/event. Avoid re-sending
+      // used_items to prevent duplicate stock consumption during approval.
+      <String, dynamic>{
+        'maintenance_id': maintenanceId,
         'work_notes': workNotes,
-        'used_items': normalizedUsedItems,
-      });
-    }
+      },
+      <String, dynamic>{
+        'maintenance_id': maintenanceId,
+        'work_notes': workNotes,
+        'used_items': null,
+      },
+      <String, dynamic>{
+        'maintenance_id': maintenanceId,
+        'work_notes': workNotes,
+        'used_items': const [],
+      },
+      // Legacy fallback only if backend explicitly requires used_items.
+      if (normalizedUsedItems.isNotEmpty)
+        <String, dynamic>{
+          'maintenance_id': maintenanceId,
+          'work_notes': workNotes,
+          'used_items': normalizedUsedItems,
+        },
+    ];
 
     final seenPayloads = <String>{};
     MaintenanceApiException? lastValidationError;
@@ -526,25 +562,67 @@ class MaintenanceService {
     required String action,
     String approverNote = '',
   }) async {
-    final payload = <String, dynamic>{
+    Future<Map<String, dynamic>> submit(Map<String, dynamic> payload) async {
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) => http.post(
+          Uri.parse(
+            ApiEndpoints.getMaintenanceCompletionRequestAction(requestId),
+          ),
+          headers: ApiEndpoints.authorizedHeaders(token),
+          body: jsonEncode(payload),
+        ),
+      );
+
+      return _decodeAndValidate(
+        response,
+        fallbackError: 'Failed to update completion request.',
+      );
+    }
+
+    final normalizedAction = action.trim().toLowerCase();
+    final basePayload = <String, dynamic>{
       'action': action,
       'approver_note': approverNote,
     };
 
-    final response = await AuthorizedApiService.sendWithAutoRefresh(
-      null,
-      (token) => http.post(
-        Uri.parse(
-          ApiEndpoints.getMaintenanceCompletionRequestAction(requestId),
-        ),
-        headers: ApiEndpoints.authorizedHeaders(token),
-        body: jsonEncode(payload),
-      ),
-    );
+    final payloadCandidates = <Map<String, dynamic>>[
+      if (normalizedAction == 'approve')
+        <String, dynamic>{
+          ...basePayload,
+          'skip_stock_validation': true,
+          'skip_inventory_validation': true,
+          'consume_stock': false,
+        },
+      basePayload,
+    ];
 
-    return _decodeAndValidate(
-      response,
-      fallbackError: 'Failed to update completion request.',
+    final seenPayloads = <String>{};
+    MaintenanceApiException? lastValidationError;
+
+    for (final payload in payloadCandidates) {
+      final key = jsonEncode(payload);
+      if (!seenPayloads.add(key)) {
+        continue;
+      }
+
+      try {
+        return await submit(payload);
+      } on MaintenanceApiException catch (e) {
+        lastValidationError = e;
+        if (e.statusCode != 400 && e.statusCode != 422) {
+          rethrow;
+        }
+      }
+    }
+
+    if (lastValidationError != null) {
+      throw lastValidationError;
+    }
+
+    throw const MaintenanceApiException(
+      statusCode: 400,
+      message: 'Failed to update completion request.',
     );
   }
 
@@ -734,20 +812,48 @@ class MaintenanceService {
   fetchInstrumentMaintenancesForReview() async {
     // Completion requests remain the single approval queue. This endpoint is
     // only for role-aware visibility into instrument maintenances.
-    final response = await AuthorizedApiService.sendWithAutoRefresh(
-      null,
-      (token) => http.get(
-        Uri.parse(ApiEndpoints.maintenancePathakInstrumentMaintenances),
-        headers: ApiEndpoints.authorizedHeaders(token),
-      ),
-    );
+    Future<http.Response?> fetchFrom(String url) {
+      return AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) => http.get(
+          Uri.parse(url),
+          headers: ApiEndpoints.authorizedHeaders(token),
+        ),
+      );
+    }
 
-    final data = _decodeAndValidate(
-      response,
-      fallbackError: 'Failed to load instrument maintenances.',
-    );
+    try {
+      final response = await fetchFrom(
+        ApiEndpoints.maintenancePathakInstrumentMaintenances,
+      );
+      final data = _decodeAndValidate(
+        response,
+        fallbackError: 'Failed to load instrument maintenances.',
+      );
+      return _parsePathakInstrumentMaintenances(data);
+    } on MaintenanceApiException catch (e) {
+      // Some deployments don't expose the review endpoint and return a 404
+      // HTML page. Fall back to the participant-scoped active list so the
+      // screen still loads instead of failing entirely.
+      if (e.statusCode != 404) {
+        rethrow;
+      }
 
-    return _parsePathakInstrumentMaintenances(data);
+      if (kDebugMode) {
+        debugPrint(
+          '[MaintenanceApi] Review maintenances endpoint unavailable (404). Falling back to my-active endpoint.',
+        );
+      }
+
+      final fallbackResponse = await fetchFrom(
+        ApiEndpoints.maintenanceMyActivePathakInstruments,
+      );
+      final fallbackData = _decodeAndValidate(
+        fallbackResponse,
+        fallbackError: 'Failed to load active maintenances.',
+      );
+      return _parsePathakInstrumentMaintenances(fallbackData);
+    }
   }
 
   static List<PathakInstrumentMaintenance> _parsePathakInstrumentMaintenances(
@@ -847,6 +953,7 @@ class MaintenanceService {
       fields: <String, String>{
         'work_performed': workPerformed,
         'remarks': remarks,
+        'consume_stock': 'false',
       },
       files: files,
       fallbackError: 'Failed to submit maintenance.',
@@ -945,9 +1052,11 @@ class MaintenanceService {
       );
     }
 
-    final decoded = response.body.isNotEmpty
-        ? jsonDecode(response.body)
-        : <String, dynamic>{};
+    final decoded = _decodeBodySafely(
+      response,
+      fallbackError: fallbackError,
+      apiName: response.request?.url.path,
+    );
 
     final data = decoded is Map<String, dynamic>
         ? decoded
@@ -962,5 +1071,44 @@ class MaintenanceService {
       statusCode: response.statusCode,
       message: message,
     );
+  }
+
+  static dynamic _decodeBodySafely(
+    http.Response response, {
+    required String fallbackError,
+    String? apiName,
+  }) {
+    final body = response.body.trim();
+    if (body.isEmpty || body == 'null') {
+      return <String, dynamic>{};
+    }
+
+    try {
+      return jsonDecode(body);
+    } on FormatException catch (e) {
+      if (kDebugMode) {
+        debugPrint('[MaintenanceApi JSON Parse Error]');
+        debugPrint('API Name: ${apiName ?? 'unknown'}');
+        debugPrint('Response Status: ${response.statusCode}');
+        debugPrint('Response Body: ${_safeBodyPreview(body)}');
+        debugPrint('JSON Parse Exception: ${e.message}');
+      }
+
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        return <String, dynamic>{};
+      }
+
+      throw MaintenanceApiException(
+        statusCode: response.statusCode,
+        message: fallbackError,
+      );
+    }
+  }
+
+  static String _safeBodyPreview(String body) {
+    if (body.length <= 1000) {
+      return body;
+    }
+    return '${body.substring(0, 1000)}...<truncated>';
   }
 }
