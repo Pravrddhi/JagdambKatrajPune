@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/maintenance_models.dart';
 import '../components/maintenance_completion_dialog.dart';
 import '../services/api_service.dart';
+import '../services/attendance_service.dart';
 import '../services/maintenance_service.dart';
 import '../theme/app_colors.dart';
 
@@ -137,6 +139,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       <PathakInstrumentMaintenance>[];
   List<PathakDhol> _pathakDhols = <PathakDhol>[];
   List<PathakDhol> _damagedMaintenanceDhols = <PathakDhol>[];
+  List<PathakDhol> _goodConditionDhols = <PathakDhol>[];
   List<CheckedInMaintenancePartner> _eligibleMaintenancePartners =
       <CheckedInMaintenancePartner>[];
   final Map<int, PathakInstrumentMaintenance> _instrumentMaintenanceDetails =
@@ -180,6 +183,10 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       '${_statePrefix}completion_event_date';
   static const String _kShowLegacyEntries =
       '${_statePrefix}show_legacy_entries';
+  static const String _kDamagedMarkedCachePrefix =
+      '${_statePrefix}damaged_marked';
+
+  Set<int> _todayMarkedDamagedDholIds = <int>{};
 
   bool get _showAdminCompletionTab {
     return widget.canApproveCompletionRequests;
@@ -239,6 +246,20 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         : _dholStatusTabIndex() + (_showAdminCompletionTab ? 2 : 1);
   }
 
+  bool _coerceBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    final normalized = value?.toString().trim().toLowerCase() ?? '';
+    return normalized == '1' || normalized == 'true' || normalized == 'yes';
+  }
+
+  Future<(bool, bool)> _currentAttendanceState() async {
+    final status = await AttendanceService.fetchMyCurrentAttendanceStatus();
+    final isCheckedIn = _coerceBool(status['is_checked_in']);
+    final isCheckedOut = _coerceBool(status['is_checked_out']);
+    return (isCheckedIn, isCheckedOut);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -260,6 +281,8 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   Future<void> _initScreen() async {
     await _restoreUiState();
     if (!mounted) return;
+    await _restoreTodayMarkedDamagedDholCache();
+    if (!mounted) return;
     await _initialLoad();
     if (!mounted) return;
     _startLiveRefresh();
@@ -268,6 +291,80 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     await _openCompletionForEventOnStartIfNeeded();
     if (!mounted) return;
     await _openInstrumentMaintenanceOnStartIfNeeded();
+  }
+
+  String _todayCacheDate() {
+    final now = DateTime.now();
+    final month = now.month.toString().padLeft(2, '0');
+    final day = now.day.toString().padLeft(2, '0');
+    return '${now.year}-$month-$day';
+  }
+
+  String _todayDamagedMarkedCacheKey() {
+    final userScope = widget.currentUserId?.toString() ?? 'anonymous';
+    return '${_kDamagedMarkedCachePrefix}_${_todayCacheDate()}_$userScope';
+  }
+
+  List<PathakDhol> _filterAlreadyMarkedToday(List<PathakDhol> items) {
+    if (_todayMarkedDamagedDholIds.isEmpty) {
+      return items;
+    }
+
+    return items
+        .where((item) => !_todayMarkedDamagedDholIds.contains(item.id))
+        .toList();
+  }
+
+  Future<void> _restoreTodayMarkedDamagedDholCache() async {
+    try {
+      final raw = await _storage.read(key: _todayDamagedMarkedCacheKey());
+      if (!mounted || raw == null || raw.trim().isEmpty) {
+        return;
+      }
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return;
+      }
+
+      final ids = decoded
+          .map((item) => int.tryParse(item.toString()))
+          .whereType<int>()
+          .toSet();
+      if (ids.isEmpty) {
+        return;
+      }
+
+      setState(() {
+        _todayMarkedDamagedDholIds = ids;
+      });
+    } catch (_) {
+      // Ignore cache restore errors.
+    }
+  }
+
+  Future<void> _cacheTodayMarkedDamagedDhol(int dholId) async {
+    if (dholId <= 0) {
+      return;
+    }
+
+    final updated = <int>{..._todayMarkedDamagedDholIds, dholId};
+    if (mounted) {
+      setState(() {
+        _todayMarkedDamagedDholIds = updated;
+      });
+    } else {
+      _todayMarkedDamagedDholIds = updated;
+    }
+
+    try {
+      await _storage.write(
+        key: _todayDamagedMarkedCacheKey(),
+        value: jsonEncode(updated.toList()..sort()),
+      );
+    } catch (_) {
+      // Ignore cache write errors.
+    }
   }
 
   Future<void> _openInstrumentMaintenanceOnStartIfNeeded() async {
@@ -701,10 +798,21 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       );
     }
 
+    List<PathakDhol> goodConditionDhols = _goodConditionDhols;
+    try {
+      goodConditionDhols = await _withApiLoader(
+        MaintenanceService.fetchGoodConditionPathakDhols,
+      );
+      goodConditionDhols = _filterAlreadyMarkedToday(goodConditionDhols);
+    } catch (_) {
+      // Keep stale list on silent refresh failure.
+    }
+
     if (!mounted) return;
     setState(() {
       _activeInstrumentMaintenances = maintenances;
       _pathakDhols = pathakDhols;
+      _goodConditionDhols = goodConditionDhols;
       _damagedMaintenanceDhols = !_canReviewInstrumentMaintenances
           ? damagedDhols
           : pathakDhols
@@ -1051,6 +1159,20 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
   }
 
+  Future<void> _loadGoodConditionDhols() async {
+    try {
+      final items = await _withApiLoader(
+        MaintenanceService.fetchGoodConditionPathakDhols,
+      );
+      if (!mounted) return;
+      setState(() {
+        _goodConditionDhols = _filterAlreadyMarkedToday(items);
+      });
+    } catch (_) {
+      // Non-fatal: card will show 0 but button remains available.
+    }
+  }
+
   Future<void> _loadDamagedMaintenanceDhols() async {
     setState(() {
       _isLoadingPathakDhols = true;
@@ -1127,6 +1249,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final futures = <Future<void>>[
       _loadActiveInstrumentMaintenances(),
       _loadPathakDhols(),
+      _loadGoodConditionDhols(),
     ];
 
     if (!_canReviewInstrumentMaintenances) {
@@ -4343,6 +4466,176 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
   }
 
+  Future<void> _openMarkDholAsDamagedDialog() async {
+    // Use the dedicated good-condition list (fetched via ?status=good_condition)
+    // so this works for non-admin checked-in users too.
+    final goodConditionDhols =
+        List<PathakDhol>.from(_goodConditionDhols)
+            .where((item) => !_todayMarkedDamagedDholIds.contains(item.id))
+            .toList()
+          ..sort((left, right) {
+            final leftNumber = int.tryParse(left.dholNumber);
+            final rightNumber = int.tryParse(right.dholNumber);
+            if (leftNumber != null && rightNumber != null) {
+              return leftNumber.compareTo(rightNumber);
+            }
+            return left.dholNumber.compareTo(right.dholNumber);
+          });
+
+    if (goodConditionDhols.isEmpty) {
+      await _showSnack('No good condition dhol is available.');
+      return;
+    }
+
+    int? selectedDholId;
+    final remarksController = TextEditingController();
+
+    final shouldSubmit = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        var isSubmitting = false;
+        String? validationMessage;
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Mark Dhol As Damaged'),
+              content: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: 520,
+                  maxHeight: MediaQuery.sizeOf(dialogContext).height * 0.7,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      DropdownButtonFormField<int>(
+                        initialValue: selectedDholId,
+                        decoration: const InputDecoration(
+                          labelText: 'Dhol Number',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: goodConditionDhols
+                            .map(
+                              (item) => DropdownMenuItem<int>(
+                                value: item.id,
+                                child: Text('Dhol #${item.dholNumber}'),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: isSubmitting
+                            ? null
+                            : (value) {
+                                setDialogState(() {
+                                  selectedDholId = value;
+                                  validationMessage = null;
+                                });
+                              },
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: remarksController,
+                        minLines: 2,
+                        maxLines: 4,
+                        enabled: !isSubmitting,
+                        decoration: const InputDecoration(
+                          labelText: 'Damage Remarks (Optional)',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      if (validationMessage != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          validationMessage!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ],
+                      const SizedBox(height: 10),
+                      const Text(
+                        'Are you sure you want to mark this Dhol as damaged?',
+                        style: TextStyle(color: Colors.black54),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () {
+                          if (selectedDholId == null) {
+                            setDialogState(() {
+                              validationMessage = 'Please select a dhol.';
+                            });
+                            return;
+                          }
+
+                          setDialogState(() {
+                            isSubmitting = true;
+                          });
+
+                          if (dialogContext.mounted) {
+                            Navigator.of(dialogContext).pop(true);
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  child: const Text('Mark As Damaged'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (shouldSubmit != true) {
+      remarksController.dispose();
+      return;
+    }
+
+    final targetDholId = selectedDholId;
+    remarksController.dispose();
+
+    if (targetDholId == null) {
+      return;
+    }
+
+    try {
+      final attendanceState = await _currentAttendanceState();
+      final isCheckedIn = attendanceState.$1;
+      final isCheckedOut = attendanceState.$2;
+      if (!isCheckedIn || isCheckedOut) {
+        await _showSnack('Please check in first.');
+        return;
+      }
+
+      final updateResult = await _withApiLoader(
+        () => MaintenanceService.updatePathakDholStatus(
+          dholId: targetDholId,
+          status: 'damaged',
+        ),
+      );
+      await _cacheTodayMarkedDamagedDhol(targetDholId);
+
+      final message =
+          updateResult['message']?.toString() ?? 'Dhol marked as damaged.';
+      await _showSnack(message);
+      await _withApiLoader(_loadInstrumentMaintenanceData);
+    } catch (e) {
+      await _showSnack(e.toString());
+    }
+  }
+
   Widget _buildInstrumentMaintenanceTab() {
     final showStartButton = !_canReviewInstrumentMaintenances;
     final sortedMaintenances = List<PathakInstrumentMaintenance>.from(
@@ -4409,6 +4702,48 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                 ),
               ),
             ),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Report Dhol Damage',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Mark a good condition dhol as damaged when damage is observed.',
+                    style: TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Chip(
+                        label: Text(
+                          '${_goodConditionDhols.length} good condition dhol(s)',
+                        ),
+                      ),
+                      ElevatedButton.icon(
+                        onPressed: _isLoadingPathakDhols
+                            ? null
+                            : _openMarkDholAsDamagedDialog,
+                        style: ElevatedButton.styleFrom(
+                          foregroundColor: AppColors.primaryMaroon,
+                        ),
+                        icon: const Icon(Icons.report_problem_outlined),
+                        label: const Text('Mark Dhol As Damaged'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 12),
           Text(
             _canReviewInstrumentMaintenances

@@ -369,6 +369,10 @@ class ApiEndpoints {
   static String getMaintenancePathakDholStatus(int dholId) =>
       '$baseUrl/maintenance/pathak-dhols/$dholId/status/';
 
+  /// Mark a specific pathak dhol as damaged
+  static String getMaintenancePathakDholMarkDamaged(int dholId) =>
+      '$baseUrl/maintenance/pathak-dhols/$dholId/mark-damaged/';
+
   /// Checked-in members eligible to join pathak instrument maintenance
   static final String maintenanceCheckedInMembers =
       '$baseUrl/maintenance/pathak-instruments/checked-in-members/';

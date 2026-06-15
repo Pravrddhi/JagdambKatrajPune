@@ -702,6 +702,57 @@ class MaintenanceService {
     );
   }
 
+  static Future<Map<String, dynamic>> markPathakDholAsDamaged({
+    required int dholId,
+    required String remarks,
+  }) async {
+    final payload = <String, dynamic>{'remarks': remarks};
+
+    final response = await AuthorizedApiService.sendWithAutoRefresh(
+      null,
+      (token) => http.patch(
+        Uri.parse(ApiEndpoints.getMaintenancePathakDholMarkDamaged(dholId)),
+        headers: ApiEndpoints.authorizedHeaders(token),
+        body: jsonEncode(payload),
+      ),
+    );
+
+    return _decodeAndValidate(
+      response,
+      fallbackError: 'Failed to mark dhol as damaged.',
+    );
+  }
+
+  static Future<List<PathakDhol>> fetchGoodConditionPathakDhols() async {
+    final uri = Uri.parse(ApiEndpoints.maintenancePathakDhols).replace(
+      queryParameters: const <String, String>{'status': 'good_condition'},
+    );
+
+    final response = await AuthorizedApiService.sendWithAutoRefresh(
+      null,
+      (token) => http.get(uri, headers: ApiEndpoints.authorizedHeaders(token)),
+    );
+
+    final data = _decodeAndValidate(
+      response,
+      fallbackError: 'Failed to load good condition dhols.',
+    );
+
+    final dynamic listCandidate =
+        data['pathak_dhols'] ??
+        data['dhols'] ??
+        data['results'] ??
+        data['data'];
+    if (listCandidate is! List) {
+      return <PathakDhol>[];
+    }
+
+    return listCandidate
+        .whereType<Map>()
+        .map((item) => PathakDhol.fromJson(Map<String, dynamic>.from(item)))
+        .toList();
+  }
+
   static Future<List<PathakDhol>> fetchDamagedPathakDhols() async {
     final uri = Uri.parse(
       ApiEndpoints.maintenancePathakDhols,
@@ -1086,7 +1137,13 @@ class MaintenanceService {
     try {
       return jsonDecode(body);
     } on FormatException catch (e) {
-      if (kDebugMode) {
+      // Only log parse errors for success responses — non-2xx bodies (e.g. a
+      // Django 404 HTML page) are expected to be non-JSON and handled by
+      // callers that check the status code (e.g. the 404 fallback in
+      // fetchInstrumentMaintenancesForReview).
+      if (kDebugMode &&
+          response.statusCode >= 200 &&
+          response.statusCode < 300) {
         debugPrint('[MaintenanceApi JSON Parse Error]');
         debugPrint('API Name: ${apiName ?? 'unknown'}');
         debugPrint('Response Status: ${response.statusCode}');
