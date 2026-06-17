@@ -1,5 +1,4 @@
 import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -21,6 +20,7 @@ import '../navigation/app_route_observer.dart';
 import '../services/fcm_service.dart';
 import '../services/notification_socket_service.dart';
 import '../services/maintenance_service.dart';
+import '../services/attendance_service.dart';
 import '../models/maintenance_models.dart';
 import '../services/api_service.dart';
 import '../components/maintenance_completion_dialog.dart';
@@ -64,6 +64,16 @@ class _HomeScreenState extends State<HomeScreen>
   List<Map<String, dynamic>> _events = []; // User's upcoming events
   List<MaintenanceEvent> _maintenanceDays = <MaintenanceEvent>[];
   final Map<int, String> _completionStatusByEvent = <int, String>{};
+  List<MaintenanceCompletionRequest> _completionRequests =
+      <MaintenanceCompletionRequest>[];
+  List<PathakInstrumentMaintenance> _activeInstrumentMaintenances =
+      <PathakInstrumentMaintenance>[];
+  bool _isLoadingActiveInstrumentMaintenances = false;
+  String? _activeInstrumentMaintenanceErrorMessage;
+  bool _isStartMaintenanceEligible = false;
+  bool _isEvaluatingStartMaintenanceEligibility = false;
+  bool _hasPendingStartMaintenanceEligibilityRefresh = false;
+  String? _startMaintenanceIneligibilityReason;
   bool _isSubmittingHomeCompletion = false;
 
   bool _isFabOpen = false;
@@ -73,6 +83,7 @@ class _HomeScreenState extends State<HomeScreen>
   List<Map<String, dynamic>> _homeScreenSlides = <Map<String, dynamic>>[];
   late final PageController _homePhotosPageController;
   Timer? _homePhotosTimer;
+  Timer? _maintenanceDaysRefreshTimer;
   bool _isLoadingHomePhotos = false;
   Timer? _pushSetupRetryTimer;
   int _currentHomePhotoIndex = 0;
@@ -101,6 +112,9 @@ class _HomeScreenState extends State<HomeScreen>
       _buildHomePhotosPanel(isCompact: isCompact);
 
   static const int _maxPushSetupRetries = 3;
+  static const Duration _maintenanceDaysRefreshInterval = Duration(seconds: 30);
+  bool _isRefreshingMaintenanceDays = false;
+
   @override
   void initState() {
     super.initState();
@@ -118,9 +132,53 @@ class _HomeScreenState extends State<HomeScreen>
 
     _homePhotosPageController = PageController();
     _startHomePhotosAutoScroll();
+    _startMaintenanceDaysAutoRefresh();
 
     // Start user initialization workflow
     _initializeUser();
+  }
+
+  void _startMaintenanceDaysAutoRefresh() {
+    _maintenanceDaysRefreshTimer?.cancel();
+    _maintenanceDaysRefreshTimer = Timer.periodic(
+      _maintenanceDaysRefreshInterval,
+      (_) {
+        unawaited(_refreshMaintenanceDaysSilently());
+      },
+    );
+  }
+
+  Future<void> _refreshMaintenanceDaysSilently() async {
+    if (!mounted || _isRefreshingMaintenanceDays) return;
+
+    final storedToken = await storage.read(key: ApiEndpoints.accessTokenKey);
+    final effectiveToken = (storedToken != null && storedToken.isNotEmpty)
+        ? storedToken
+        : accessToken.trim().isNotEmpty
+        ? accessToken
+        : widget.authToken;
+
+    if (effectiveToken.trim().isEmpty) {
+      if (mounted) {
+        setState(() {
+          _maintenanceDays = <MaintenanceEvent>[];
+          _completionStatusByEvent.clear();
+          _activeInstrumentMaintenances = <PathakInstrumentMaintenance>[];
+          _activeInstrumentMaintenanceErrorMessage = null;
+        });
+      }
+      return;
+    }
+
+    _isRefreshingMaintenanceDays = true;
+    try {
+      await Future.wait<void>([
+        _loadMaintenanceDays(),
+        _loadActiveInstrumentMaintenances(),
+      ]);
+    } finally {
+      _isRefreshingMaintenanceDays = false;
+    }
   }
 
   void _startHomePhotosAutoScroll() {
@@ -154,7 +212,9 @@ class _HomeScreenState extends State<HomeScreen>
 
     if (state == AppLifecycleState.resumed) {
       _startHomePhotosAutoScroll();
+      _startMaintenanceDaysAutoRefresh();
       unawaited(_loadHomeScreenPhotos());
+      unawaited(_refreshMaintenanceDaysSilently());
       return;
     }
 
@@ -162,6 +222,7 @@ class _HomeScreenState extends State<HomeScreen>
         state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       _homePhotosTimer?.cancel();
+      _maintenanceDaysRefreshTimer?.cancel();
     }
   }
 
@@ -174,6 +235,8 @@ class _HomeScreenState extends State<HomeScreen>
   void _refreshPhotosOnHomeVisit() {
     if (!mounted) return;
     unawaited(_loadHomeScreenPhotos());
+    unawaited(_refreshMaintenanceDaysSilently());
+    unawaited(_refreshStartMaintenanceEligibility(forceBackendRefresh: true));
   }
 
   @override
@@ -325,7 +388,12 @@ class _HomeScreenState extends State<HomeScreen>
       final events = await MaintenanceService.fetchMaintenanceEvents();
       if (!mounted) return;
 
-      final current = events.where((event) => event.shouldShowOnHome).toList();
+      final latestEventId =
+          latestActiveMaintenanceEventId(events) ??
+          latestMaintenanceEventId(events);
+      final current = events
+          .where((event) => latestEventId != null && event.id == latestEventId)
+          .toList();
 
       current.sort((a, b) {
         final da = DateTime.tryParse(a.eventDate);
@@ -340,12 +408,14 @@ class _HomeScreenState extends State<HomeScreen>
         _maintenanceDays = current;
       });
       await _loadMaintenanceCompletionStatuses();
+      unawaited(_refreshStartMaintenanceEligibility());
     } catch (_) {
       if (!mounted) return;
       setState(() {
         _maintenanceDays = <MaintenanceEvent>[];
         _completionStatusByEvent.clear();
       });
+      unawaited(_refreshStartMaintenanceEligibility());
     }
   }
 
@@ -360,15 +430,31 @@ class _HomeScreenState extends State<HomeScreen>
 
     try {
       final requests = await MaintenanceService.fetchCompletionRequests();
-      final userScopedRequests = _filterCompletionRequestsForCurrentUser(
-        requests,
-      );
+
       final eventIds = _maintenanceDays.map((event) => event.id).toSet();
+      final participantMaintenances = _activeInstrumentMaintenances
+          .where(_isInstrumentMaintenanceParticipant)
+          .toList();
+      final participantMaintenanceIds = participantMaintenances
+          .map((item) => item.maintenanceId)
+          .toSet();
 
       final grouped = <int, Set<String>>{};
-      for (final request in userScopedRequests) {
+      for (final request in requests) {
         if (!eventIds.contains(request.event)) continue;
-        final status = request.status.trim().toLowerCase();
+        final maintenanceId = request.maintenanceId;
+        final isExactParticipantMaintenance =
+            maintenanceId != null &&
+            participantMaintenanceIds.contains(maintenanceId);
+        final isParticipantScopedRequest = _isCompletionRequestForCurrentUser(
+          request,
+        );
+
+        if (!isExactParticipantMaintenance && !isParticipantScopedRequest) {
+          continue;
+        }
+
+        final status = request.normalizedStatus.trim().toLowerCase();
         if (status.isEmpty) continue;
         grouped.putIfAbsent(request.event, () => <String>{}).add(status);
       }
@@ -391,12 +477,45 @@ class _HomeScreenState extends State<HomeScreen>
 
       if (!mounted) return;
       setState(() {
+        _completionRequests = requests;
         _completionStatusByEvent
           ..clear()
           ..addAll(resolved);
       });
     } catch (_) {
       // Keep previous status snapshot when refresh fails.
+    }
+  }
+
+  Future<void> _loadActiveInstrumentMaintenances() async {
+    if (mounted) {
+      setState(() {
+        _isLoadingActiveInstrumentMaintenances = true;
+        _activeInstrumentMaintenanceErrorMessage = null;
+      });
+    }
+
+    try {
+      final items =
+          await MaintenanceService.fetchMyActiveInstrumentMaintenances();
+      if (!mounted) return;
+      setState(() {
+        _activeInstrumentMaintenances = items;
+      });
+      unawaited(_refreshStartMaintenanceEligibility());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _activeInstrumentMaintenances = <PathakInstrumentMaintenance>[];
+        _activeInstrumentMaintenanceErrorMessage = e.toString();
+      });
+      unawaited(_refreshStartMaintenanceEligibility());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingActiveInstrumentMaintenances = false;
+        });
+      }
     }
   }
 
@@ -774,6 +893,7 @@ class _HomeScreenState extends State<HomeScreen>
       });
 
       await _loadMaintenanceDays();
+      await _loadActiveInstrumentMaintenances();
       await _loadHomeScreenPhotos();
 
       return true;
@@ -784,6 +904,8 @@ class _HomeScreenState extends State<HomeScreen>
         _userDetails = null;
         _events = [];
         _maintenanceDays = <MaintenanceEvent>[];
+        _activeInstrumentMaintenances = <PathakInstrumentMaintenance>[];
+        _activeInstrumentMaintenanceErrorMessage = null;
         _homeScreenSlides = <Map<String, dynamic>>[];
         _currentHomePhotoIndex = 0;
       });
@@ -809,6 +931,7 @@ class _HomeScreenState extends State<HomeScreen>
 
     await _loadUserDetails(effectiveToken, showLoading: false);
     await _loadMaintenanceDays();
+    await _loadActiveInstrumentMaintenances();
   }
 
   Future<void> _openMaintenanceCompletionFromHome(
@@ -817,13 +940,30 @@ class _HomeScreenState extends State<HomeScreen>
     if (!mounted) return;
     DateTime? submitLoaderStart;
 
-    if (event.isClosedForUserAction) {
+    if (event.isClosedStatus) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Message'),
+          content: const Text('Maintenance event is closed.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    if (!isLatestActiveMaintenanceEvent(event, _maintenanceDays)) {
       await showDialog<void>(
         context: context,
         builder: (dialogContext) => AlertDialog(
           title: const Text('Message'),
           content: const Text(
-            'This maintenance day is closed. Completion can only be handled automatically for the current day.',
+            'This maintenance day is closed. It stays open until a newer maintenance day is created.',
           ),
           actions: [
             TextButton(
@@ -875,8 +1015,17 @@ class _HomeScreenState extends State<HomeScreen>
         return;
       }
 
+      final selectedMaintenance = _maintenanceForEventOrLatestParticipant(
+        event,
+      );
+      final selectedMaintenanceId = selectedMaintenance?.maintenanceId ?? 0;
+
       final requests = await MaintenanceService.fetchInventoryRequests();
       final eventScopedRequests = requests.where((request) {
+        if (request.maintenanceId != null && selectedMaintenanceId > 0) {
+          return request.maintenanceId == selectedMaintenanceId;
+        }
+
         if (request.maintenanceEventId != null) {
           return request.maintenanceEventId == event.id;
         }
@@ -890,36 +1039,20 @@ class _HomeScreenState extends State<HomeScreen>
         return false;
       }).toList();
 
-      final userScopedStockRequests = eventScopedRequests
-          .where(_isInventoryRequestOwnedByCurrentUser)
-          .toList();
+      final maintenanceScopedStockRequests = eventScopedRequests;
 
-      final hasPendingStockRequest = userScopedStockRequests.any(
-        _isPendingInventoryRequest,
-      );
+      final hasPendingStockRequest = selectedMaintenanceId > 0
+          ? _hasPendingStockRequestForMaintenance(
+              selectedMaintenanceId,
+              maintenanceScopedStockRequests,
+            )
+          : maintenanceScopedStockRequests.any(_isPendingInventoryRequest);
       if (hasPendingStockRequest) {
-        if (!mounted) return;
-        await showDialog<void>(
-          context: context,
-          builder: (dialogContext) {
-            return AlertDialog(
-              title: const Text('Pending Stock Request'),
-              content: const Text(
-                'You have pending stock approval request(s). Submit maintenance completion only after stock approval.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('OK'),
-                ),
-              ],
-            );
-          },
-        );
+        await _showPendingStockValidationDialog();
         return;
       }
 
-      final approvedRequests = userScopedStockRequests
+      final approvedRequests = maintenanceScopedStockRequests
           .where((req) => req.normalizedStatus == 'approved')
           .toList();
 
@@ -944,6 +1077,7 @@ class _HomeScreenState extends State<HomeScreen>
       }
 
       final response = await MaintenanceService.createCompletionRequest(
+        maintenanceId: selectedMaintenanceId,
         eventId: event.id,
         workNotes: submission.workNotes,
         usedItems: submission.usedItems,
@@ -1038,10 +1172,6 @@ class _HomeScreenState extends State<HomeScreen>
                     fontSize: 14,
                   ),
                 ),
-              ),
-              TextButton(
-                onPressed: _refreshEventsSection,
-                child: const Text('Refresh'),
               ),
             ],
           ),
@@ -1169,8 +1299,41 @@ class _HomeScreenState extends State<HomeScreen>
                                   _completionStatusByEvent[item.id]
                                       ?.trim()
                                       .toLowerCase();
+                              final userMaintenanceStatusItem =
+                                  _maintenanceForEventOrLatestParticipant(item);
+                              final userMaintenanceStatus =
+                                  userMaintenanceStatusItem == null
+                                  ? ''
+                                  : _effectiveInstrumentMaintenanceStatus(
+                                      userMaintenanceStatusItem,
+                                    );
+                              final effectiveStatus =
+                                  _effectiveMaintenanceStatusForEvent(item);
+
+                              if (item.isClosedStatus) {
+                                _debugHomeMaintenanceAction(
+                                  event: item,
+                                  selectedAction: 'Maintenance Closed',
+                                  maintenance: userMaintenanceStatusItem,
+                                  effectiveStatus: effectiveStatus,
+                                );
+                                return OutlinedButton.icon(
+                                  onPressed: null,
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.blueGrey,
+                                  ),
+                                  icon: const Icon(Icons.lock_outline),
+                                  label: const Text('Maintenance Closed'),
+                                );
+                              }
 
                               if (completionStatus == 'pending') {
+                                _debugHomeMaintenanceAction(
+                                  event: item,
+                                  selectedAction: 'Pending Approval',
+                                  maintenance: userMaintenanceStatusItem,
+                                  effectiveStatus: effectiveStatus,
+                                );
                                 return OutlinedButton.icon(
                                   onPressed: null,
                                   style: OutlinedButton.styleFrom(
@@ -1182,6 +1345,12 @@ class _HomeScreenState extends State<HomeScreen>
                               }
 
                               if (completionStatus == 'approved') {
+                                _debugHomeMaintenanceAction(
+                                  event: item,
+                                  selectedAction: 'Approved',
+                                  maintenance: userMaintenanceStatusItem,
+                                  effectiveStatus: effectiveStatus,
+                                );
                                 return OutlinedButton.icon(
                                   onPressed: null,
                                   style: OutlinedButton.styleFrom(
@@ -1192,23 +1361,176 @@ class _HomeScreenState extends State<HomeScreen>
                                 );
                               }
 
+                              if (completionStatus == 'rejected') {
+                                _debugHomeMaintenanceAction(
+                                  event: item,
+                                  selectedAction: 'Submit Maintenance',
+                                  maintenance: userMaintenanceStatusItem,
+                                  effectiveStatus: effectiveStatus,
+                                );
+                                return OutlinedButton.icon(
+                                  onPressed: () =>
+                                      _openMaintenanceCompletionFromHome(item),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: Colors.red.shade700,
+                                  ),
+                                  icon: const Icon(Icons.replay_outlined),
+                                  label: const Text('Submit Maintenance'),
+                                );
+                              }
+
+                              if (userMaintenanceStatusItem != null) {
+                                final status = userMaintenanceStatus;
+                                if (status == 'under_maintenance' ||
+                                    status == 'in_progress' ||
+                                    status == 'active' ||
+                                    status == 'started') {
+                                  _debugHomeMaintenanceAction(
+                                    event: item,
+                                    selectedAction: 'Submit Maintenance',
+                                    maintenance: userMaintenanceStatusItem,
+                                    effectiveStatus: status,
+                                  );
+                                  return OutlinedButton.icon(
+                                    onPressed: () =>
+                                        _openSubmitInstrumentMaintenanceDialogFromHome(
+                                          userMaintenanceStatusItem,
+                                        ),
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: AppColors.primaryMaroon,
+                                    ),
+                                    icon: const Icon(
+                                      Icons.assignment_turned_in_outlined,
+                                    ),
+                                    label: const Text('Submit Maintenance'),
+                                  );
+                                }
+
+                                if (status == 'pending_approval' ||
+                                    status == 'pending' ||
+                                    status == 'submitted') {
+                                  _debugHomeMaintenanceAction(
+                                    event: item,
+                                    selectedAction: 'Pending Approval',
+                                    maintenance: userMaintenanceStatusItem,
+                                    effectiveStatus: status,
+                                  );
+                                  return OutlinedButton.icon(
+                                    onPressed: null,
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.orange,
+                                    ),
+                                    icon: const Icon(Icons.hourglass_top),
+                                    label: const Text('Pending Approval'),
+                                  );
+                                }
+
+                                if (status == 'approved') {
+                                  _debugHomeMaintenanceAction(
+                                    event: item,
+                                    selectedAction: 'Approved',
+                                    maintenance: userMaintenanceStatusItem,
+                                    effectiveStatus: status,
+                                  );
+                                  return OutlinedButton.icon(
+                                    onPressed: null,
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.green,
+                                    ),
+                                    icon: const Icon(
+                                      Icons.check_circle_outline,
+                                    ),
+                                    label: const Text('Approved'),
+                                  );
+                                }
+
+                                if (status == 'rejected') {
+                                  _debugHomeMaintenanceAction(
+                                    event: item,
+                                    selectedAction: 'Rejected',
+                                    maintenance: userMaintenanceStatusItem,
+                                    effectiveStatus: status,
+                                  );
+                                  return OutlinedButton.icon(
+                                    onPressed: null,
+                                    style: OutlinedButton.styleFrom(
+                                      foregroundColor: Colors.red.shade700,
+                                    ),
+                                    icon: const Icon(Icons.cancel_outlined),
+                                    label: const Text('Rejected'),
+                                  );
+                                }
+                              }
+
+                              final fallbackActionLabel =
+                                  effectiveStatus == 'pending_approval'
+                                  ? 'Pending Approval'
+                                  : effectiveStatus == 'approved'
+                                  ? 'Approved'
+                                  : effectiveStatus == 'rejected'
+                                  ? 'Rejected'
+                                  : 'Start Maintenance';
+                              _debugHomeMaintenanceAction(
+                                event: item,
+                                selectedAction: fallbackActionLabel,
+                                maintenance: userMaintenanceStatusItem,
+                                effectiveStatus: effectiveStatus,
+                              );
+
                               return OutlinedButton.icon(
-                                onPressed: () =>
-                                    _openMaintenanceCompletionFromHome(item),
+                                onPressed: _canStartMaintenanceFromHome
+                                    ? _openStartMaintenanceDialogFromHome
+                                    : null,
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: AppColors.primaryMaroon,
                                 ),
-                                icon: const Icon(
-                                  Icons.assignment_turned_in_outlined,
-                                ),
-                                label: const Text('Submit'),
+                                icon: const Icon(Icons.play_circle_outline),
+                                label: Text(fallbackActionLabel),
                               );
                             },
                           ),
                         ),
+                        if (_startMaintenanceIneligibilityReason != null &&
+                            !_canStartMaintenanceFromHome) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            _startMaintenanceIneligibilityReason!,
+                            style: TextStyle(
+                              color: AppColors.primaryMaroon.withValues(
+                                alpha: 0.74,
+                              ),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                        if (_isEvaluatingStartMaintenanceEligibility) ...[
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              SizedBox(
+                                width: 12,
+                                height: 12,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: AppColors.primaryMaroon,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Revalidating eligibility...',
+                                style: TextStyle(
+                                  color: AppColors.primaryMaroon.withValues(
+                                    alpha: 0.74,
+                                  ),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
                         const SizedBox(height: 6),
                         Text(
-                          'Visible for today only. It closes automatically after the day ends.',
+                          'Visible until a newer maintenance day is created.',
                           style: TextStyle(
                             color: AppColors.primaryMaroon.withValues(
                               alpha: 0.78,
@@ -1222,6 +1544,488 @@ class _HomeScreenState extends State<HomeScreen>
                 ),
         ],
       ),
+    );
+  }
+
+  // ignore: unused_element
+  Widget _buildActiveMaintenancePanel({required bool isCompact}) {
+    final item = _priorityActiveInstrumentMaintenance;
+
+    if (item == null) {
+      if (_isLoadingActiveInstrumentMaintenances) {
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: AppColors.accentYellow.withValues(alpha: 0.6),
+            ),
+          ),
+          child: const Row(
+            children: [
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Checking active maintenance assignments...',
+                  style: TextStyle(color: AppColors.primaryMaroon),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+
+      if (_activeInstrumentMaintenanceErrorMessage != null) {
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.red.withValues(alpha: 0.22)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Active maintenance unavailable',
+                style: TextStyle(
+                  color: AppColors.primaryMaroon,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _activeInstrumentMaintenanceErrorMessage!,
+                style: const TextStyle(color: AppColors.primaryMaroon),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  onPressed: _loadActiveInstrumentMaintenances,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry'),
+                ),
+              ),
+            ],
+          ),
+        );
+      }
+
+      return const SizedBox.shrink();
+    }
+
+    final isParticipant = _isInstrumentMaintenanceParticipant(item);
+    final canSubmit = _canSubmitInstrumentMaintenanceItem(item);
+    final userLatestMaintenanceStatus = _currentUserLatestMaintenanceStatusItem;
+    final normalizedUserStatus = userLatestMaintenanceStatus == null
+        ? ''
+        : _effectiveInstrumentMaintenanceStatus(userLatestMaintenanceStatus);
+    final effectiveItemStatus = _effectiveInstrumentMaintenanceStatus(item);
+    final isUserPendingApproval =
+        normalizedUserStatus == 'pending_approval' ||
+        normalizedUserStatus == 'pending' ||
+        normalizedUserStatus == 'submitted';
+    final isUserApproved = normalizedUserStatus == 'approved';
+    final isUserRejected = normalizedUserStatus == 'rejected';
+    final isUserUnderMaintenance =
+        normalizedUserStatus == 'under_maintenance' ||
+        normalizedUserStatus == 'in_progress' ||
+        normalizedUserStatus == 'active' ||
+        normalizedUserStatus == 'started';
+    final hasPendingApprovalStatusForCard =
+        isUserPendingApproval ||
+        effectiveItemStatus == 'pending_approval' ||
+        effectiveItemStatus == 'pending' ||
+        effectiveItemStatus == 'submitted';
+
+    String primaryActionLabel;
+    IconData primaryActionIcon;
+    bool primaryActionEnabled;
+    late Future<void> Function() primaryAction;
+
+    if (_isLatestMaintenanceEventClosed) {
+      primaryActionLabel = 'Maintenance Closed';
+      primaryActionIcon = Icons.lock_outline;
+      primaryActionEnabled = false;
+      primaryAction = () async {};
+    } else if (isUserPendingApproval) {
+      primaryActionLabel = 'Pending Approval';
+      primaryActionIcon = Icons.hourglass_top;
+      primaryActionEnabled = false;
+      primaryAction = () async {};
+    } else if (isUserApproved) {
+      primaryActionLabel = 'Approved';
+      primaryActionIcon = Icons.check_circle_outline;
+      primaryActionEnabled = false;
+      primaryAction = () async {};
+    } else if (isUserRejected) {
+      primaryActionLabel = 'Rejected';
+      primaryActionIcon = Icons.cancel_outlined;
+      primaryActionEnabled = false;
+      primaryAction = () async {};
+    } else if (isUserUnderMaintenance && userLatestMaintenanceStatus != null) {
+      primaryActionLabel = 'Submit Maintenance';
+      primaryActionIcon = Icons.assignment_turned_in_outlined;
+      primaryActionEnabled = true;
+      primaryAction = () async {
+        await _openMaintenanceScreenFromHome(
+          maintenanceId: userLatestMaintenanceStatus.maintenanceId,
+          openSubmitOnStart: true,
+        );
+      };
+    } else {
+      primaryActionLabel = 'Start Maintenance';
+      primaryActionIcon = Icons.play_circle_outline;
+      primaryActionEnabled = _canStartMaintenanceFromHome;
+      primaryAction = () async {
+        await _openStartMaintenanceDialogFromHome();
+      };
+    }
+
+    final isHighlighted = effectiveItemStatus == 'under_maintenance';
+    final participantsText = item.participants
+        .map((participant) => participant.fullName.trim())
+        .where((name) => name.isNotEmpty)
+        .join(', ');
+    final extraCount = _activeInstrumentMaintenances.length - 1;
+
+    return InkWell(
+      onTap: () => _openMaintenanceScreenFromHome(
+        maintenanceId: item.maintenanceId,
+        openSubmitOnStart: false,
+      ),
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: isHighlighted
+                ? <Color>[const Color(0xFFFFF5D6), const Color(0xFFFFE4C4)]
+                : <Color>[
+                    Colors.white,
+                    AppColors.accentYellow.withValues(alpha: 0.14),
+                  ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isHighlighted
+                ? const Color(0xFFC96B1A)
+                : AppColors.accentYellow.withValues(alpha: 0.72),
+            width: isHighlighted ? 1.4 : 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 14,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryMaroon.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(
+                    isHighlighted ? Icons.priority_high : Icons.build_circle,
+                    color: AppColors.primaryMaroon,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              isParticipant
+                                  ? 'Active Maintenance Assigned To You'
+                                  : 'Active Maintenance',
+                              style: const TextStyle(
+                                color: AppColors.primaryMaroon,
+                                fontWeight: FontWeight.w800,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ),
+                          if (extraCount > 0)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryMaroon,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                '+$extraCount more',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Tap to open maintenance details directly from Home.',
+                        style: TextStyle(
+                          color: AppColors.primaryMaroon.withValues(
+                            alpha: 0.82,
+                          ),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _buildMaintenanceInfoChip(
+                  label: 'Dhol Number',
+                  value: item.dholNumber.isEmpty
+                      ? '-'
+                      : 'Dhol #${item.dholNumber}',
+                ),
+                _buildMaintenanceInfoChip(
+                  label: 'Status',
+                  value: _instrumentMaintenanceStatusLabel(effectiveItemStatus),
+                ),
+                _buildMaintenanceInfoChip(
+                  label: 'Started Time',
+                  value: _formatMaintenanceStartedAt(item.startedAt),
+                ),
+                _buildMaintenanceInfoChip(
+                  label: 'Event',
+                  value: item.maintenanceEventTitle.trim().isEmpty
+                      ? '-'
+                      : item.maintenanceEventTitle,
+                ),
+                _buildMaintenanceInfoChip(
+                  label: 'Event Date',
+                  value: item.maintenanceEventDate.trim().isEmpty
+                      ? '-'
+                      : item.maintenanceEventDate,
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Participants',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    participantsText.isEmpty ? '-' : participantsText,
+                    style: const TextStyle(color: AppColors.primaryMaroon),
+                  ),
+                ],
+              ),
+            ),
+            if (isParticipant) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 9,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryMaroon,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  canSubmit
+                      ? 'Your maintenance is still in progress. Submit it directly from this card.'
+                      : 'You are a participant on this maintenance. Approval details are available from this card.',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _buildMaintenanceActionButton(
+                  label: primaryActionLabel,
+                  icon: primaryActionIcon,
+                  isCompact: isCompact,
+                  isEnabled: primaryActionEnabled,
+                  onPressed: primaryAction,
+                ),
+                _buildMaintenanceActionButton(
+                  label: 'View Maintenance Details',
+                  icon: Icons.visibility_outlined,
+                  isCompact: isCompact,
+                  isEnabled: true,
+                  onPressed: () => _openMaintenanceScreenFromHome(
+                    maintenanceId: item.maintenanceId,
+                  ),
+                ),
+                _buildMaintenanceActionButton(
+                  label: primaryActionLabel,
+                  icon: primaryActionIcon,
+                  isCompact: isCompact,
+                  isEmphasized: true,
+                  isEnabled: primaryActionEnabled,
+                  onPressed: primaryAction,
+                ),
+                _buildMaintenanceActionButton(
+                  label: 'View Approval Status',
+                  icon: hasPendingApprovalStatusForCard
+                      ? Icons.rule_folder_outlined
+                      : Icons.fact_check_outlined,
+                  isCompact: isCompact,
+                  isEnabled: true,
+                  onPressed: () => _openMaintenanceScreenFromHome(
+                    maintenanceId: item.maintenanceId,
+                  ),
+                ),
+              ],
+            ),
+            if (_isEvaluatingStartMaintenanceEligibility) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.primaryMaroon,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Revalidating eligibility...',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon.withValues(alpha: 0.74),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMaintenanceInfoChip({
+    required String label,
+    required String value,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: AppColors.primaryMaroon.withValues(alpha: 0.7),
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: const TextStyle(
+              color: AppColors.primaryMaroon,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMaintenanceActionButton({
+    required String label,
+    required IconData icon,
+    required bool isCompact,
+    required Future<void> Function() onPressed,
+    required bool isEnabled,
+    bool isEmphasized = false,
+  }) {
+    return ElevatedButton.icon(
+      onPressed: isEnabled ? () => onPressed() : null,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: isEmphasized ? AppColors.primaryMaroon : Colors.white,
+        foregroundColor: isEmphasized ? Colors.white : AppColors.primaryMaroon,
+        disabledBackgroundColor: Colors.white,
+        disabledForegroundColor: AppColors.primaryMaroon.withValues(
+          alpha: 0.45,
+        ),
+        elevation: 0,
+        padding: EdgeInsets.symmetric(
+          horizontal: isCompact ? 10 : 12,
+          vertical: 10,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(
+            color: isEmphasized
+                ? AppColors.primaryMaroon
+                : AppColors.accentYellow.withValues(alpha: 0.7),
+          ),
+        ),
+      ),
+      icon: Icon(icon, size: 18),
+      label: Text(label, textAlign: TextAlign.center),
     );
   }
 
@@ -1337,10 +2141,21 @@ class _HomeScreenState extends State<HomeScreen>
 
   int? get _currentUserId {
     final details = _userDetails;
+    final nested = details?['data'];
     return int.tryParse(
       details?['id']?.toString() ??
           details?['user_id']?.toString() ??
           details?['userId']?.toString() ??
+          (nested is Map<String, dynamic> ? nested['id']?.toString() : null) ??
+          (nested is Map<String, dynamic>
+              ? nested['user_id']?.toString()
+              : null) ??
+          (nested is Map<String, dynamic>
+              ? nested['userId']?.toString()
+              : null) ??
+          (nested is Map ? nested['id']?.toString() : null) ??
+          (nested is Map ? nested['user_id']?.toString() : null) ??
+          (nested is Map ? nested['userId']?.toString() : null) ??
           '',
     );
   }
@@ -1375,6 +2190,44 @@ class _HomeScreenState extends State<HomeScreen>
         '';
   }
 
+  String get _currentUserPhone {
+    final details = _userDetails;
+    final nested = details?['data'];
+    return (details?['phone']?.toString() ??
+            details?['phone_number']?.toString() ??
+            details?['mobile']?.toString() ??
+            (nested is Map<String, dynamic>
+                ? nested['phone']?.toString()
+                : null) ??
+            (nested is Map<String, dynamic>
+                ? nested['phone_number']?.toString()
+                : null) ??
+            (nested is Map ? nested['phone']?.toString() : null) ??
+            (nested is Map ? nested['phone_number']?.toString() : null) ??
+            widget.phoneNumber)
+        .trim();
+  }
+
+  bool _isCurrentUserMaintenancePartner(CheckedInMaintenancePartner partner) {
+    final currentId = _currentUserId;
+    if (currentId != null && partner.userId == currentId) {
+      return true;
+    }
+
+    final normalizedCurrentName = _currentUserName.trim().toLowerCase();
+    if (normalizedCurrentName.isNotEmpty &&
+        partner.fullName.trim().toLowerCase() == normalizedCurrentName) {
+      return true;
+    }
+
+    final currentPhone = _currentUserPhone;
+    if (currentPhone.isNotEmpty && partner.phone.trim() == currentPhone) {
+      return true;
+    }
+
+    return false;
+  }
+
   bool _isCompletionRequestOwnedByCurrentUser(
     MaintenanceCompletionRequest request,
   ) {
@@ -1401,24 +2254,6 @@ class _HomeScreenState extends State<HomeScreen>
     return requests.where(_isCompletionRequestOwnedByCurrentUser).toList();
   }
 
-  bool _isInventoryRequestOwnedByCurrentUser(InventoryRequestItem request) {
-    final currentUserId = _currentUserId;
-    if (currentUserId != null && request.requestedBy == currentUserId) {
-      return true;
-    }
-
-    final normalizedCurrentUserName = _currentUserName.trim().toLowerCase();
-    final normalizedRequestedByName = request.requestedByName
-        .trim()
-        .toLowerCase();
-    if (normalizedCurrentUserName.isEmpty ||
-        normalizedRequestedByName.isEmpty) {
-      return false;
-    }
-
-    return normalizedCurrentUserName == normalizedRequestedByName;
-  }
-
   bool _isPendingInventoryRequest(InventoryRequestItem request) {
     final normalizedStatus = request.normalizedStatus.trim().toLowerCase();
     if (normalizedStatus == 'pending' ||
@@ -1431,6 +2266,22 @@ class _HomeScreenState extends State<HomeScreen>
     return rawStatus == 'pending' ||
         rawStatus.startsWith('pending') ||
         rawStatus.contains('pending');
+  }
+
+  bool _hasPendingStockRequestForMaintenance(
+    int maintenanceId,
+    Iterable<InventoryRequestItem> requests,
+  ) {
+    if (maintenanceId <= 0) {
+      return false;
+    }
+
+    return requests.any((request) {
+      if (request.maintenanceId != maintenanceId) {
+        return false;
+      }
+      return _isPendingInventoryRequest(request);
+    });
   }
 
   bool _isUpcomingMirvnuk(Map<String, dynamic> event) {
@@ -1621,6 +2472,1511 @@ class _HomeScreenState extends State<HomeScreen>
         _showMaintenanceFabAction;
   }
 
+  bool get _canReviewInstrumentMaintenances {
+    return _canApproveMaintenanceCompletions ||
+        _canApproveMaintenanceEntries ||
+        _canManageMaintenanceInventory ||
+        _isPathakAdminOnly;
+  }
+
+  String get _homeCurrentUserName {
+    return '${_userDetails?['first_name'] ?? ''} ${_userDetails?['last_name'] ?? ''}'
+        .trim();
+  }
+
+  bool _isInstrumentMaintenanceParticipant(PathakInstrumentMaintenance item) {
+    final currentUserId = _currentUserId;
+    if (currentUserId != null &&
+        item.participants.any(
+          (participant) => participant.userId == currentUserId,
+        )) {
+      return true;
+    }
+
+    final normalizedCurrentName = _currentUserName.trim().toLowerCase();
+    if (normalizedCurrentName.isEmpty) {
+      return false;
+    }
+
+    return item.participants.any(
+      (participant) =>
+          participant.fullName.trim().toLowerCase() == normalizedCurrentName,
+    );
+  }
+
+  bool _canSubmitInstrumentMaintenanceItem(PathakInstrumentMaintenance item) {
+    final normalizedStatus = _effectiveInstrumentMaintenanceStatus(item);
+    return _isInstrumentMaintenanceParticipant(item) &&
+        normalizedStatus != 'pending_approval' &&
+        normalizedStatus != 'pending' &&
+        normalizedStatus != 'submitted' &&
+        normalizedStatus != 'approved' &&
+        normalizedStatus != 'rejected';
+  }
+
+  bool get _hasBlockingActiveMaintenanceAssignment {
+    return _activeInstrumentMaintenances.any((item) {
+      if (!_isInstrumentMaintenanceParticipant(item)) {
+        return false;
+      }
+
+      final normalizedStatus = _effectiveInstrumentMaintenanceStatus(item);
+      return normalizedStatus == 'under_maintenance' ||
+          normalizedStatus == 'pending_approval';
+    });
+  }
+
+  int _completionRequestTimestamp(MaintenanceCompletionRequest request) {
+    final updated = DateTime.tryParse(request.updatedAt);
+    if (updated != null) {
+      return updated.millisecondsSinceEpoch;
+    }
+
+    final created = DateTime.tryParse(request.createdAt);
+    if (created != null) {
+      return created.millisecondsSinceEpoch;
+    }
+
+    return request.id;
+  }
+
+  bool _isCompletionForInstrumentMaintenance(
+    MaintenanceCompletionRequest request,
+    PathakInstrumentMaintenance maintenance,
+  ) {
+    final requestMaintenanceId = request.maintenanceId;
+    if (requestMaintenanceId != null && requestMaintenanceId > 0) {
+      return requestMaintenanceId == maintenance.maintenanceId;
+    }
+
+    return false;
+  }
+
+  bool _isCompletionRequestForCurrentUser(
+    MaintenanceCompletionRequest request,
+  ) {
+    final currentUserId = _currentUserId;
+    if (currentUserId != null &&
+        request.participants.any(
+          (participant) => participant.userId == currentUserId,
+        )) {
+      return true;
+    }
+
+    final normalizedCurrentName = _currentUserName.trim().toLowerCase();
+    if (normalizedCurrentName.isNotEmpty &&
+        request.participants.any(
+          (participant) =>
+              participant.fullName.trim().toLowerCase() ==
+              normalizedCurrentName,
+        )) {
+      return true;
+    }
+
+    final currentPhone = _currentUserPhone;
+    if (currentPhone.isNotEmpty &&
+        request.participants.any(
+          (participant) => participant.phone.trim() == currentPhone,
+        )) {
+      return true;
+    }
+
+    // Fallback for payloads that omit participants but still identify submitter.
+    if (request.participants.isEmpty) {
+      if (currentUserId != null && request.submittedBy == currentUserId) {
+        return true;
+      }
+
+      final normalizedSubmittedByName = request.submittedByName
+          .trim()
+          .toLowerCase();
+      if (normalizedCurrentName.isNotEmpty &&
+          normalizedSubmittedByName.isNotEmpty &&
+          normalizedCurrentName == normalizedSubmittedByName) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  bool _doesCompletionShareParticipantsWithMaintenance(
+    MaintenanceCompletionRequest request,
+    PathakInstrumentMaintenance maintenance,
+  ) {
+    if (request.participants.isEmpty || maintenance.participants.isEmpty) {
+      return false;
+    }
+
+    final maintenanceParticipantIds = maintenance.participants
+        .map((participant) => participant.userId)
+        .where((id) => id > 0)
+        .toSet();
+    final requestParticipantIds = request.participants
+        .map((participant) => participant.userId)
+        .where((id) => id > 0)
+        .toSet();
+    if (maintenanceParticipantIds.isNotEmpty &&
+        requestParticipantIds.isNotEmpty) {
+      return requestParticipantIds.any(maintenanceParticipantIds.contains);
+    }
+
+    final maintenanceNames = maintenance.participants
+        .map((participant) => participant.fullName.trim().toLowerCase())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    final requestNames = request.participants
+        .map((participant) => participant.fullName.trim().toLowerCase())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    if (maintenanceNames.isNotEmpty && requestNames.isNotEmpty) {
+      return requestNames.any(maintenanceNames.contains);
+    }
+
+    final maintenancePhones = maintenance.participants
+        .map((participant) => participant.phone.trim())
+        .where((phone) => phone.isNotEmpty)
+        .toSet();
+    final requestPhones = request.participants
+        .map((participant) => participant.phone.trim())
+        .where((phone) => phone.isNotEmpty)
+        .toSet();
+    if (maintenancePhones.isNotEmpty && requestPhones.isNotEmpty) {
+      return requestPhones.any(maintenancePhones.contains);
+    }
+
+    return false;
+  }
+
+  String _effectiveInstrumentMaintenanceStatus(
+    PathakInstrumentMaintenance maintenance,
+  ) {
+    final matchingRequests =
+        _completionRequests
+            .where(
+              (request) =>
+                  _isCompletionForInstrumentMaintenance(request, maintenance) &&
+                  (_isCompletionRequestForCurrentUser(request) ||
+                      (request.maintenanceId != null &&
+                          request.maintenanceId == maintenance.maintenanceId) ||
+                      _doesCompletionShareParticipantsWithMaintenance(
+                        request,
+                        maintenance,
+                      )),
+            )
+            .toList()
+          ..sort(
+            (left, right) => _completionRequestTimestamp(
+              right,
+            ).compareTo(_completionRequestTimestamp(left)),
+          );
+
+    if (matchingRequests.isEmpty) {
+      return maintenance.normalizedStatus;
+    }
+
+    final completionStatus = matchingRequests.first.normalizedStatus;
+    if (completionStatus == 'pending') {
+      return 'pending_approval';
+    }
+
+    if (completionStatus == 'approved' || completionStatus == 'rejected') {
+      return completionStatus;
+    }
+
+    return maintenance.normalizedStatus;
+  }
+
+  bool _coerceBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    final normalized = value?.toString().trim().toLowerCase() ?? '';
+    return normalized == '1' || normalized == 'true' || normalized == 'yes';
+  }
+
+  Future<(bool, bool)> _currentAttendanceState() async {
+    final status = await AttendanceService.fetchMyCurrentAttendanceStatus();
+    final isCheckedIn = _coerceBool(status['is_checked_in']);
+    final isCheckedOut = _coerceBool(status['is_checked_out']);
+    return (isCheckedIn, isCheckedOut);
+  }
+
+  bool get _canStartMaintenanceFromHome {
+    return _isStartMaintenanceEligible;
+  }
+
+  bool get _isLatestMaintenanceEventClosed {
+    if (_maintenanceDays.isEmpty) {
+      return false;
+    }
+    return _maintenanceDays.first.isClosedStatus;
+  }
+
+  Future<void> _refreshStartMaintenanceEligibility({
+    bool forceBackendRefresh = false,
+  }) async {
+    final hasActiveMaintenanceDay = _maintenanceDays.any(
+      (event) => event.isActiveStatus,
+    );
+    final hasBlockingAssignment = _hasBlockingActiveMaintenanceAssignment;
+
+    var eligibleByDefaults = hasActiveMaintenanceDay && !hasBlockingAssignment;
+    String? reason;
+
+    if (_isLatestMaintenanceEventClosed) {
+      reason = 'Maintenance event is closed.';
+    } else if (!hasActiveMaintenanceDay) {
+      reason = 'Maintenance day is not active.';
+    } else if (hasBlockingAssignment) {
+      reason = 'You already have an active maintenance assigned.';
+    }
+
+    if (mounted) {
+      setState(() {
+        _isStartMaintenanceEligible = eligibleByDefaults;
+        _startMaintenanceIneligibilityReason = reason;
+      });
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    if (_isEvaluatingStartMaintenanceEligibility) {
+      if (forceBackendRefresh) {
+        _hasPendingStartMaintenanceEligibilityRefresh = true;
+      }
+      return;
+    }
+
+    _isEvaluatingStartMaintenanceEligibility = true;
+    try {
+      final damagedFuture = MaintenanceService.fetchDamagedPathakDhols();
+      final currentAttendanceStateFuture = _currentAttendanceState();
+      final results = await Future.wait<dynamic>([
+        damagedFuture,
+        currentAttendanceStateFuture,
+      ]);
+
+      final damagedDhols = results[0] as List<PathakDhol>;
+      final currentAttendanceState = results[1] as (bool, bool);
+      final isCurrentUserCheckedIn = currentAttendanceState.$1;
+      final isCurrentUserCheckedOut = currentAttendanceState.$2;
+
+      if (!mounted) return;
+
+      if (damagedDhols.isEmpty) {
+        setState(() {
+          _isStartMaintenanceEligible = false;
+          _startMaintenanceIneligibilityReason =
+              'No damaged dhol is available right now.';
+        });
+        return;
+      }
+
+      if (!isCurrentUserCheckedIn || isCurrentUserCheckedOut) {
+        setState(() {
+          _isStartMaintenanceEligible = false;
+          _startMaintenanceIneligibilityReason =
+              'Please check in first to start maintenance.';
+        });
+        return;
+      }
+
+      final isEligible =
+          hasActiveMaintenanceDay &&
+          !_isLatestMaintenanceEventClosed &&
+          !hasBlockingAssignment &&
+          damagedDhols.isNotEmpty &&
+          isCurrentUserCheckedIn &&
+          !isCurrentUserCheckedOut;
+
+      setState(() {
+        _isStartMaintenanceEligible = isEligible;
+        if (_isLatestMaintenanceEventClosed) {
+          _startMaintenanceIneligibilityReason = 'Maintenance event is closed.';
+        } else if (!hasActiveMaintenanceDay) {
+          _startMaintenanceIneligibilityReason =
+              'Maintenance day is not active.';
+        } else if (hasBlockingAssignment) {
+          _startMaintenanceIneligibilityReason =
+              'You already have an active maintenance assigned.';
+        } else if (damagedDhols.isEmpty) {
+          _startMaintenanceIneligibilityReason =
+              'No damaged dhol is available right now.';
+        } else if (!isCurrentUserCheckedIn || isCurrentUserCheckedOut) {
+          _startMaintenanceIneligibilityReason =
+              'Please check in first to start maintenance.';
+        } else {
+          _startMaintenanceIneligibilityReason = null;
+        }
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _isStartMaintenanceEligible = eligibleByDefaults;
+          _startMaintenanceIneligibilityReason = reason;
+        });
+      }
+    } finally {
+      _isEvaluatingStartMaintenanceEligibility = false;
+      if (_hasPendingStartMaintenanceEligibilityRefresh) {
+        _hasPendingStartMaintenanceEligibilityRefresh = false;
+        unawaited(
+          _refreshStartMaintenanceEligibility(forceBackendRefresh: true),
+        );
+      }
+    }
+  }
+
+  PathakInstrumentMaintenance? get _currentUserLatestMaintenanceStatusItem {
+    final items = _activeInstrumentMaintenances.where((item) {
+      if (!_isInstrumentMaintenanceParticipant(item)) {
+        return false;
+      }
+
+      final status = _effectiveInstrumentMaintenanceStatus(item);
+      return status == 'under_maintenance' ||
+          status == 'in_progress' ||
+          status == 'active' ||
+          status == 'started' ||
+          status == 'pending_approval' ||
+          status == 'pending' ||
+          status == 'submitted' ||
+          status == 'approved' ||
+          status == 'rejected';
+    }).toList();
+
+    if (items.isEmpty) {
+      return null;
+    }
+
+    int statusPriority(PathakInstrumentMaintenance item) {
+      switch (_effectiveInstrumentMaintenanceStatus(item)) {
+        case 'under_maintenance':
+        case 'in_progress':
+        case 'active':
+        case 'started':
+          return 0;
+        case 'pending_approval':
+        case 'pending':
+        case 'submitted':
+          return 1;
+        case 'approved':
+          return 2;
+        case 'rejected':
+          return 3;
+        default:
+          return 4;
+      }
+    }
+
+    items.sort((a, b) {
+      final priorityDelta = statusPriority(a) - statusPriority(b);
+      if (priorityDelta != 0) {
+        return priorityDelta;
+      }
+
+      final startedAtA = _tryParseMaintenanceDate(a.startedAt);
+      final startedAtB = _tryParseMaintenanceDate(b.startedAt);
+      if (startedAtA == null && startedAtB == null) {
+        return b.id.compareTo(a.id);
+      }
+      if (startedAtA == null) {
+        return 1;
+      }
+      if (startedAtB == null) {
+        return -1;
+      }
+      return startedAtB.compareTo(startedAtA);
+    });
+
+    return items.first;
+  }
+
+  PathakInstrumentMaintenance? _maintenanceForEvent(MaintenanceEvent event) {
+    final eventDate = event.parsedEventDate;
+    final matching = _activeInstrumentMaintenances.where((item) {
+      if (!_isInstrumentMaintenanceParticipant(item)) {
+        return false;
+      }
+
+      if (item.maintenanceEventId != null) {
+        return item.maintenanceEventId == event.id;
+      }
+
+      if (item.linkedEventDay != null && eventDate != null) {
+        return item.linkedEventDay == eventDate;
+      }
+
+      return false;
+    }).toList();
+
+    if (matching.isEmpty) {
+      return null;
+    }
+
+    matching.sort((a, b) {
+      final priorityDelta =
+          _instrumentMaintenanceStatusPriority(a) -
+          _instrumentMaintenanceStatusPriority(b);
+      if (priorityDelta != 0) {
+        return priorityDelta;
+      }
+
+      final startedAtA = _tryParseMaintenanceDate(a.startedAt);
+      final startedAtB = _tryParseMaintenanceDate(b.startedAt);
+      if (startedAtA == null && startedAtB == null) {
+        return b.id.compareTo(a.id);
+      }
+      if (startedAtA == null) {
+        return 1;
+      }
+      if (startedAtB == null) {
+        return -1;
+      }
+      return startedAtB.compareTo(startedAtA);
+    });
+
+    return matching.first;
+  }
+
+  PathakInstrumentMaintenance? _maintenanceForEventOrLatestParticipant(
+    MaintenanceEvent event,
+  ) {
+    return _maintenanceForEvent(event) ??
+        _currentUserLatestMaintenanceStatusItem;
+  }
+
+  String _effectiveMaintenanceStatusForEvent(MaintenanceEvent event) {
+    if (event.isClosedStatus) {
+      return 'closed';
+    }
+
+    final completionStatus = _completionStatusByEvent[event.id]
+        ?.trim()
+        .toLowerCase();
+    if (completionStatus != null && completionStatus.isNotEmpty) {
+      return completionStatus;
+    }
+
+    final maintenance = _maintenanceForEventOrLatestParticipant(event);
+    if (maintenance == null) {
+      return '';
+    }
+
+    return _effectiveInstrumentMaintenanceStatus(maintenance);
+  }
+
+  void _debugHomeMaintenanceAction({
+    required MaintenanceEvent event,
+    required String selectedAction,
+    PathakInstrumentMaintenance? maintenance,
+    required String effectiveStatus,
+  }) {
+    if (!kDebugMode) {
+      return;
+    }
+
+    final participantIds =
+        (maintenance?.participants ??
+                const <InstrumentMaintenanceParticipant>[])
+            .map((participant) => participant.userId)
+            .where((id) => id > 0)
+            .toList();
+
+    debugPrint(
+      '[HomeMaintenanceDebug] '
+      'Current User ID: ${_currentUserId ?? '-'} | '
+      'Event ID: ${event.id} | '
+      'Active Maintenance ID: ${maintenance?.id ?? '-'} | '
+      'Maintenance Status: ${effectiveStatus.isEmpty ? '-' : effectiveStatus} | '
+      'Participant IDs: ${participantIds.isEmpty ? '[]' : participantIds} | '
+      'Home Card Action Selected: $selectedAction',
+    );
+  }
+
+  String _instrumentMaintenanceStatusLabel(String status) {
+    switch (status
+        .trim()
+        .toLowerCase()
+        .replaceAll('-', '_')
+        .replaceAll(' ', '_')) {
+      case 'pending_approval':
+      case 'pending':
+      case 'submitted':
+        return 'Pending Approval';
+      case 'under_maintenance':
+        return 'Under Maintenance';
+      case 'in_progress':
+        return 'In Progress';
+      case 'approved':
+        return 'Approved';
+      case 'rejected':
+        return 'Rejected';
+      case 'active':
+      case 'started':
+      default:
+        return 'Active';
+    }
+  }
+
+  int _instrumentMaintenanceStatusPriority(PathakInstrumentMaintenance item) {
+    switch (_effectiveInstrumentMaintenanceStatus(item)) {
+      case 'under_maintenance':
+      case 'in_progress':
+      case 'active':
+      case 'started':
+        return 0;
+      case 'pending_approval':
+      case 'pending':
+      case 'submitted':
+        return 1;
+      case 'approved':
+        return 2;
+      case 'rejected':
+        return 3;
+      default:
+        return 4;
+    }
+  }
+
+  DateTime? _tryParseMaintenanceDate(String rawValue) {
+    final trimmed = rawValue.trim();
+    if (trimmed.isEmpty) return null;
+    return DateTime.tryParse(trimmed);
+  }
+
+  String _formatMaintenanceStartedAt(String rawValue) {
+    final parsed = _tryParseMaintenanceDate(rawValue);
+    if (parsed == null) {
+      return rawValue.trim().isEmpty ? '-' : rawValue;
+    }
+
+    final hour = parsed.hour == 0 ? 12 : ((parsed.hour - 1) % 12) + 1;
+    final minute = parsed.minute.toString().padLeft(2, '0');
+    final meridiem = parsed.hour >= 12 ? 'PM' : 'AM';
+    final day = parsed.day.toString().padLeft(2, '0');
+    final month = parsed.month.toString().padLeft(2, '0');
+    return '$day/$month/${parsed.year} $hour:$minute $meridiem';
+  }
+
+  // ignore: unused_element
+  PathakInstrumentMaintenance? get _priorityActiveInstrumentMaintenance {
+    if (_activeInstrumentMaintenances.isEmpty) {
+      return null;
+    }
+
+    final items = List<PathakInstrumentMaintenance>.from(
+      _activeInstrumentMaintenances,
+    );
+    items.sort((a, b) {
+      final participantOrder =
+          (_isInstrumentMaintenanceParticipant(a) ? 0 : 1) -
+          (_isInstrumentMaintenanceParticipant(b) ? 0 : 1);
+      if (participantOrder != 0) {
+        return participantOrder;
+      }
+
+      final statusOrder =
+          _instrumentMaintenanceStatusPriority(a) -
+          _instrumentMaintenanceStatusPriority(b);
+      if (statusOrder != 0) {
+        return statusOrder;
+      }
+
+      final startedAtA = _tryParseMaintenanceDate(a.startedAt);
+      final startedAtB = _tryParseMaintenanceDate(b.startedAt);
+      if (startedAtA == null && startedAtB == null) {
+        return b.id.compareTo(a.id);
+      }
+      if (startedAtA == null) {
+        return 1;
+      }
+      if (startedAtB == null) {
+        return -1;
+      }
+      return startedAtB.compareTo(startedAtA);
+    });
+    return items.first;
+  }
+
+  Future<void> _openMaintenanceScreenFromHome({
+    int? maintenanceId,
+    bool openSubmitOnStart = false,
+    bool openStartOnStart = false,
+  }) async {
+    final openWithAdminCapabilities = _canReviewInstrumentMaintenances;
+
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DholMaintenanceScreen(
+          canManageInventory: openWithAdminCapabilities
+              ? _canManageMaintenanceInventory
+              : false,
+          canApproveEntries: openWithAdminCapabilities
+              ? _canApproveMaintenanceEntries
+              : false,
+          canCreateMaintenanceEvents: openWithAdminCapabilities
+              ? _canCreateMaintenanceEvents
+              : false,
+          canApproveCompletionRequests: openWithAdminCapabilities
+              ? _canApproveMaintenanceCompletions
+              : false,
+          isPathakAdminApprover: openWithAdminCapabilities
+              ? _isPathakAdminOnly
+              : false,
+          approverGatId: _currentUserGatId,
+          currentUserId: _currentUserId,
+          currentUserName: _homeCurrentUserName,
+          userInstrument: _userDetails?['instrument']?.toString(),
+          openStartInstrumentMaintenanceOnStart: openStartOnStart,
+          openInstrumentMaintenanceIdOnStart: maintenanceId,
+          openSubmitForInstrumentMaintenanceOnStart: openSubmitOnStart,
+        ),
+      ),
+    );
+    await _loadMaintenanceDays();
+    await _loadActiveInstrumentMaintenances();
+  }
+
+  Future<void> _showPendingStockValidationDialog() async {
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Pending Stock Request'),
+        content: const Text(
+          'Some stock requests are still pending approval. Please wait for approval or rejection before submitting maintenance.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showHomeSnack(String message) {
+    if (!mounted) return;
+    final normalizedInput = message.replaceFirst('Exception: ', '').trim();
+    final normalized =
+        normalizedInput.toLowerCase().contains('maintenance event is closed')
+        ? 'Maintenance event is closed.'
+        : normalizedInput;
+    if (normalized.isEmpty) return;
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(normalized)));
+  }
+
+  String _normalizeStartMaintenanceErrorMessage(String rawMessage) {
+    final trimmed = rawMessage.replaceFirst('Exception: ', '').trim();
+    final normalized = trimmed.toLowerCase();
+    if (normalized.contains('maintenance event is closed')) {
+      return 'Maintenance event is closed.';
+    }
+    if (normalized.contains('no active maintenance event found')) {
+      return 'No active maintenance event available.';
+    }
+    if (normalized.contains('maintenance event is not active')) {
+      return 'Maintenance event is no longer active.';
+    }
+    return trimmed;
+  }
+
+  Future<Set<int>?> _openMaintenancePartnerSelectorFromHome({
+    required BuildContext parentContext,
+    required Set<int> initialSelected,
+    required List<CheckedInMaintenancePartner> partners,
+  }) async {
+    if (!parentContext.mounted) {
+      return null;
+    }
+
+    final searchController = TextEditingController();
+
+    if (kIsWeb) {
+      final route = ModalRoute.of(parentContext);
+      if (route != null && !route.isCurrent) {
+        searchController.dispose();
+        return null;
+      }
+    }
+
+    final selected = await showDialog<Set<int>>(
+      context: parentContext,
+      useRootNavigator: false,
+      builder: (dialogContext) {
+        var searchQuery = '';
+        final working = <int>{...initialSelected};
+        final visiblePartners = partners
+            .where((partner) => !_isCurrentUserMaintenancePartner(partner))
+            .toList();
+        final visiblePartnerIds = visiblePartners
+            .map((partner) => partner.userId)
+            .toSet();
+
+        working.removeWhere((id) => !visiblePartnerIds.contains(id));
+
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final filteredPartners = visiblePartners.where((partner) {
+              final query = searchQuery.trim().toLowerCase();
+              if (query.isEmpty) return true;
+              final name = partner.fullName.toLowerCase();
+              return name.contains(query);
+            }).toList();
+
+            return AlertDialog(
+              title: const Text('Select Partners'),
+              content: SizedBox(
+                width: 520,
+                height: 500,
+                child: Column(
+                  mainAxisSize: MainAxisSize.max,
+                  children: [
+                    TextField(
+                      controller: searchController,
+                      decoration: const InputDecoration(
+                        labelText: 'Search by name',
+                        prefixIcon: Icon(Icons.search),
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (value) {
+                        setSheetState(() {
+                          searchQuery = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    Flexible(
+                      child: filteredPartners.isEmpty
+                          ? const Center(
+                              child: Text('No checked-in users found.'),
+                            )
+                          : Scrollbar(
+                              child: ListView.builder(
+                                itemCount: filteredPartners.length,
+                                itemBuilder: (context, index) {
+                                  final partner = filteredPartners[index];
+                                  final isChecked = working.contains(
+                                    partner.userId,
+                                  );
+                                  final instrument = partner.instrument.trim();
+
+                                  return CheckboxListTile(
+                                    value: isChecked,
+                                    controlAffinity:
+                                        ListTileControlAffinity.leading,
+                                    title: Text(partner.fullName),
+                                    subtitle: instrument.isNotEmpty
+                                        ? Text(instrument)
+                                        : null,
+                                    onChanged: (value) {
+                                      setSheetState(() {
+                                        if (value == true) {
+                                          working.add(partner.userId);
+                                        } else {
+                                          working.remove(partner.userId);
+                                        }
+                                      });
+                                    },
+                                  );
+                                },
+                              ),
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(working),
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  child: const Text('Apply'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    searchController.dispose();
+    return selected;
+  }
+
+  Future<void> _openStartMaintenanceDialogFromHome() async {
+    if (_isLatestMaintenanceEventClosed) {
+      _showHomeSnack('Maintenance event is closed.');
+      return;
+    }
+
+    List<PathakDhol> damagedDhols;
+    try {
+      damagedDhols = await MaintenanceService.fetchDamagedPathakDhols();
+    } catch (e) {
+      _showHomeSnack(e.toString().replaceFirst('Exception: ', ''));
+      return;
+    }
+
+    List<CheckedInMaintenancePartner> partners =
+        <CheckedInMaintenancePartner>[];
+    String? partnersLoadMessage;
+    try {
+      partners = await MaintenanceService.fetchCheckedInMaintenancePartners();
+    } catch (e) {
+      partnersLoadMessage = e.toString().replaceFirst('Exception: ', '');
+    }
+
+    if (!mounted) return;
+
+    int? selectedDholId;
+    final selectedPartnerIds = <int>{};
+    String? successMessage;
+    final visiblePartners = partners
+        .where((partner) => !_isCurrentUserMaintenancePartner(partner))
+        .toList();
+    final visiblePartnerIds = visiblePartners
+        .map((partner) => partner.userId)
+        .toSet();
+
+    final started = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        var isSubmitting = false;
+        String? submitErrorMessage;
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Start Maintenance'),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: 520,
+                  maxHeight: 520,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      DropdownButtonFormField<int>(
+                        initialValue: selectedDholId,
+                        decoration: const InputDecoration(
+                          labelText: 'Dhol Number',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: damagedDhols
+                            .map(
+                              (item) => DropdownMenuItem<int>(
+                                value: item.id,
+                                child: Text('Dhol #${item.dholNumber}'),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: isSubmitting
+                            ? null
+                            : (value) {
+                                setDialogState(() {
+                                  selectedDholId = value;
+                                  submitErrorMessage = null;
+                                });
+                              },
+                      ),
+                      const SizedBox(height: 12),
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Partners (Optional)',
+                          border: OutlineInputBorder(),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              selectedPartnerIds.isEmpty
+                                  ? 'No partners selected'
+                                  : '${selectedPartnerIds.length} partner(s) selected',
+                              style: const TextStyle(color: Colors.black54),
+                            ),
+                            if (selectedPartnerIds.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                width: double.infinity,
+                                child: Wrap(
+                                  spacing: 6,
+                                  runSpacing: 6,
+                                  children: visiblePartners
+                                      .where(
+                                        (partner) => selectedPartnerIds
+                                            .contains(partner.userId),
+                                      )
+                                      .map(
+                                        (partner) =>
+                                            Chip(label: Text(partner.fullName)),
+                                      )
+                                      .toList(),
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 8),
+                            OutlinedButton.icon(
+                              onPressed: isSubmitting || partners.isEmpty
+                                  ? null
+                                  : () async {
+                                      if (!dialogContext.mounted) return;
+                                      final selected =
+                                          await _openMaintenancePartnerSelectorFromHome(
+                                            parentContext: dialogContext,
+                                            initialSelected: selectedPartnerIds,
+                                            partners: visiblePartners,
+                                          );
+                                      if (selected == null ||
+                                          !dialogContext.mounted) {
+                                        return;
+                                      }
+                                      setDialogState(() {
+                                        selectedPartnerIds
+                                          ..clear()
+                                          ..addAll(
+                                            selected.where(
+                                              (id) => visiblePartnerIds
+                                                  .contains(id),
+                                            ),
+                                          );
+                                      });
+                                    },
+                              icon: const Icon(Icons.group_add_outlined),
+                              label: const Text('Select Partner'),
+                            ),
+                            if (partnersLoadMessage != null) ...[
+                              const SizedBox(height: 8),
+                              Text(
+                                partnersLoadMessage,
+                                style: TextStyle(
+                                  color: Colors.red.shade700,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                      if (damagedDhols.isEmpty) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          'No damaged dhol is available right now.',
+                          style: TextStyle(
+                            color: Colors.red.shade700,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                      if (submitErrorMessage != null) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          submitErrorMessage!,
+                          style: TextStyle(
+                            color: Colors.red.shade700,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: (isSubmitting || selectedDholId == null)
+                      ? null
+                      : () async {
+                          setDialogState(() {
+                            isSubmitting = true;
+                            submitErrorMessage = null;
+                          });
+
+                          try {
+                            final response =
+                                await MaintenanceService.startInstrumentMaintenance(
+                                  instrumentId: selectedDholId!,
+                                  participantUserIds: selectedPartnerIds
+                                      .where(
+                                        (id) => visiblePartnerIds.contains(id),
+                                      )
+                                      .toList(),
+                                );
+                            successMessage =
+                                response['message']?.toString() ??
+                                'Maintenance started.';
+                            if (dialogContext.mounted) {
+                              Navigator.of(dialogContext).pop(true);
+                            }
+                          } catch (e) {
+                            if (!dialogContext.mounted) {
+                              return;
+                            }
+                            setDialogState(() {
+                              isSubmitting = false;
+                              submitErrorMessage =
+                                  _normalizeStartMaintenanceErrorMessage(
+                                    e.toString(),
+                                  );
+                            });
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Start Maintenance'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (started == true) {
+      _showHomeSnack(successMessage ?? 'Maintenance started.');
+      await _refreshMaintenanceDaysSilently();
+      await _refreshStartMaintenanceEligibility(forceBackendRefresh: true);
+    }
+  }
+
+  Future<void> _openSubmitInstrumentMaintenanceDialogFromHome(
+    PathakInstrumentMaintenance item,
+  ) async {
+    if (_isLatestMaintenanceEventClosed) {
+      _showHomeSnack('Maintenance event is closed.');
+      return;
+    }
+
+    PathakInstrumentMaintenance detail;
+    try {
+      detail = await MaintenanceService.fetchInstrumentMaintenanceDetail(
+        item.id,
+      );
+    } catch (e) {
+      _showHomeSnack(e.toString().replaceFirst('Exception: ', ''));
+      return;
+    }
+
+    if (!mounted) return;
+
+    final workPerformedController = TextEditingController(
+      text: detail.workPerformed,
+    );
+    final remarksController = TextEditingController(text: detail.remarks);
+    List<InventoryItem> homeInventory = <InventoryItem>[];
+    List<InventoryRequestItem> allRequests = <InventoryRequestItem>[];
+
+    try {
+      homeInventory = await MaintenanceService.fetchInventory();
+    } catch (_) {
+      homeInventory = <InventoryItem>[];
+    }
+
+    try {
+      allRequests = await MaintenanceService.fetchInventoryRequests();
+    } catch (_) {
+      allRequests = <InventoryRequestItem>[];
+    }
+
+    final hasPendingStockRequest = _hasPendingStockRequestForMaintenance(
+      detail.maintenanceId,
+      allRequests,
+    );
+    if (hasPendingStockRequest) {
+      await _showPendingStockValidationDialog();
+      workPerformedController.dispose();
+      remarksController.dispose();
+      return;
+    }
+
+    String? successMessage;
+    int? createdCompletionRequestId;
+    final resolvedDholNumber = detail.dholNumber.trim().isNotEmpty
+        ? detail.dholNumber.trim()
+        : item.dholNumber.trim();
+
+    if (resolvedDholNumber.isEmpty) {
+      _showHomeSnack(
+        'Unable to load Dhol Number for this maintenance. Please refresh and try again.',
+      );
+      workPerformedController.dispose();
+      remarksController.dispose();
+      return;
+    }
+
+    final participantsText = detail.participants
+        .map((participant) => participant.fullName.trim())
+        .where((name) => name.isNotEmpty)
+        .join(', ');
+
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        var isSubmitting = false;
+        var canSubmit = workPerformedController.text.trim().isNotEmpty;
+        String? submitErrorMessage;
+
+        List<InventoryRequestItem> eventScopedMaintenanceStockRequests() {
+          final approvedOrPendingScoped = List<InventoryRequestItem>.from(
+            allRequests,
+          );
+          final explicitMaintenanceId = detail.maintenanceId;
+          final explicitEventId = detail.maintenanceEventId;
+          final explicitEventDay = detail.linkedEventDay;
+          if (explicitMaintenanceId == 0 &&
+              explicitEventId == null &&
+              explicitEventDay == null) {
+            return approvedOrPendingScoped;
+          }
+
+          return approvedOrPendingScoped.where((request) {
+            if (explicitMaintenanceId > 0 && request.maintenanceId != null) {
+              return request.maintenanceId == explicitMaintenanceId;
+            }
+
+            if (explicitEventId != null && request.maintenanceEventId != null) {
+              return request.maintenanceEventId == explicitEventId;
+            }
+
+            final linkedEventDay = request.linkedEventDay;
+            if (linkedEventDay != null && explicitEventDay != null) {
+              return linkedEventDay == explicitEventDay;
+            }
+
+            return false;
+          }).toList();
+        }
+
+        List<CompletionUsedItemPreview> stockUsedPreviews() {
+          if (detail.approvedStockUsed.isNotEmpty) {
+            return detail.approvedStockUsed
+                .map(
+                  (item) => CompletionUsedItemPreview(
+                    inventoryItemId: item.inventoryItem,
+                    inventoryItemName: item.inventoryItemName,
+                    quantityUsed: item.quantityUsed,
+                  ),
+                )
+                .toList();
+          }
+
+          final approvedRequests = eventScopedMaintenanceStockRequests()
+              .where(
+                (request) =>
+                    request.normalizedStatus.trim().toLowerCase() == 'approved',
+              )
+              .toList();
+          return buildCompletionUsedItems(approvedRequests);
+        }
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final autoStockUsedItems = stockUsedPreviews();
+            return AlertDialog(
+              title: Text('Submit Dhol #$resolvedDholNumber Maintenance'),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: 560,
+                  maxHeight: 620,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Dhol Number',
+                          border: OutlineInputBorder(),
+                        ),
+                        child: Text('Dhol #$resolvedDholNumber'),
+                      ),
+                      const SizedBox(height: 12),
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Participants',
+                          border: OutlineInputBorder(),
+                        ),
+                        child: Text(
+                          participantsText.isEmpty ? '-' : participantsText,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Maintenance Event',
+                          border: OutlineInputBorder(),
+                        ),
+                        child: Text(
+                          detail.maintenanceEventTitle.trim().isEmpty
+                              ? '-'
+                              : detail.maintenanceEventTitle,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Event Date',
+                          border: OutlineInputBorder(),
+                        ),
+                        child: Text(
+                          detail.maintenanceEventDate.trim().isEmpty
+                              ? '-'
+                              : detail.maintenanceEventDate,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: workPerformedController,
+                        minLines: 2,
+                        maxLines: 4,
+                        onChanged: (value) {
+                          setDialogState(() {
+                            canSubmit = value.trim().isNotEmpty;
+                            submitErrorMessage = null;
+                          });
+                        },
+                        decoration: const InputDecoration(
+                          labelText: 'Work Performed',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: remarksController,
+                        minLines: 2,
+                        maxLines: 4,
+                        decoration: const InputDecoration(
+                          labelText: 'Remarks',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'Approved Stock Used',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      if (autoStockUsedItems.isEmpty)
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'No approved stock usage returned for this maintenance.',
+                            style: TextStyle(color: Colors.black54),
+                          ),
+                        )
+                      else
+                        ...autoStockUsedItems.map((usedItem) {
+                          final inventoryMatch = homeInventory
+                              .where(
+                                (inv) => inv.id == usedItem.inventoryItemId,
+                              )
+                              .toList();
+                          final availableQty = inventoryMatch.isNotEmpty
+                              ? inventoryMatch.first.quantityAvailable
+                              : null;
+                          final itemName =
+                              usedItem.inventoryItemName.trim().isNotEmpty
+                              ? usedItem.inventoryItemName.trim()
+                              : 'Item #${usedItem.inventoryItemId}';
+
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.withValues(alpha: 0.05),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: Colors.black12),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        itemName,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        availableQty == null
+                                            ? 'Used ${usedItem.quantityUsed}'
+                                            : 'Used ${usedItem.quantityUsed} | Available $availableQty',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.black54,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      if (submitErrorMessage != null) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          submitErrorMessage!,
+                          style: TextStyle(
+                            color: Colors.red.shade700,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: (!canSubmit || isSubmitting)
+                      ? null
+                      : () async {
+                          setDialogState(() {
+                            isSubmitting = true;
+                            submitErrorMessage = null;
+                          });
+
+                          try {
+                            final response =
+                                await MaintenanceService.submitInstrumentMaintenance(
+                                  maintenanceId: detail.maintenanceId,
+                                  workPerformed: workPerformedController.text
+                                      .trim(),
+                                  remarks: remarksController.text.trim(),
+                                );
+                            createdCompletionRequestId = int.tryParse(
+                              response['completion_request_id']?.toString() ??
+                                  '',
+                            );
+
+                            final maintenancePayload = response['maintenance'];
+                            if (maintenancePayload is Map) {
+                              final map = Map<String, dynamic>.from(
+                                maintenancePayload,
+                              );
+                              final updatedStatus =
+                                  map['status']?.toString().trim().isNotEmpty ==
+                                      true
+                                  ? map['status']!.toString().trim()
+                                  : map['status_display']
+                                            ?.toString()
+                                            .trim()
+                                            .isNotEmpty ==
+                                        true
+                                  ? map['status_display']!.toString().trim()
+                                  : null;
+                              // Local status update is intentionally deferred.
+                              // The screen refresh after dialog close is the
+                              // single source of truth to avoid cross-route
+                              // rebuild scope issues on web.
+                              if (updatedStatus != null) {
+                                // no-op: kept to preserve payload parsing side effects
+                              }
+                            }
+
+                            successMessage =
+                                response['message']?.toString() ??
+                                'Maintenance submitted successfully.';
+                            if (!dialogContext.mounted) {
+                              return;
+                            }
+
+                            Navigator.of(
+                              dialogContext,
+                              rootNavigator: true,
+                            ).pop(true);
+                            return;
+                          } catch (e) {
+                            if (!dialogContext.mounted) {
+                              return;
+                            }
+                            setDialogState(() {
+                              isSubmitting = false;
+                              submitErrorMessage = e.toString().replaceFirst(
+                                'Exception: ',
+                                '',
+                              );
+                            });
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Submit Maintenance'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    workPerformedController.dispose();
+    remarksController.dispose();
+
+    if (submitted == true) {
+      _showHomeSnack(successMessage ?? 'Maintenance submitted successfully.');
+      await _loadActiveInstrumentMaintenances();
+      await _refreshMaintenanceDaysSilently();
+      if (createdCompletionRequestId != null || _maintenanceDays.isNotEmpty) {
+        await _loadMaintenanceCompletionStatuses();
+      }
+      await _refreshStartMaintenanceEligibility(forceBackendRefresh: true);
+    }
+  }
+
   bool get _isNormalAttendanceOnlyUser {
     return _showAttendanceFabAction &&
         !_canOpenMirvnukForm &&
@@ -1631,6 +3987,15 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _handleLogout() {
+    _maintenanceDaysRefreshTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _maintenanceDays = <MaintenanceEvent>[];
+        _completionStatusByEvent.clear();
+        _activeInstrumentMaintenances = <PathakInstrumentMaintenance>[];
+        _activeInstrumentMaintenanceErrorMessage = null;
+      });
+    }
     Navigator.of(context).pushReplacementNamed('/login');
   }
 
@@ -2123,6 +4488,7 @@ class _HomeScreenState extends State<HomeScreen>
     _notificationSocketService?.dispose().ignore();
     _fabAnimationController.dispose();
     _homePhotosTimer?.cancel();
+    _maintenanceDaysRefreshTimer?.cancel();
     _pushSetupRetryTimer?.cancel();
     _homePhotosPageController.dispose();
     super.dispose();
@@ -2341,27 +4707,7 @@ class _HomeScreenState extends State<HomeScreen>
                                     );
                                     return;
                                   }
-                                  await Navigator.of(context).push(
-                                    MaterialPageRoute<void>(
-                                      builder: (_) => DholMaintenanceScreen(
-                                        // Home maintenance shortcut is always user-mode.
-                                        // Admin actions are available in Admin Operations.
-                                        canManageInventory: false,
-                                        canApproveEntries: false,
-                                        canCreateMaintenanceEvents: false,
-                                        canApproveCompletionRequests: false,
-                                        isPathakAdminApprover: false,
-                                        approverGatId: _currentUserGatId,
-                                        currentUserId: _currentUserId,
-                                        currentUserName:
-                                            '${_userDetails?['first_name'] ?? ''} ${_userDetails?['last_name'] ?? ''}'
-                                                .trim(),
-                                        userInstrument:
-                                            _userDetails?['instrument']
-                                                ?.toString(),
-                                      ),
-                                    ),
-                                  );
+                                  await _openMaintenanceScreenFromHome();
                                 },
                               ),
                             ),
@@ -2446,28 +4792,7 @@ class _HomeScreenState extends State<HomeScreen>
                                     await _refreshEventsSection();
                                     return;
                                   }
-                                  await Navigator.of(context).push(
-                                    MaterialPageRoute<void>(
-                                      builder: (_) => DholMaintenanceScreen(
-                                        // Home maintenance shortcut is always user-mode.
-                                        // Admin actions are available in Admin Operations.
-                                        canManageInventory: false,
-                                        canApproveEntries: false,
-                                        canCreateMaintenanceEvents: false,
-                                        canApproveCompletionRequests: false,
-                                        isPathakAdminApprover: false,
-                                        approverGatId: _currentUserGatId,
-                                        currentUserId: _currentUserId,
-                                        currentUserName:
-                                            '${_userDetails?['first_name'] ?? ''} ${_userDetails?['last_name'] ?? ''}'
-                                                .trim(),
-                                        userInstrument:
-                                            _userDetails?['instrument']
-                                                ?.toString(),
-                                        openCreateMaintenanceDayOnStart: false,
-                                      ),
-                                    ),
-                                  );
+                                  await _openMaintenanceScreenFromHome();
                                   await _refreshEventsSection();
                                 },
                               ),
