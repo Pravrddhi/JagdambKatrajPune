@@ -3759,6 +3759,9 @@ class _HomeScreenState extends State<HomeScreen>
                         minLines: 2,
                         maxLines: 4,
                         onChanged: (value) {
+                          if (!dialogContext.mounted) {
+                            return;
+                          }
                           setDialogState(() {
                             canSubmit = value.trim().isNotEmpty;
                             submitErrorMessage = null;
