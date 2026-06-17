@@ -3680,8 +3680,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
               final query = searchQuery.trim().toLowerCase();
               if (query.isEmpty) return true;
               final name = partner.fullName.toLowerCase();
-              final phone = partner.phone.toLowerCase();
-              return name.contains(query) || phone.contains(query);
+              return name.contains(query);
             }).toList();
 
             return AlertDialog(
@@ -3695,7 +3694,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                     TextField(
                       controller: searchController,
                       decoration: const InputDecoration(
-                        labelText: 'Search by name or phone',
+                        labelText: 'Search by name',
                         prefixIcon: Icon(Icons.search),
                         border: OutlineInputBorder(),
                       ),
@@ -3719,21 +3718,15 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                                   final isSelected = working.contains(
                                     partner.userId,
                                   );
+                                  final instrument = partner.instrument.trim();
                                   return CheckboxListTile(
                                     value: isSelected,
                                     controlAffinity:
                                         ListTileControlAffinity.leading,
                                     title: Text(partner.fullName),
-                                    subtitle: Text(
-                                      [
-                                        if (partner.instrument
-                                            .trim()
-                                            .isNotEmpty)
-                                          partner.instrument,
-                                        if (partner.phone.trim().isNotEmpty)
-                                          partner.phone,
-                                      ].join(' • '),
-                                    ),
+                                    subtitle: instrument.isNotEmpty
+                                        ? Text(instrument)
+                                        : null,
                                     onChanged: (value) {
                                       setDialogState(() {
                                         if (value == true) {
@@ -4578,9 +4571,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                             return;
                           }
 
-                          setDialogState(() {
-                            isSubmitting = true;
-                          });
+                          isSubmitting = true;
 
                           if (dialogContext.mounted) {
                             Navigator.of(dialogContext).pop(true);
@@ -4637,7 +4628,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   }
 
   Widget _buildInstrumentMaintenanceTab() {
-    final showStartButton = !_canReviewInstrumentMaintenances;
     final sortedMaintenances = List<PathakInstrumentMaintenance>.from(
       _activeInstrumentMaintenances,
     )..sort((left, right) => right.startedAt.compareTo(left.startedAt));
@@ -4647,61 +4637,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       child: ListView(
         padding: const EdgeInsets.all(12),
         children: [
-          if (showStartButton)
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Start Maintenance',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'Choose a damaged dhol and checked-in partners to start a new maintenance.',
-                      style: TextStyle(color: Colors.black54),
-                    ),
-                    const SizedBox(height: 12),
-                    Wrap(
-                      spacing: 12,
-                      runSpacing: 12,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Chip(
-                          label: Text(
-                            '${_damagedMaintenanceDhols.length} damaged dhol(s)',
-                          ),
-                        ),
-                        Chip(
-                          label: Text(
-                            '${_eligibleMaintenancePartners.length} eligible partner(s)',
-                          ),
-                        ),
-                        ElevatedButton.icon(
-                          onPressed:
-                              (_isLoadingMaintenancePartners ||
-                                      _isLoadingActiveInstrumentMaintenances) &&
-                                  _damagedMaintenanceDhols.isEmpty &&
-                                  _eligibleMaintenancePartners.isEmpty
-                              ? null
-                              : _openStartInstrumentMaintenanceDialog,
-                          style: ElevatedButton.styleFrom(
-                            foregroundColor: AppColors.primaryMaroon,
-                          ),
-                          icon: const Icon(Icons.play_circle_outline),
-                          label: const Text('Start Maintenance'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(14),

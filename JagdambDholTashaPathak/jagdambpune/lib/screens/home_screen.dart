@@ -3229,8 +3229,7 @@ class _HomeScreenState extends State<HomeScreen>
               final query = searchQuery.trim().toLowerCase();
               if (query.isEmpty) return true;
               final name = partner.fullName.toLowerCase();
-              final phone = partner.phone.toLowerCase();
-              return name.contains(query) || phone.contains(query);
+              return name.contains(query);
             }).toList();
 
             return AlertDialog(
@@ -3244,7 +3243,7 @@ class _HomeScreenState extends State<HomeScreen>
                     TextField(
                       controller: searchController,
                       decoration: const InputDecoration(
-                        labelText: 'Search by name or phone',
+                        labelText: 'Search by name',
                         prefixIcon: Icon(Icons.search),
                         border: OutlineInputBorder(),
                       ),
@@ -3268,17 +3267,16 @@ class _HomeScreenState extends State<HomeScreen>
                                   final isChecked = working.contains(
                                     partner.userId,
                                   );
+                                  final instrument = partner.instrument.trim();
 
                                   return CheckboxListTile(
                                     value: isChecked,
                                     controlAffinity:
                                         ListTileControlAffinity.leading,
                                     title: Text(partner.fullName),
-                                    subtitle: Text(
-                                      partner.phone.trim().isEmpty
-                                          ? 'Phone unavailable'
-                                          : partner.phone,
-                                    ),
+                                    subtitle: instrument.isNotEmpty
+                                        ? Text(instrument)
+                                        : null,
                                     onChanged: (value) {
                                       setSheetState(() {
                                         if (value == true) {
