@@ -117,6 +117,9 @@ class ApiEndpoints {
   /// Check if Aadhaar number already exists within a pathak
   static final String checkAdhaarNumber = '$baseUrl/auth/check-adhaar-number/';
 
+  /// Public web endpoint for new player registration form (Season 2026-27+).
+  static final String newComerRegistration = '$baseUrl/new_registration/';
+
   /// Check device registration
   static final String checkDeviceRegistration = '$baseUrl/auth/device-check/';
 
