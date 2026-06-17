@@ -892,9 +892,19 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
       });
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text('Unable to pick image: $error')));
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Error'),
+          content: Text('Unable to pick image: $error'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -959,29 +969,51 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
     final normalizedName = _nameController.text.trim();
 
     if (normalizedName.isEmpty) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('Please enter your name in Marathi.')),
-        );
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Error'),
+          content: const Text('Please enter your name in Marathi.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
       return;
     }
     if (!_hasExactlyTwoWords(normalizedName)) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text('Please enter only first name and last name.'),
-          ),
-        );
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Error'),
+          content: const Text('Please enter only first name and last name.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
       return;
     }
     if (!_hasSelectedImage) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('Please upload your image first.')),
-        );
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Error'),
+          content: const Text('Please upload your image first.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
       return;
     }
 
@@ -1028,14 +1060,19 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text('ID card submitted for review successfully.'),
-            backgroundColor: Colors.green,
-          ),
-        );
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Success'),
+          content: const Text('ID card submitted for review successfully.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
       final uploadedUrl = _firstNonEmpty([
         uploadResponse['document_url'],
         uploadResponse['document'],
@@ -1063,14 +1100,19 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(
-            content: Text(_submissionErrorMessage(e)),
-            backgroundColor: Colors.red,
-          ),
-        );
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Error'),
+          content: Text(_submissionErrorMessage(e)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -1132,19 +1174,35 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
   Future<void> _showPreview() async {
     FocusScope.of(context).unfocus();
     if (_nameController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('Please enter your name in Marathi.')),
-        );
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Error'),
+          content: const Text('Please enter your name in Marathi.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
       return;
     }
     if (!_hasSelectedImage) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('Please upload your image first.')),
-        );
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Error'),
+          content: const Text('Please upload your image first.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
       return;
     }
 

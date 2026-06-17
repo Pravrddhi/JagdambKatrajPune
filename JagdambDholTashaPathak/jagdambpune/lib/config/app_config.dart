@@ -6,6 +6,8 @@
 // ║  edit ONLY this file.  Everything else references it.           ║
 // ╚══════════════════════════════════════════════════════════════════╝
 
+import 'package:flutter/foundation.dart';
+
 class AppConfig {
   // ── App Identity ───────────────────────────────────────────────────────────
 
@@ -58,11 +60,32 @@ class AppConfig {
 
   // ── API / Backend ──────────────────────────────────────────────────────────
 
+  /// Build environment: expected values are 'prod' or 'dev'.
+  /// Example: --dart-define=APP_ENV=prod
+  static const String appEnv = String.fromEnvironment(
+    'APP_ENV',
+    defaultValue: kReleaseMode ? 'prod' : 'dev',
+  );
+
+  /// Production API base URL.
+  static const String prodApiBaseUrl =
+      'https://api.dholtashapathak.co.in/dholtashapathak/api';
+
+  /// Development API base URL.
+  static const String devApiBaseUrl =
+      'http://dev.dholtashapathak.co.in:8080/dholtashapathak/api';
+
   /// Default API base URL.
-  /// Override at build time with: --dart-define=API_BASE_URL=https://your-api/api
-  static const String defaultApiBaseUrl =
-      'https://api.dholtashapathak.co.in/dholtashapathak/api/';
-  // 'http://dev.dholtashapathak.co.in:8080/dholtashapathak/api/';
+  /// Priority:
+  /// 1) API_BASE_URL dart-define (handled in ApiEndpoints)
+  /// 2) APP_ENV-based fallback (prod/dev)
+  static String get defaultApiBaseUrl {
+    final env = appEnv.trim().toLowerCase();
+    if (env == 'dev') {
+      return devApiBaseUrl;
+    }
+    return prodApiBaseUrl;
+  }
 
   /// Pathak identifier sent with registration and instrument-fetch requests.
   static const String pathakId = '1';

@@ -32,10 +32,46 @@ class _UpcomingEventsState extends State<UpcomingEvents>
   late final AnimationController _pulseController;
   late final Animation<double> _pulseAnim;
 
+  int _statusOf(Map<String, dynamic> event) {
+    final raw = event['status'];
+    if (raw is int) return raw;
+    return int.tryParse(raw?.toString() ?? '') ?? 0;
+  }
+
+  DateTime? _eventDateTimeOf(Map<String, dynamic> event) {
+    final date = event['date']?.toString().trim() ?? '';
+    if (date.isEmpty) return null;
+    final time = event['time_from']?.toString().trim() ?? '00:00';
+    return DateTime.tryParse('$date $time');
+  }
+
+  List<Map<String, dynamic>> _sortedEvents(List<Map<String, dynamic>> source) {
+    final sorted = List<Map<String, dynamic>>.from(source);
+    sorted.sort((a, b) {
+      final aStatus = _statusOf(a);
+      final bStatus = _statusOf(b);
+
+      // Keep live/started Mirvnuk at the top.
+      final aIsLive = aStatus == 1;
+      final bIsLive = bStatus == 1;
+      if (aIsLive != bIsLive) {
+        return aIsLive ? -1 : 1;
+      }
+
+      final aDate = _eventDateTimeOf(a);
+      final bDate = _eventDateTimeOf(b);
+      if (aDate == null && bDate == null) return 0;
+      if (aDate == null) return 1;
+      if (bDate == null) return -1;
+      return bDate.compareTo(aDate);
+    });
+    return sorted;
+  }
+
   @override
   void initState() {
     super.initState();
-    _events = List<Map<String, dynamic>>.from(widget.events);
+    _events = _sortedEvents(List<Map<String, dynamic>>.from(widget.events));
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
@@ -56,7 +92,7 @@ class _UpcomingEventsState extends State<UpcomingEvents>
     super.didUpdateWidget(oldWidget);
     if (widget.events != oldWidget.events) {
       setState(() {
-        _events = List<Map<String, dynamic>>.from(widget.events);
+        _events = _sortedEvents(List<Map<String, dynamic>>.from(widget.events));
       });
     }
   }
@@ -249,9 +285,17 @@ class _UpcomingEventsState extends State<UpcomingEvents>
 
       if (response == null) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Session expired. Please log in again.'),
+          showDialog<void>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: const Text('Error'),
+              content: const Text('Session expired. Please log in again.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
             ),
           );
         }
@@ -268,28 +312,55 @@ class _UpcomingEventsState extends State<UpcomingEvents>
           setState(() {
             _events[index] = Map<String, dynamic>.from(_events[index])
               ..['status'] = newStatus;
+            _events = _sortedEvents(_events);
           });
           await _refreshAfterStatusUpdate();
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
+          showDialog<void>(
+            context: context,
+            builder: (dialogContext) => AlertDialog(
+              title: const Text('Error'),
               content: Text(data['message'] ?? 'Failed to update status.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('OK'),
+                ),
+              ],
             ),
           );
         }
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+        showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Error'),
             content: Text(
               'Error ${response.statusCode}: Could not update status.',
             ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('OK'),
+              ),
+            ],
           ),
         );
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Network error. Please try again.')),
+        showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Error'),
+            content: const Text('Network error. Please try again.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
         );
       }
     } finally {

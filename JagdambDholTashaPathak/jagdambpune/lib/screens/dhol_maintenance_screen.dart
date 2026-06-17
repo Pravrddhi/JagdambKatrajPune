@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../models/maintenance_models.dart';
 import '../components/maintenance_completion_dialog.dart';
 import '../services/api_service.dart';
+import '../services/attendance_service.dart';
 import '../services/maintenance_service.dart';
 import '../theme/app_colors.dart';
 
@@ -46,8 +48,11 @@ class DholMaintenanceScreen extends StatefulWidget {
   final int? currentUserId;
   final String? currentUserName;
   final int? openCompletionForEventIdOnStart;
+  final int? openInstrumentMaintenanceIdOnStart;
+  final bool openSubmitForInstrumentMaintenanceOnStart;
   final String? userInstrument;
   final bool openCreateMaintenanceDayOnStart;
+  final bool openStartInstrumentMaintenanceOnStart;
 
   const DholMaintenanceScreen({
     super.key,
@@ -62,8 +67,11 @@ class DholMaintenanceScreen extends StatefulWidget {
     this.currentUserId,
     this.currentUserName,
     this.openCompletionForEventIdOnStart,
+    this.openInstrumentMaintenanceIdOnStart,
+    this.openSubmitForInstrumentMaintenanceOnStart = false,
     this.userInstrument,
     this.openCreateMaintenanceDayOnStart = false,
+    this.openStartInstrumentMaintenanceOnStart = false,
   });
 
   @override
@@ -81,6 +89,10 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   bool _isLoadingAnalysis = false;
   bool _isLoadingEvents = false;
   bool _isLoadingCompletionRequests = false;
+  bool _isLoadingPathakDhols = false;
+  bool _isLoadingMaintenancePartners = false;
+  bool _isLoadingActiveInstrumentMaintenances = false;
+  bool _isCreatingDholRange = false;
   int _activeApiCallCount = 0;
 
   bool get _isAnyApiCallInProgress {
@@ -90,7 +102,10 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         _isLoadingEntries ||
         _isLoadingAnalysis ||
         _isLoadingEvents ||
-        _isLoadingCompletionRequests;
+        _isLoadingCompletionRequests ||
+        _isLoadingPathakDhols ||
+        _isLoadingMaintenancePartners ||
+        _isLoadingActiveInstrumentMaintenances;
   }
 
   String _requestStatusFilter = 'pending';
@@ -99,6 +114,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   String _eventStatusFilter = 'all';
   String _eventScopeFilter = 'all';
   String _eventDateFilter = '';
+  String _dholStatusFilter = 'all';
   int? _analysisEventIdFilter;
   int? _completionEventIdFilter;
   String _completionEventDateFilter = '';
@@ -109,6 +125,8 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   bool _isLiveRefreshInProgress = false;
   bool _hasOpenedCreateMaintenanceDayOnStart = false;
   bool _hasOpenedCompletionOnStart = false;
+  bool _hasOpenedInstrumentMaintenanceOnStart = false;
+  int? _lastSubmittedCompletionRequestId;
 
   List<InventoryItem> _inventory = <InventoryItem>[];
   List<InventoryRequestItem> _requests = <InventoryRequestItem>[];
@@ -117,7 +135,28 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   final Map<int, int?> _completionEventAssignedGatById = <int, int?>{};
   List<MaintenanceCompletionRequest> _completionRequests =
       <MaintenanceCompletionRequest>[];
+  List<PathakInstrumentMaintenance> _activeInstrumentMaintenances =
+      <PathakInstrumentMaintenance>[];
+  List<PathakDhol> _pathakDhols = <PathakDhol>[];
+  List<PathakDhol> _damagedMaintenanceDhols = <PathakDhol>[];
+  List<PathakDhol> _goodConditionDhols = <PathakDhol>[];
+  List<CheckedInMaintenancePartner> _eligibleMaintenancePartners =
+      <CheckedInMaintenancePartner>[];
+  final Map<int, PathakInstrumentMaintenance> _instrumentMaintenanceDetails =
+      <int, PathakInstrumentMaintenance>{};
+  final Set<int> _updatingDholStatusIds = <int>{};
+  final Set<int> _loadingInstrumentMaintenanceDetailIds = <int>{};
+  final TextEditingController _dholRangeStartController =
+      TextEditingController();
+  final TextEditingController _dholRangeEndController = TextEditingController();
+  final TextEditingController _dholSearchController = TextEditingController();
   MaintenanceAnalysis? _analysis;
+
+  static const List<String> _dholStatusValues = <String>[
+    'damaged',
+    'good_condition',
+    'under_maintenance',
+  ];
 
   // Categories shown to non-admin users as individual tabs.
   static const List<String> _allCategoryTabs = [
@@ -144,21 +183,46 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       '${_statePrefix}completion_event_date';
   static const String _kShowLegacyEntries =
       '${_statePrefix}show_legacy_entries';
+  static const String _kDamagedMarkedCachePrefix =
+      '${_statePrefix}damaged_marked';
+
+  Set<int> _todayMarkedDamagedDholIds = <int>{};
 
   bool get _showAdminCompletionTab {
     return widget.canApproveCompletionRequests;
+  }
+
+  bool get _canReviewInstrumentMaintenances {
+    return widget.canApproveCompletionRequests ||
+        widget.canApproveEntries ||
+        widget.canManageInventory ||
+        widget.isPathakAdminApprover;
   }
 
   int _approvalsTabIndex() => _allCategoryTabs.length;
 
   int _eventsTabIndex() => _approvalsTabIndex() + 1;
 
+  int _instrumentMaintenanceTabIndex() => _eventsTabIndex() + 1;
+
+  int _dholRangeTabIndex() => _instrumentMaintenanceTabIndex() + 1;
+
+  int _dholStatusTabIndex() => _dholRangeTabIndex() + 1;
+
   int _completionTabIndex() {
-    return _showAdminCompletionTab ? _eventsTabIndex() + 1 : -1;
+    return _showAdminCompletionTab ? _dholStatusTabIndex() + 1 : -1;
+  }
+
+  int _completionTabIndexForCurrentUser() {
+    if (widget.canManageInventory) {
+      final index = _completionTabIndex();
+      return index == -1 ? _analysisTabIndex() : index;
+    }
+    return _visibleCategoryTabs.length + 3;
   }
 
   int _adminTabCount() {
-    var count = _allCategoryTabs.length + 2;
+    var count = _allCategoryTabs.length + 5;
     if (_showAdminCompletionTab) {
       count += 1;
     }
@@ -173,13 +237,27 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     if (!_showLegacyEntriesTab) {
       return -1;
     }
-    return _eventsTabIndex() + (_showAdminCompletionTab ? 2 : 1);
+    return _dholStatusTabIndex() + (_showAdminCompletionTab ? 2 : 1);
   }
 
   int _analysisTabIndex() {
     return _showLegacyEntriesTab
         ? _entriesTabIndex() + 1
-        : _eventsTabIndex() + (_showAdminCompletionTab ? 2 : 1);
+        : _dholStatusTabIndex() + (_showAdminCompletionTab ? 2 : 1);
+  }
+
+  bool _coerceBool(dynamic value) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    final normalized = value?.toString().trim().toLowerCase() ?? '';
+    return normalized == '1' || normalized == 'true' || normalized == 'yes';
+  }
+
+  Future<(bool, bool)> _currentAttendanceState() async {
+    final status = await AttendanceService.fetchMyCurrentAttendanceStatus();
+    final isCheckedIn = _coerceBool(status['is_checked_in']);
+    final isCheckedOut = _coerceBool(status['is_checked_out']);
+    return (isCheckedIn, isCheckedOut);
   }
 
   @override
@@ -189,11 +267,13 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     // Determine visible categories based on instrument and role
     _visibleCategoryTabs = _getVisibleCategories();
 
-    // Admin: all 4 category tabs + Approvals + Events + Completion + Entries + Analysis
-    // Other users: filtered categories + (Approvals or My Requests) + Events + Completion
+    // Admin: all 4 category tabs + Approvals + Events + Dhol Range + Dhol Status
+    // + Completion + Entries + Analysis.
+    // Other users: filtered categories + (Approvals or My Requests) + Events
+    // + Instrument Maintenance + Completion.
     final tabCount = widget.canManageInventory
         ? _adminTabCount()
-        : _visibleCategoryTabs.length + 3;
+        : _visibleCategoryTabs.length + 4;
     _tabController = TabController(length: tabCount, vsync: this);
     _initScreen();
   }
@@ -201,12 +281,138 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   Future<void> _initScreen() async {
     await _restoreUiState();
     if (!mounted) return;
+    await _restoreTodayMarkedDamagedDholCache();
+    if (!mounted) return;
     await _initialLoad();
     if (!mounted) return;
     _startLiveRefresh();
     await _openCreateMaintenanceDayOnStartIfNeeded();
     if (!mounted) return;
     await _openCompletionForEventOnStartIfNeeded();
+    if (!mounted) return;
+    await _openInstrumentMaintenanceOnStartIfNeeded();
+  }
+
+  String _todayCacheDate() {
+    final now = DateTime.now();
+    final month = now.month.toString().padLeft(2, '0');
+    final day = now.day.toString().padLeft(2, '0');
+    return '${now.year}-$month-$day';
+  }
+
+  String _todayDamagedMarkedCacheKey() {
+    final userScope = widget.currentUserId?.toString() ?? 'anonymous';
+    return '${_kDamagedMarkedCachePrefix}_${_todayCacheDate()}_$userScope';
+  }
+
+  List<PathakDhol> _filterAlreadyMarkedToday(List<PathakDhol> items) {
+    if (_todayMarkedDamagedDholIds.isEmpty) {
+      return items;
+    }
+
+    return items
+        .where((item) => !_todayMarkedDamagedDholIds.contains(item.id))
+        .toList();
+  }
+
+  Future<void> _restoreTodayMarkedDamagedDholCache() async {
+    try {
+      final raw = await _storage.read(key: _todayDamagedMarkedCacheKey());
+      if (!mounted || raw == null || raw.trim().isEmpty) {
+        return;
+      }
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return;
+      }
+
+      final ids = decoded
+          .map((item) => int.tryParse(item.toString()))
+          .whereType<int>()
+          .toSet();
+      if (ids.isEmpty) {
+        return;
+      }
+
+      setState(() {
+        _todayMarkedDamagedDholIds = ids;
+      });
+    } catch (_) {
+      // Ignore cache restore errors.
+    }
+  }
+
+  Future<void> _cacheTodayMarkedDamagedDhol(int dholId) async {
+    if (dholId <= 0) {
+      return;
+    }
+
+    final updated = <int>{..._todayMarkedDamagedDholIds, dholId};
+    if (mounted) {
+      setState(() {
+        _todayMarkedDamagedDholIds = updated;
+      });
+    } else {
+      _todayMarkedDamagedDholIds = updated;
+    }
+
+    try {
+      await _storage.write(
+        key: _todayDamagedMarkedCacheKey(),
+        value: jsonEncode(updated.toList()..sort()),
+      );
+    } catch (_) {
+      // Ignore cache write errors.
+    }
+  }
+
+  Future<void> _openInstrumentMaintenanceOnStartIfNeeded() async {
+    if (_hasOpenedInstrumentMaintenanceOnStart) {
+      return;
+    }
+
+    final openStart = widget.openStartInstrumentMaintenanceOnStart;
+    final maintenanceId = widget.openInstrumentMaintenanceIdOnStart;
+
+    if (!openStart && maintenanceId == null) {
+      return;
+    }
+
+    _hasOpenedInstrumentMaintenanceOnStart = true;
+
+    if (openStart && !_canReviewInstrumentMaintenances) {
+      _tabController.animateTo(_instrumentMaintenanceTabIndex());
+      await Future<void>.delayed(const Duration(milliseconds: 180));
+      if (!mounted) return;
+      await _openStartInstrumentMaintenanceDialog();
+      return;
+    }
+
+    if (maintenanceId == null) {
+      return;
+    }
+
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) {
+      return;
+    }
+
+    final matching = _activeInstrumentMaintenances.where(
+      (item) => item.id == maintenanceId,
+    );
+    if (matching.isEmpty) {
+      await _showSnack('Unable to find the selected active maintenance.');
+      return;
+    }
+
+    _tabController.animateTo(_instrumentMaintenanceTabIndex());
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    if (!mounted) return;
+    await _openInstrumentMaintenanceDetail(
+      matching.first,
+      openSubmitOnStart: widget.openSubmitForInstrumentMaintenanceOnStart,
+    );
   }
 
   Future<void> _openCreateMaintenanceDayOnStartIfNeeded() async {
@@ -231,7 +437,16 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     if (!mounted) return;
     final created = await _openCreateEventForm();
     if (created && mounted) {
-      Navigator.of(context).maybePop();
+      FocusManager.instance.primaryFocus?.unfocus();
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      if (!mounted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final route = ModalRoute.of(context);
+        if (route == null || route.isCurrent) {
+          Navigator.of(context).maybePop();
+        }
+      });
     }
   }
 
@@ -249,11 +464,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       return;
     }
 
-    // On web, opening a dialog during initial route build after hot restart
-    // can trigger duplicate overlay keys and engine window assertions.
     if (kIsWeb) {
       if (widget.canManageInventory) {
-        _tabController.animateTo(_allCategoryTabs.length + 1);
+        _tabController.animateTo(_eventsTabIndex());
       } else {
         _tabController.animateTo(_visibleCategoryTabs.length + 1);
       }
@@ -274,7 +487,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final oldController = _tabController;
     final tabCount = widget.canManageInventory
         ? _adminTabCount()
-        : _visibleCategoryTabs.length + 3;
+        : _visibleCategoryTabs.length + 4;
     final targetIndex = preferredIndex.clamp(0, tabCount - 1);
 
     setState(() {
@@ -300,33 +513,27 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     });
     unawaited(_persistUiState());
 
-    int nextIndex = currentIndex;
+    var nextIndex = currentIndex;
     if (!_showLegacyEntriesTab) {
-      if (currentIndex == entriesIndexBefore) {
-        nextIndex = _analysisTabIndex();
-      } else if (currentIndex == analysisIndexBefore) {
-        nextIndex = _analysisTabIndex();
-      }
-    } else {
-      if (currentIndex == _analysisTabIndex()) {
+      if (currentIndex == entriesIndexBefore ||
+          currentIndex == analysisIndexBefore) {
         nextIndex = _analysisTabIndex();
       }
+    } else if (currentIndex == _analysisTabIndex()) {
+      nextIndex = _analysisTabIndex();
     }
 
     _rebuildTabController(preferredIndex: nextIndex);
   }
 
   List<String> _getVisibleCategories() {
-    // Admin always sees all categories
     if (widget.canManageInventory) {
       return _allCategoryTabs;
     }
 
-    // Regular users see only their instrument + 'others'
     final instrument =
         widget.userInstrument?.toString().trim().toLowerCase() ?? '';
 
-    // Instrument-based management users should also see all categories.
     if (instrument == 'management' || instrument == 'managemnet') {
       return _allCategoryTabs;
     }
@@ -343,6 +550,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     WidgetsBinding.instance.removeObserver(this);
     _liveRefreshTimer?.cancel();
     _tabController.dispose();
+    _dholRangeStartController.dispose();
+    _dholRangeEndController.dispose();
+    _dholSearchController.dispose();
     super.dispose();
   }
 
@@ -357,7 +567,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
       _liveRefreshTimer?.cancel();
-      return;
     }
   }
 
@@ -472,6 +681,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         _refreshRequestsSilently(),
         _refreshEventsSilently(),
         _refreshCompletionRequestsSilently(),
+        _refreshInstrumentMaintenanceDataSilently(),
       ];
 
       if (widget.canManageInventory) {
@@ -569,25 +779,68 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     });
   }
 
+  Future<void> _refreshInstrumentMaintenanceDataSilently() async {
+    final maintenances = await _withApiLoader(
+      MaintenanceService.fetchInstrumentMaintenancesForReview,
+    );
+    final pathakDhols = await _withApiLoader(
+      MaintenanceService.fetchPathakDhols,
+    );
+    List<PathakDhol> damagedDhols = _damagedMaintenanceDhols;
+    List<CheckedInMaintenancePartner> partners = _eligibleMaintenancePartners;
+
+    if (!_canReviewInstrumentMaintenances) {
+      damagedDhols = await _withApiLoader(
+        MaintenanceService.fetchDamagedPathakDhols,
+      );
+      partners = await _withApiLoader(
+        MaintenanceService.fetchCheckedInMaintenancePartners,
+      );
+    }
+
+    List<PathakDhol> goodConditionDhols = _goodConditionDhols;
+    try {
+      goodConditionDhols = await _withApiLoader(
+        MaintenanceService.fetchGoodConditionPathakDhols,
+      );
+      goodConditionDhols = _filterAlreadyMarkedToday(goodConditionDhols);
+    } catch (_) {
+      // Keep stale list on silent refresh failure.
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _activeInstrumentMaintenances = maintenances;
+      _pathakDhols = pathakDhols;
+      _goodConditionDhols = goodConditionDhols;
+      _damagedMaintenanceDhols = !_canReviewInstrumentMaintenances
+          ? damagedDhols
+          : pathakDhols
+                .where((item) => item.normalizedStatus == 'damaged')
+                .toList();
+      if (!_canReviewInstrumentMaintenances) {
+        _eligibleMaintenancePartners = partners;
+      }
+    });
+  }
+
   Future<void> _initialLoad() async {
+    final commonLoads = <Future<void>>[
+      _loadInventory(),
+      _loadRequests(),
+      _loadEvents(),
+      _loadCompletionRequests(),
+      _loadInstrumentMaintenanceData(),
+    ];
+
     if (widget.canManageInventory) {
-      await Future.wait<void>([
-        _loadInventory(),
-        _loadRequests(),
-        _loadEntries(),
-        _loadEvents(),
-        _loadCompletionRequests(),
-        _loadAnalysis(),
-      ]);
-      if (!mounted) return;
+      commonLoads.addAll([_loadEntries(), _loadAnalysis()]);
+    }
+
+    await Future.wait<void>(commonLoads);
+    if (!mounted) return;
+    if (widget.canManageInventory) {
       _applyAdminDefaultTabIfNeeded();
-    } else {
-      await Future.wait<void>([
-        _loadInventory(),
-        _loadRequests(),
-        _loadEvents(),
-        _loadCompletionRequests(),
-      ]);
     }
   }
 
@@ -606,16 +859,19 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       _tabController.animateTo(_analysisTabIndex());
       return;
     }
+    if (requestedSection == 'instrument_maintenance' ||
+        requestedSection == 'dhol_maintenance') {
+      _tabController.animateTo(_instrumentMaintenanceTabIndex());
+      return;
+    }
 
     final pendingRequests = _requests.where(_isPendingInventoryRequest).length;
     final pendingEntries = _entries
         .where((item) => item.status.toLowerCase() == 'pending')
         .length;
-
     final pendingCompletionRequests = _completionRequests
         .where((item) => item.status.toLowerCase() == 'pending')
         .length;
-
     if (_showAdminCompletionTab && pendingCompletionRequests > 0) {
       _tabController.animateTo(_completionTabIndex());
       return;
@@ -800,6 +1056,8 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         );
       }
 
+      items = await _hydrateCompletionRequestParticipants(items);
+
       if (!mounted) return;
       setState(() {
         _completionRequests = items;
@@ -815,27 +1073,221 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
   }
 
+  Future<List<MaintenanceCompletionRequest>>
+  _hydrateCompletionRequestParticipants(
+    List<MaintenanceCompletionRequest> requests,
+  ) async {
+    final idsToFetch = <int>{};
+
+    for (final request in requests) {
+      if (request.participants.isNotEmpty) {
+        continue;
+      }
+
+      final maintenanceId = request.maintenanceId;
+      if (maintenanceId == null || maintenanceId <= 0) {
+        continue;
+      }
+
+      final cached = _instrumentMaintenanceDetails[maintenanceId];
+      if (cached != null && cached.participants.isNotEmpty) {
+        continue;
+      }
+
+      idsToFetch.add(maintenanceId);
+    }
+
+    if (idsToFetch.isNotEmpty) {
+      await Future.wait<void>(
+        idsToFetch.map((maintenanceId) async {
+          try {
+            final detail =
+                await MaintenanceService.fetchInstrumentMaintenanceDetail(
+                  maintenanceId,
+                );
+            _instrumentMaintenanceDetails[maintenanceId] = detail;
+          } catch (_) {
+            // Keep completion requests visible even when optional hydration fails.
+          }
+        }),
+      );
+    }
+
+    return requests.map((request) {
+      if (request.participants.isNotEmpty) {
+        return request;
+      }
+
+      final maintenanceId = request.maintenanceId;
+      if (maintenanceId == null || maintenanceId <= 0) {
+        return request;
+      }
+
+      final linked = _instrumentMaintenanceDetails[maintenanceId];
+      final participants =
+          linked?.participants ?? const <InstrumentMaintenanceParticipant>[];
+      if (participants.isEmpty) {
+        return request;
+      }
+
+      return request.copyWith(participants: participants);
+    }).toList();
+  }
+
+  Future<void> _loadPathakDhols() async {
+    setState(() {
+      _isLoadingPathakDhols = true;
+    });
+
+    try {
+      final items = await _withApiLoader(MaintenanceService.fetchPathakDhols);
+      if (!mounted) return;
+      setState(() {
+        _pathakDhols = items;
+        _damagedMaintenanceDhols = items
+            .where((item) => item.normalizedStatus == 'damaged')
+            .toList();
+      });
+    } catch (e) {
+      _showSnack(e.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingPathakDhols = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadGoodConditionDhols() async {
+    try {
+      final items = await _withApiLoader(
+        MaintenanceService.fetchGoodConditionPathakDhols,
+      );
+      if (!mounted) return;
+      setState(() {
+        _goodConditionDhols = _filterAlreadyMarkedToday(items);
+      });
+    } catch (_) {
+      // Non-fatal: card will show 0 but button remains available.
+    }
+  }
+
+  Future<void> _loadDamagedMaintenanceDhols() async {
+    setState(() {
+      _isLoadingPathakDhols = true;
+    });
+
+    try {
+      final items = await _withApiLoader(
+        MaintenanceService.fetchDamagedPathakDhols,
+      );
+      if (!mounted) return;
+      setState(() {
+        _damagedMaintenanceDhols = items;
+      });
+    } catch (e) {
+      _showSnack(e.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingPathakDhols = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadEligibleMaintenancePartners() async {
+    setState(() {
+      _isLoadingMaintenancePartners = true;
+    });
+
+    try {
+      final items = await _withApiLoader(
+        MaintenanceService.fetchCheckedInMaintenancePartners,
+      );
+      if (!mounted) return;
+      setState(() {
+        _eligibleMaintenancePartners = items;
+      });
+    } catch (e) {
+      _showSnack(e.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingMaintenancePartners = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadActiveInstrumentMaintenances() async {
+    setState(() {
+      _isLoadingActiveInstrumentMaintenances = true;
+    });
+
+    try {
+      final items = await _withApiLoader(
+        MaintenanceService.fetchInstrumentMaintenancesForReview,
+      );
+      if (!mounted) return;
+      setState(() {
+        _activeInstrumentMaintenances = items;
+      });
+    } catch (e) {
+      _showSnack(e.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoadingActiveInstrumentMaintenances = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadInstrumentMaintenanceData() async {
+    final futures = <Future<void>>[
+      _loadActiveInstrumentMaintenances(),
+      _loadPathakDhols(),
+      _loadGoodConditionDhols(),
+    ];
+
+    if (!_canReviewInstrumentMaintenances) {
+      futures.addAll([
+        _loadDamagedMaintenanceDhols(),
+        _loadEligibleMaintenancePartners(),
+      ]);
+    }
+
+    await Future.wait<void>(futures);
+  }
+
   Future<void> _refreshActiveTab() async {
     final activeIndex = _tabController.index;
 
     if (widget.canManageInventory) {
-      final approvalsIndex = _approvalsTabIndex();
-      final eventsIndex = _eventsTabIndex();
-      final completionIndex = _completionTabIndex();
-
       if (activeIndex < _allCategoryTabs.length) {
         await _loadInventory();
         return;
       }
-      if (activeIndex == approvalsIndex) {
+      if (activeIndex == _approvalsTabIndex()) {
         await _loadRequests();
         return;
       }
-      if (activeIndex == eventsIndex) {
+      if (activeIndex == _eventsTabIndex()) {
         await _loadEvents();
         return;
       }
-      if (completionIndex != -1 && activeIndex == completionIndex) {
+      if (activeIndex == _instrumentMaintenanceTabIndex()) {
+        await _loadInstrumentMaintenanceData();
+        return;
+      }
+      if (activeIndex == _dholRangeTabIndex() ||
+          activeIndex == _dholStatusTabIndex()) {
+        await _loadPathakDhols();
+        return;
+      }
+      if (_completionTabIndex() != -1 && activeIndex == _completionTabIndex()) {
         await _loadCompletionRequests();
         return;
       }
@@ -858,6 +1310,10 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
     if (activeIndex == categoryTabCount + 1) {
       await _loadEvents();
+      return;
+    }
+    if (activeIndex == categoryTabCount + 2) {
+      await _loadInstrumentMaintenanceData();
       return;
     }
     await _loadCompletionRequests();
@@ -1255,134 +1711,75 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final formKey = GlobalKey<FormState>();
     final quantityController = TextEditingController();
     final noteController = TextEditingController();
-    final eventOptions = _events.where((event) => event.isActiveStatus).toList()
-      ..sort((a, b) {
-        final left = DateTime.tryParse(a.eventDate);
-        final right = DateTime.tryParse(b.eventDate);
-        if (left == null && right == null) return 0;
-        if (left == null) return 1;
-        if (right == null) return -1;
-        return right.compareTo(left);
-      });
 
-    int? selectedEventId;
-    if (eventOptions.length == 1) {
-      selectedEventId = eventOptions.first.id;
-    }
+    // Update stock proposals are never linked to a maintenance event.
+    const int? selectedEventId = null;
 
     final shouldSubmit = await showDialog<bool>(
       context: context,
       builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setLocalState) {
-            return AlertDialog(
-              title: Text('Update Stock Request: ${item.name}'),
-              content: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Current Available: ${item.quantityAvailable}',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Colors.black54,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    if (eventOptions.isNotEmpty) ...[
-                      DropdownButtonFormField<int?>(
-                        isExpanded: true,
-                        initialValue: selectedEventId,
-                        decoration: const InputDecoration(
-                          labelText: 'Maintenance Event (optional)',
-                        ),
-                        items: [
-                          const DropdownMenuItem<int?>(
-                            value: null,
-                            child: Text('No Event Link'),
-                          ),
-                          ...eventOptions.map(
-                            (event) => DropdownMenuItem<int?>(
-                              value: event.id,
-                              child: Text(
-                                '${event.title} (${event.eventDate})',
-                              ),
-                            ),
-                          ),
-                        ],
-                        onChanged: (value) {
-                          setLocalState(() {
-                            selectedEventId = value;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    TextFormField(
-                      controller: quantityController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(
-                        labelText: 'Quantity to Add',
-                      ),
-                      validator: (value) {
-                        final qty = int.tryParse(value ?? '');
-                        if (qty == null || qty <= 0) {
-                          return 'Enter a valid quantity';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: noteController,
-                      decoration: const InputDecoration(
-                        labelText: 'Reason (optional)',
-                      ),
-                      maxLines: 2,
-                    ),
-                  ],
+        return AlertDialog(
+          title: Text('Update Stock Request: ${item.name}'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Current Available: ${item.quantityAvailable}',
+                  style: const TextStyle(fontSize: 13, color: Colors.black54),
                 ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.primaryMaroon,
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: quantityController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Quantity to Add',
                   ),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    if (formKey.currentState?.validate() ?? false) {
-                      Navigator.of(context).pop(true);
+                  validator: (value) {
+                    final qty = int.tryParse(value ?? '');
+                    if (qty == null || qty <= 0) {
+                      return 'Enter a valid quantity';
                     }
+                    return null;
                   },
-                  style: ElevatedButton.styleFrom(
-                    foregroundColor: AppColors.primaryMaroon,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: noteController,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason (optional)',
                   ),
-                  child: const Text('Submit'),
+                  maxLines: 2,
                 ),
               ],
-            );
-          },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (formKey.currentState?.validate() ?? false) {
+                  Navigator.of(context).pop(true);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Submit'),
+            ),
+          ],
         );
       },
     );
 
     if (shouldSubmit != true) {
-      quantityController.dispose();
-      noteController.dispose();
-      return;
-    }
-
-    final blockedByCompletion = await _isStockRequestBlockedByCompletion(
-      eventId: selectedEventId,
-    );
-    if (blockedByCompletion) {
-      _showSnack(
-        'Completion already submitted (pending/approved) for this maintenance day. You cannot send stock request now.',
-      );
       quantityController.dispose();
       noteController.dispose();
       return;
@@ -1411,112 +1808,111 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   }
 
   Future<void> _openSingleStockRequestForm(InventoryItem item) async {
+    final latestClosed = await _isLatestMaintenanceEventClosed();
+    if (latestClosed) {
+      _showSnack('Maintenance event is closed.');
+      return;
+    }
+
     final formKey = GlobalKey<FormState>();
     final noteController = TextEditingController();
-    final eventOptions = _events.where((event) => event.isActiveStatus).toList()
-      ..sort((a, b) {
-        final left = DateTime.tryParse(a.eventDate);
-        final right = DateTime.tryParse(b.eventDate);
-        if (left == null && right == null) return 0;
-        if (left == null) return 1;
-        if (right == null) return -1;
-        return right.compareTo(left);
-      });
 
-    int? selectedEventId;
-    if (eventOptions.length == 1) {
-      selectedEventId = eventOptions.first.id;
-    }
+    // Auto-select the latest active maintenance event, if any.
+    final int? selectedEventId = latestActiveMaintenanceEventId(_events);
+    final MaintenanceEvent? selectedEvent = selectedEventId == null
+        ? null
+        : _events.where((event) => event.id == selectedEventId).firstOrNull;
+    final selectedMaintenance = selectedEvent == null
+        ? null
+        : _currentUserMaintenanceForEvent(selectedEvent);
 
     final shouldSubmit = await showDialog<bool>(
       context: context,
       builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setLocalState) {
-            return AlertDialog(
-              title: Text('Request Stock: ${item.name}'),
-              content: Form(
-                key: formKey,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Current Available: ${item.quantityAvailable}',
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Colors.black54,
-                      ),
+        return AlertDialog(
+          title: Text('Request Stock: ${item.name}'),
+          content: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Current Available: ${item.quantityAvailable}',
+                  style: const TextStyle(fontSize: 13, color: Colors.black54),
+                ),
+                if (selectedEvent != null) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
                     ),
-                    const SizedBox(height: 12),
-                    if (eventOptions.isNotEmpty) ...[
-                      DropdownButtonFormField<int?>(
-                        isExpanded: true,
-                        initialValue: selectedEventId,
-                        decoration: const InputDecoration(
-                          labelText: 'Maintenance Event (optional)',
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryMaroon.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.event,
+                          size: 14,
+                          color: AppColors.primaryMaroon,
                         ),
-                        items: [
-                          const DropdownMenuItem<int?>(
-                            value: null,
-                            child: Text('No Event Link'),
-                          ),
-                          ...eventOptions.map(
-                            (event) => DropdownMenuItem<int?>(
-                              value: event.id,
-                              child: Text(
-                                '${event.title} (${event.eventDate})',
-                              ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '${selectedEvent.title} (${selectedEvent.eventDate})',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: AppColors.primaryMaroon,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
-                        ],
-                        onChanged: (value) {
-                          setLocalState(() {
-                            selectedEventId = value;
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    TextFormField(
-                      initialValue: '1',
-                      enabled: false,
-                      decoration: const InputDecoration(
-                        labelText: 'Requested Quantity',
-                      ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: noteController,
-                      decoration: const InputDecoration(
-                        labelText: 'Reason (optional)',
-                      ),
-                      maxLines: 2,
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
-                  style: TextButton.styleFrom(
-                    foregroundColor: AppColors.primaryMaroon,
                   ),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    if (formKey.currentState?.validate() ?? false) {
-                      Navigator.of(context).pop(true);
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    foregroundColor: AppColors.primaryMaroon,
+                ],
+                const SizedBox(height: 12),
+                TextFormField(
+                  initialValue: '1',
+                  enabled: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Requested Quantity',
                   ),
-                  child: const Text('Request'),
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: noteController,
+                  decoration: const InputDecoration(
+                    labelText: 'Reason (optional)',
+                  ),
+                  maxLines: 2,
                 ),
               ],
-            );
-          },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (formKey.currentState?.validate() ?? false) {
+                  Navigator.of(context).pop(true);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Request'),
+            ),
+          ],
         );
       },
     );
@@ -1543,6 +1939,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           inventoryItemId: item.id,
           requestedQuantity: 1,
           note: noteController.text.trim(),
+          maintenanceId: selectedMaintenance?.maintenanceId,
           eventId: selectedEventId,
         ),
       );
@@ -1555,6 +1952,26 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       _showSnack(e.toString());
     } finally {
       noteController.dispose();
+    }
+  }
+
+  Future<bool> _isLatestMaintenanceEventClosed() async {
+    try {
+      final events = await _withApiLoader(
+        MaintenanceService.fetchMaintenanceEvents,
+      );
+      final latestEventId = latestMaintenanceEventId(events);
+      if (latestEventId == null) {
+        return false;
+      }
+
+      final latestEvent = events
+          .where((event) => event.id == latestEventId)
+          .firstOrNull;
+      return latestEvent?.isClosedStatus ?? false;
+    } catch (_) {
+      // If status cannot be determined, do not hard-block locally.
+      return false;
     }
   }
 
@@ -1625,6 +2042,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final formKey = GlobalKey<FormState>();
     final titleController = TextEditingController();
     final descriptionController = TextEditingController();
+    String? successMessage;
     List<Map<String, dynamic>> availableGats = <Map<String, dynamic>>[];
     int? selectedGatId;
     var isSubmitting = false;
@@ -1816,11 +2234,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                                     : null,
                               ),
                             );
-                            _showSnack(
-                              response['message']?.toString() ??
-                                  'Maintenance event created successfully.',
-                            );
-                            await _loadEvents();
+                            successMessage =
+                                response['message']?.toString() ??
+                                'Maintenance event created successfully.';
                             if (context.mounted) {
                               Navigator.of(context).pop(true);
                             }
@@ -1858,6 +2274,10 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
 
     try {
+      if (successMessage != null && successMessage!.isNotEmpty) {
+        _showSnack(successMessage!);
+      }
+      await _loadEvents();
       return true;
     } finally {
       titleController.dispose();
@@ -1865,10 +2285,73 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
   }
 
-  Future<void> _openCompletionRequestForm(MaintenanceEvent event) async {
-    if (event.isClosedForUserAction) {
+  Future<void> _closeMaintenanceEvent(MaintenanceEvent event) async {
+    if (!widget.canCreateMaintenanceEvents) {
+      _showSnack('You are not allowed to close maintenance events.');
+      return;
+    }
+
+    if (event.isClosedStatus) {
+      _showSnack('Maintenance event is already closed.');
+      return;
+    }
+
+    final shouldClose = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Close Maintenance Event'),
+          content: const Text(
+            'Are you sure you want to close this maintenance event?\n\nThis will stop all new maintenance activities for this event.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              style: ElevatedButton.styleFrom(
+                foregroundColor: AppColors.primaryMaroon,
+              ),
+              child: const Text('Close Maintenance Event'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldClose != true) return;
+
+    try {
+      final response = await _withApiLoader(
+        () => MaintenanceService.closeMaintenanceEvent(eventId: event.id),
+      );
       _showSnack(
-        'This maintenance day is closed. Completion can only be handled automatically for the current day.',
+        response['message']?.toString() ?? 'Maintenance event closed.',
+      );
+      await Future.wait<void>([
+        _loadEvents(),
+        _loadCompletionRequests(),
+        _loadInstrumentMaintenanceData(),
+      ]);
+    } catch (e) {
+      _showSnack(e.toString());
+    }
+  }
+
+  Future<void> _openCompletionRequestForm(MaintenanceEvent event) async {
+    if (event.isClosedStatus) {
+      _showSnack('Maintenance event is closed.');
+      return;
+    }
+
+    if (!isLatestActiveMaintenanceEvent(event, _events)) {
+      _showSnack(
+        'This maintenance day is closed. It stays open until a newer maintenance day is created.',
       );
       return;
     }
@@ -1905,23 +2388,16 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       return;
     }
 
-    final userScopedStockRequests = _requests
-        .where(_isInventoryRequestOwnedByCurrentUser)
-        .toList();
+    final selectedMaintenance = _currentUserMaintenanceForEvent(event);
+    final selectedMaintenanceId = selectedMaintenance?.maintenanceId ?? 0;
 
-    final hasPendingStockRequest = userScopedStockRequests.any(
-      _isPendingInventoryRequest,
-    );
-    if (hasPendingStockRequest) {
-      _showSnack(
-        'You have pending stock approval request(s). Submit maintenance completion only after stock approval.',
-      );
-      return;
-    }
+    final maintenanceScopedStockRequests = _requests;
 
-    final eventScopedApprovedRequests = userScopedStockRequests.where((
-      request,
-    ) {
+    final eventScopedRequests = maintenanceScopedStockRequests.where((request) {
+      if (request.maintenanceId != null && selectedMaintenanceId > 0) {
+        return request.maintenanceId == selectedMaintenanceId;
+      }
+
       if (request.maintenanceEventId != null) {
         return request.maintenanceEventId == event.id;
       }
@@ -1935,9 +2411,22 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       return false;
     }).toList();
 
+    final hasPendingStockRequest = selectedMaintenanceId > 0
+        ? _hasPendingStockRequestForMaintenance(
+            selectedMaintenanceId,
+            eventScopedRequests,
+          )
+        : eventScopedRequests.any(_isPendingInventoryRequest);
+    if (hasPendingStockRequest) {
+      _showSnack(
+        'Some stock requests are still pending approval. Please wait for approval or rejection before submitting maintenance.',
+      );
+      return;
+    }
+
     // Stock usage is optional. If the user has approved stock requests for this
     // maintenance day, include only those as used_items.
-    final approvedRequests = eventScopedApprovedRequests
+    final approvedRequests = eventScopedRequests
         .where((req) => req.normalizedStatus == 'approved')
         .toList();
 
@@ -1956,6 +2445,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     try {
       final response = await _withApiLoader(
         () => MaintenanceService.createCompletionRequest(
+          maintenanceId: selectedMaintenanceId,
           eventId: event.id,
           workNotes: submission.workNotes,
           usedItems: submission.usedItems,
@@ -2044,6 +2534,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         _loadCompletionRequests(),
         _loadInventory(),
         _loadEvents(),
+        _loadActiveInstrumentMaintenances(),
       ]);
     } catch (e) {
       _showSnack(e.toString());
@@ -2160,22 +2651,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     return normalizedCurrentName == normalizedSubmittedByName;
   }
 
-  bool _isInventoryRequestOwnedByCurrentUser(InventoryRequestItem item) {
-    final currentUserId = widget.currentUserId;
-    if (currentUserId != null && item.requestedBy == currentUserId) {
-      return true;
-    }
-
-    final normalizedCurrentName =
-        widget.currentUserName?.trim().toLowerCase() ?? '';
-    final normalizedRequestedByName = item.requestedByName.trim().toLowerCase();
-    if (normalizedCurrentName.isEmpty || normalizedRequestedByName.isEmpty) {
-      return false;
-    }
-
-    return normalizedCurrentName == normalizedRequestedByName;
-  }
-
   bool _isPendingInventoryRequest(InventoryRequestItem item) {
     final normalizedStatus = item.normalizedStatus.trim().toLowerCase();
     if (normalizedStatus == 'pending' ||
@@ -2188,6 +2663,22 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     return rawStatus == 'pending' ||
         rawStatus.startsWith('pending') ||
         rawStatus.contains('pending');
+  }
+
+  bool _hasPendingStockRequestForMaintenance(
+    int maintenanceId,
+    Iterable<InventoryRequestItem> requests,
+  ) {
+    if (maintenanceId <= 0) {
+      return false;
+    }
+
+    return requests.any((request) {
+      if (request.maintenanceId != maintenanceId) {
+        return false;
+      }
+      return _isPendingInventoryRequest(request);
+    });
   }
 
   Future<bool> _isStockRequestBlockedByCompletion({int? eventId}) async {
@@ -2222,11 +2713,37 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     return requests.where(_isCompletionRequestOwnedByCurrentUser).toList();
   }
 
+  bool _isInventoryRequestOwnedByCurrentUser(InventoryRequestItem item) {
+    final currentUserId = widget.currentUserId;
+    if (currentUserId != null && item.requestedBy == currentUserId) {
+      return true;
+    }
+
+    final normalizedCurrentName =
+        widget.currentUserName?.trim().toLowerCase() ?? '';
+    final normalizedRequestedByName = item.requestedByName.trim().toLowerCase();
+    if (normalizedCurrentName.isEmpty || normalizedRequestedByName.isEmpty) {
+      return false;
+    }
+
+    return normalizedCurrentName == normalizedRequestedByName;
+  }
+
   bool get _hasBlockingCompletionForCurrentUser {
+    // Only block stock requests when there is a currently active maintenance
+    // event. Outside of maintenance days there should be no restriction.
+    final activeEventIds = _events
+        .where((e) => e.isActiveStatus)
+        .map((e) => e.id)
+        .toSet();
+
+    if (activeEventIds.isEmpty) return false;
+
     final userCompletionRequests = _filterCompletionsForCurrentUser(
       _completionRequests,
     );
     return userCompletionRequests.any((request) {
+      if (!activeEventIds.contains(request.event)) return false;
       final status = request.status.trim().toLowerCase();
       return status == 'pending' || status == 'approved';
     });
@@ -2314,10 +2831,17 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
   }
 
-  void _showSnack(String message) {
+  Future<void> _showSnack(String message) async {
     if (!mounted) return;
 
-    final normalized = message.toLowerCase();
+    final trimmed = message.replaceFirst('Exception: ', '').trim();
+    final closedNormalized = trimmed.toLowerCase();
+    final displayMessage =
+        closedNormalized.contains('maintenance event is closed')
+        ? 'Maintenance event is closed.'
+        : trimmed;
+
+    final normalized = displayMessage.toLowerCase();
     final isMaintenanceAnalysisAccessMessage =
         normalized.contains('maintenance analysis') &&
         normalized.contains('pathak admin') &&
@@ -2336,11 +2860,34 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       }
     }
 
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    if (messenger == null) return;
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Message'),
+        content: Text(displayMessage),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _normalizeStartMaintenanceErrorMessage(String rawMessage) {
+    final trimmed = rawMessage.replaceFirst('Exception: ', '').trim();
+    final normalized = trimmed.toLowerCase();
+    if (normalized.contains('maintenance event is closed')) {
+      return 'Maintenance event is closed.';
+    }
+    if (normalized.contains('no active maintenance event found')) {
+      return 'No active maintenance event available.';
+    }
+    if (normalized.contains('maintenance event is not active')) {
+      return 'Maintenance event is no longer active.';
+    }
+    return trimmed;
   }
 
   Future<T> _withApiLoader<T>(Future<T> Function() action) async {
@@ -2369,8 +2916,140 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         return Colors.green.shade700;
       case 'rejected':
         return Colors.red.shade700;
+      case 'closed':
+        return Colors.blueGrey.shade700;
       default:
         return Colors.orange.shade700;
+    }
+  }
+
+  String _normalizeDholStatus(String value) {
+    return value.trim().toLowerCase().replaceAll('-', '_').replaceAll(' ', '_');
+  }
+
+  String _dholStatusLabel(String value) {
+    switch (_normalizeDholStatus(value)) {
+      case 'good_condition':
+        return 'Good Condition';
+      case 'under_maintenance':
+        return 'Under Maintenance';
+      case 'damaged':
+      default:
+        return 'Damaged';
+    }
+  }
+
+  Future<void> _createDholRange() async {
+    final startText = _dholRangeStartController.text.trim();
+    final endText = _dholRangeEndController.text.trim();
+    final startNumber = int.tryParse(startText);
+    final endNumber = int.tryParse(endText);
+
+    if (startNumber == null || endNumber == null) {
+      await _showSnack('Start Number and End Number must be valid numbers.');
+      return;
+    }
+    if (startNumber <= 0 || endNumber <= 0) {
+      await _showSnack('Start Number and End Number must be greater than 0.');
+      return;
+    }
+    if (startNumber > endNumber) {
+      await _showSnack(
+        'Start Number must be less than or equal to End Number.',
+      );
+      return;
+    }
+
+    setState(() {
+      _isCreatingDholRange = true;
+    });
+
+    try {
+      final response = await _withApiLoader(
+        () => MaintenanceService.createDholRange(
+          startNumber: startNumber,
+          endNumber: endNumber,
+        ),
+      );
+
+      if (!mounted) return;
+      _dholRangeStartController.clear();
+      _dholRangeEndController.clear();
+      await _showSnack(
+        response['message']?.toString() ?? 'Dhol range created successfully.',
+      );
+      await _loadPathakDhols();
+    } catch (e) {
+      await _showSnack(e.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCreatingDholRange = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _confirmAndUpdateDholStatus(
+    PathakDhol item,
+    String nextStatus,
+  ) async {
+    final normalizedNext = _normalizeDholStatus(nextStatus);
+    if (item.normalizedStatus == normalizedNext) {
+      return;
+    }
+
+    final shouldProceed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Confirm Status Change'),
+        content: Text(
+          'Change Dhol #${item.dholNumber} status to ${_dholStatusLabel(normalizedNext)}?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: ElevatedButton.styleFrom(
+              foregroundColor: AppColors.primaryMaroon,
+            ),
+            child: const Text('Confirm'),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldProceed != true) {
+      return;
+    }
+
+    setState(() {
+      _updatingDholStatusIds.add(item.id);
+    });
+
+    try {
+      final response = await _withApiLoader(
+        () => MaintenanceService.updatePathakDholStatus(
+          dholId: item.id,
+          status: normalizedNext,
+        ),
+      );
+      if (!mounted) return;
+      await _showSnack(
+        response['message']?.toString() ?? 'Dhol status updated successfully.',
+      );
+      await _loadPathakDhols();
+    } catch (e) {
+      await _showSnack(e.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingDholStatusIds.remove(item.id);
+        });
+      }
     }
   }
 
@@ -2407,10 +3086,1704 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     );
   }
 
+  Widget _buildDholRangeManagementTab() {
+    return RefreshIndicator(
+      onRefresh: _loadPathakDhols,
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Dhol Range Management',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Define a start and end number to generate pathak dhol records.',
+                    style: TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 12),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final useRow = constraints.maxWidth >= 640;
+                      if (useRow) {
+                        return Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _dholRangeStartController,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                  labelText: 'Start Number',
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: TextField(
+                                controller: _dholRangeEndController,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                  labelText: 'End Number',
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      }
+
+                      return Column(
+                        children: [
+                          TextField(
+                            controller: _dholRangeStartController,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Start Number',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          TextField(
+                            controller: _dholRangeEndController,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'End Number',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: ElevatedButton.icon(
+                      onPressed: _isCreatingDholRange ? null : _createDholRange,
+                      style: ElevatedButton.styleFrom(
+                        foregroundColor: AppColors.primaryMaroon,
+                      ),
+                      icon: _isCreatingDholRange
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.add_circle_outline),
+                      label: const Text('Create Dhol Range'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: ListTile(
+              title: const Text('Current Dhol Count'),
+              subtitle: Text(
+                '${_pathakDhols.length} dhol records available',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              trailing: IconButton(
+                tooltip: 'Refresh dhol list',
+                onPressed: _loadPathakDhols,
+                icon: const Icon(Icons.refresh),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDholStatusManagementTab() {
+    final searchQuery = _dholSearchController.text.trim().toLowerCase();
+    final filtered =
+        _pathakDhols.where((item) {
+          final matchesSearch = searchQuery.isEmpty
+              ? true
+              : item.dholNumber.toLowerCase().contains(searchQuery);
+          final matchesStatus = _dholStatusFilter == 'all'
+              ? true
+              : item.normalizedStatus == _dholStatusFilter;
+          return matchesSearch && matchesStatus;
+        }).toList()..sort((a, b) {
+          final left = int.tryParse(a.dholNumber);
+          final right = int.tryParse(b.dholNumber);
+          if (left != null && right != null) {
+            return left.compareTo(right);
+          }
+          return a.dholNumber.compareTo(b.dholNumber);
+        });
+
+    return RefreshIndicator(
+      onRefresh: _loadPathakDhols,
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                children: [
+                  TextField(
+                    controller: _dholSearchController,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      hintText: 'Search by Dhol Number',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: _dholSearchController.text.trim().isEmpty
+                          ? null
+                          : IconButton(
+                              onPressed: () {
+                                _dholSearchController.clear();
+                                setState(() {});
+                              },
+                              icon: const Icon(Icons.clear),
+                            ),
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    initialValue: _dholStatusFilter,
+                    decoration: const InputDecoration(
+                      labelText: 'Filter by Status',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: [
+                      const DropdownMenuItem(value: 'all', child: Text('All')),
+                      ..._dholStatusValues.map(
+                        (status) => DropdownMenuItem(
+                          value: status,
+                          child: Text(_dholStatusLabel(status)),
+                        ),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _dholStatusFilter = value;
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (filtered.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 40),
+              child: Center(
+                child: Text('No dhol records found for this filter.'),
+              ),
+            )
+          else
+            ...filtered.map((item) {
+              final isUpdating = _updatingDholStatusIds.contains(item.id);
+              return Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final isWide = constraints.maxWidth >= 760;
+
+                      final detail = Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Dhol #${item.dholNumber}',
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Current Status: ${_dholStatusLabel(item.normalizedStatus)}',
+                            style: const TextStyle(color: Colors.black54),
+                          ),
+                        ],
+                      );
+
+                      final actions = Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _dholStatusValues.map((status) {
+                          final isCurrent = item.normalizedStatus == status;
+                          return OutlinedButton(
+                            onPressed: isCurrent || isUpdating
+                                ? null
+                                : () =>
+                                      _confirmAndUpdateDholStatus(item, status),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.primaryMaroon,
+                            ),
+                            child: Text(
+                              isCurrent
+                                  ? '${_dholStatusLabel(status)} (Current)'
+                                  : _dholStatusLabel(status),
+                            ),
+                          );
+                        }).toList(),
+                      );
+
+                      if (isWide) {
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(flex: 3, child: detail),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              flex: 5,
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: actions,
+                              ),
+                            ),
+                            if (isUpdating)
+                              const Padding(
+                                padding: EdgeInsets.only(left: 8, top: 2),
+                                child: SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        );
+                      }
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [detail, const SizedBox(height: 10), actions],
+                      );
+                    },
+                  ),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
+  String _instrumentMaintenanceStatusLabel(String status) {
+    switch (status
+        .trim()
+        .toLowerCase()
+        .replaceAll('-', '_')
+        .replaceAll(' ', '_')) {
+      case 'pending_approval':
+      case 'pending':
+      case 'submitted':
+        return 'Pending Approval';
+      case 'under_maintenance':
+        return 'Under Maintenance';
+      case 'in_progress':
+        return 'In Progress';
+      case 'approved':
+        return 'Approved';
+      case 'rejected':
+        return 'Rejected';
+      case 'active':
+      case 'started':
+      default:
+        return 'Active';
+    }
+  }
+
+  int _completionRequestTimestamp(MaintenanceCompletionRequest request) {
+    final updated = DateTime.tryParse(request.updatedAt);
+    if (updated != null) {
+      return updated.millisecondsSinceEpoch;
+    }
+
+    final created = DateTime.tryParse(request.createdAt);
+    if (created != null) {
+      return created.millisecondsSinceEpoch;
+    }
+
+    return request.id;
+  }
+
+  bool _isCompletionForInstrumentMaintenance(
+    MaintenanceCompletionRequest request,
+    PathakInstrumentMaintenance maintenance,
+  ) {
+    final requestMaintenanceId = request.maintenanceId;
+    if (requestMaintenanceId != null && requestMaintenanceId > 0) {
+      return requestMaintenanceId == maintenance.maintenanceId;
+    }
+
+    return false;
+  }
+
+  PathakInstrumentMaintenance? _currentUserMaintenanceForEvent(
+    MaintenanceEvent event,
+  ) {
+    final eventDay = event.parsedEventDate;
+    final matches = _activeInstrumentMaintenances.where((maintenance) {
+      if (!_isInstrumentMaintenanceParticipant(maintenance)) {
+        return false;
+      }
+
+      if (maintenance.maintenanceEventId != null) {
+        return maintenance.maintenanceEventId == event.id;
+      }
+
+      if (maintenance.linkedEventDay != null && eventDay != null) {
+        return maintenance.linkedEventDay == eventDay;
+      }
+
+      return false;
+    }).toList();
+
+    if (matches.isEmpty) {
+      return null;
+    }
+
+    matches.sort((left, right) {
+      final leftStarted = DateTime.tryParse(left.startedAt);
+      final rightStarted = DateTime.tryParse(right.startedAt);
+      if (leftStarted == null && rightStarted == null) {
+        return right.maintenanceId.compareTo(left.maintenanceId);
+      }
+      if (leftStarted == null) return 1;
+      if (rightStarted == null) return -1;
+      return rightStarted.compareTo(leftStarted);
+    });
+
+    return matches.first;
+  }
+
+  String _effectiveInstrumentMaintenanceStatus(
+    PathakInstrumentMaintenance maintenance,
+  ) {
+    final matchingRequests =
+        _completionRequests
+            .where(
+              (request) =>
+                  _isCompletionForInstrumentMaintenance(request, maintenance),
+            )
+            .toList()
+          ..sort(
+            (left, right) => _completionRequestTimestamp(
+              right,
+            ).compareTo(_completionRequestTimestamp(left)),
+          );
+
+    if (matchingRequests.isEmpty) {
+      return maintenance.normalizedStatus;
+    }
+
+    final completionStatus = matchingRequests.first.normalizedStatus;
+    if (completionStatus == 'pending') {
+      return 'pending_approval';
+    }
+
+    if (completionStatus == 'approved' || completionStatus == 'rejected') {
+      return completionStatus;
+    }
+
+    return maintenance.normalizedStatus;
+  }
+
+  bool _isInstrumentMaintenanceParticipant(PathakInstrumentMaintenance item) {
+    final currentUserId = widget.currentUserId;
+    if (currentUserId != null &&
+        item.participants.any(
+          (participant) => participant.userId == currentUserId,
+        )) {
+      return true;
+    }
+
+    final normalizedCurrentName =
+        widget.currentUserName?.trim().toLowerCase() ?? '';
+    if (normalizedCurrentName.isEmpty) {
+      return false;
+    }
+
+    return item.participants.any(
+      (participant) =>
+          participant.fullName.trim().toLowerCase() == normalizedCurrentName,
+    );
+  }
+
+  bool _canSubmitInstrumentMaintenanceItem(PathakInstrumentMaintenance item) {
+    final normalizedStatus = _effectiveInstrumentMaintenanceStatus(item);
+    return _isInstrumentMaintenanceParticipant(item) &&
+        !_hasPendingStockRequestForMaintenance(item.maintenanceId, _requests) &&
+        normalizedStatus != 'pending_approval' &&
+        normalizedStatus != 'pending' &&
+        normalizedStatus != 'submitted' &&
+        normalizedStatus != 'approved' &&
+        normalizedStatus != 'rejected';
+  }
+
+  bool _isCurrentUserMaintenancePartner(CheckedInMaintenancePartner partner) {
+    final currentUserId = widget.currentUserId;
+    if (currentUserId != null && partner.userId == currentUserId) {
+      return true;
+    }
+
+    final normalizedCurrentName =
+        widget.currentUserName?.trim().toLowerCase() ?? '';
+    if (normalizedCurrentName.isNotEmpty &&
+        partner.fullName.trim().toLowerCase() == normalizedCurrentName) {
+      return true;
+    }
+
+    return false;
+  }
+
+  String _completionParticipantDisplay(
+    InstrumentMaintenanceParticipant participant,
+  ) {
+    final name = participant.fullName.trim();
+    final phone = participant.phone.trim();
+
+    if (name.isNotEmpty && phone.isNotEmpty) {
+      return '$name ($phone)';
+    }
+    if (name.isNotEmpty) {
+      return name;
+    }
+    return phone;
+  }
+
+  String _completionParticipantsText(
+    List<InstrumentMaintenanceParticipant> participants,
+  ) {
+    return participants
+        .map(_completionParticipantDisplay)
+        .where((value) => value.isNotEmpty)
+        .join(', ');
+  }
+
+  bool _matchesCompletionEvent(
+    InventoryRequestItem request,
+    MaintenanceCompletionRequest completion,
+  ) {
+    final requestMaintenanceId = request.maintenanceId;
+    final completionMaintenanceId = completion.maintenanceId;
+    if (requestMaintenanceId == null || completionMaintenanceId == null) {
+      return false;
+    }
+
+    return requestMaintenanceId == completionMaintenanceId;
+  }
+
+  List<CompletionUsedItem> _resolvedCompletionUsedItems(
+    MaintenanceCompletionRequest completion,
+  ) {
+    if (completion.approvedStockUsed.isNotEmpty) {
+      return completion.approvedStockUsed;
+    }
+
+    if (completion.usedItems.isNotEmpty) {
+      return completion.usedItems;
+    }
+
+    final approvedRequests = _requests.where((request) {
+      final status = request.normalizedStatus.trim().toLowerCase();
+      if (status != 'approved') {
+        return false;
+      }
+
+      return _matchesCompletionEvent(request, completion);
+    }).toList();
+
+    if (approvedRequests.isEmpty) {
+      return <CompletionUsedItem>[];
+    }
+
+    final usedItemByInventoryId = <int, CompletionUsedItem>{};
+    for (final request in approvedRequests) {
+      final existing = usedItemByInventoryId[request.inventoryItem];
+      if (existing == null) {
+        usedItemByInventoryId[request.inventoryItem] = CompletionUsedItem(
+          id: request.id,
+          inventoryItem: request.inventoryItem,
+          inventoryItemName: request.inventoryItemName,
+          quantityUsed: request.requestedQuantity,
+          requestedByName: request.requestedByName,
+          status: 'approved',
+          quantityBeforeUpdate: null,
+          quantityAfterUpdate: null,
+        );
+        continue;
+      }
+
+      usedItemByInventoryId[request.inventoryItem] = CompletionUsedItem(
+        id: existing.id,
+        inventoryItem: existing.inventoryItem,
+        inventoryItemName: existing.inventoryItemName,
+        quantityUsed: existing.quantityUsed + request.requestedQuantity,
+        requestedByName: existing.requestedByName,
+        status: 'approved',
+        quantityBeforeUpdate: existing.quantityBeforeUpdate,
+        quantityAfterUpdate: existing.quantityAfterUpdate,
+      );
+    }
+
+    return usedItemByInventoryId.values.toList();
+  }
+
+  Future<Set<int>?> _openMaintenancePartnerSelector({
+    required BuildContext parentContext,
+    required Set<int> selectedIds,
+  }) async {
+    if (!parentContext.mounted) {
+      return null;
+    }
+
+    final partners =
+        List<CheckedInMaintenancePartner>.from(_eligibleMaintenancePartners)
+          ..removeWhere(_isCurrentUserMaintenancePartner)
+          ..sort(
+            (a, b) =>
+                a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase()),
+          );
+    final searchController = TextEditingController();
+
+    if (kIsWeb) {
+      final route = ModalRoute.of(parentContext);
+      if (route != null && !route.isCurrent) {
+        searchController.dispose();
+        return null;
+      }
+    }
+
+    final selected = await showDialog<Set<int>>(
+      context: parentContext,
+      useRootNavigator: false,
+      builder: (dialogContext) {
+        final working = Set<int>.from(selectedIds);
+        var searchQuery = '';
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final filteredPartners = partners.where((partner) {
+              final query = searchQuery.trim().toLowerCase();
+              if (query.isEmpty) return true;
+              final name = partner.fullName.toLowerCase();
+              return name.contains(query);
+            }).toList();
+
+            return AlertDialog(
+              title: const Text('Select Partners'),
+              content: SizedBox(
+                width: 560,
+                height: 520,
+                child: Column(
+                  mainAxisSize: MainAxisSize.max,
+                  children: [
+                    TextField(
+                      controller: searchController,
+                      decoration: const InputDecoration(
+                        labelText: 'Search by name',
+                        prefixIcon: Icon(Icons.search),
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (value) {
+                        setDialogState(() {
+                          searchQuery = value;
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    Flexible(
+                      child: filteredPartners.isEmpty
+                          ? const Center(
+                              child: Text('No eligible partners found.'),
+                            )
+                          : Scrollbar(
+                              child: ListView.builder(
+                                itemCount: filteredPartners.length,
+                                itemBuilder: (context, index) {
+                                  final partner = filteredPartners[index];
+                                  final isSelected = working.contains(
+                                    partner.userId,
+                                  );
+                                  final instrument = partner.instrument.trim();
+                                  return CheckboxListTile(
+                                    value: isSelected,
+                                    controlAffinity:
+                                        ListTileControlAffinity.leading,
+                                    title: Text(partner.fullName),
+                                    subtitle: instrument.isNotEmpty
+                                        ? Text(instrument)
+                                        : null,
+                                    onChanged: (value) {
+                                      setDialogState(() {
+                                        if (value == true) {
+                                          working.add(partner.userId);
+                                        } else {
+                                          working.remove(partner.userId);
+                                        }
+                                      });
+                                    },
+                                  );
+                                },
+                              ),
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(working),
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  child: const Text('Apply'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    searchController.dispose();
+    return selected;
+  }
+
+  Future<void> _openStartInstrumentMaintenanceDialog() async {
+    final latestClosed = await _isLatestMaintenanceEventClosed();
+    if (latestClosed) {
+      await _showSnack('Maintenance event is closed.');
+      return;
+    }
+
+    if (_damagedMaintenanceDhols.isEmpty) {
+      await _loadDamagedMaintenanceDhols();
+    }
+    if (_eligibleMaintenancePartners.isEmpty) {
+      await _loadEligibleMaintenancePartners();
+    }
+    if (!mounted) return;
+
+    int? selectedDholId;
+    final selectedPartnerIds = <int>{};
+    String? successMessage;
+    final visiblePartners = _eligibleMaintenancePartners
+        .where((partner) => !_isCurrentUserMaintenancePartner(partner))
+        .toList();
+    final visiblePartnerIds = visiblePartners
+        .map((partner) => partner.userId)
+        .toSet();
+
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        var isSubmitting = false;
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Start Maintenance'),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: 520,
+                  maxHeight: 520,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      DropdownButtonFormField<int>(
+                        initialValue: selectedDholId,
+                        decoration: const InputDecoration(
+                          labelText: 'Dhol Number',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: _damagedMaintenanceDhols
+                            .map(
+                              (item) => DropdownMenuItem<int>(
+                                value: item.id,
+                                child: Text('Dhol #${item.dholNumber}'),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          setDialogState(() {
+                            selectedDholId = value;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Partners (Optional)',
+                          border: OutlineInputBorder(),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              selectedPartnerIds.isEmpty
+                                  ? 'No partners selected'
+                                  : '${selectedPartnerIds.length} partner(s) selected',
+                              style: const TextStyle(color: Colors.black54),
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: visiblePartners
+                                  .where(
+                                    (partner) => selectedPartnerIds.contains(
+                                      partner.userId,
+                                    ),
+                                  )
+                                  .map(
+                                    (partner) =>
+                                        Chip(label: Text(partner.fullName)),
+                                  )
+                                  .toList(),
+                            ),
+                            const SizedBox(height: 8),
+                            OutlinedButton.icon(
+                              onPressed: () async {
+                                if (!dialogContext.mounted) return;
+                                final selected =
+                                    await _openMaintenancePartnerSelector(
+                                      parentContext: dialogContext,
+                                      selectedIds: selectedPartnerIds,
+                                    );
+                                if (selected == null ||
+                                    !dialogContext.mounted) {
+                                  return;
+                                }
+                                setDialogState(() {
+                                  selectedPartnerIds
+                                    ..clear()
+                                    ..addAll(
+                                      selected.where(
+                                        (id) => visiblePartnerIds.contains(id),
+                                      ),
+                                    );
+                                });
+                              },
+                              icon: const Icon(Icons.group_add_outlined),
+                              label: const Text('Select Partners'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          if (selectedDholId == null) {
+                            await _showSnack('Dhol Number is required.');
+                            return;
+                          }
+
+                          setDialogState(() {
+                            isSubmitting = true;
+                          });
+
+                          try {
+                            final response = await _withApiLoader(
+                              () =>
+                                  MaintenanceService.startInstrumentMaintenance(
+                                    instrumentId: selectedDholId!,
+                                    participantUserIds: selectedPartnerIds
+                                        .where(
+                                          (id) =>
+                                              visiblePartnerIds.contains(id),
+                                        )
+                                        .toList(),
+                                  ),
+                            );
+                            successMessage =
+                                response['message']?.toString() ??
+                                'Maintenance started.';
+                            if (dialogContext.mounted) {
+                              Navigator.of(dialogContext).pop(true);
+                            }
+                          } catch (e) {
+                            if (dialogContext.mounted) {
+                              setDialogState(() {
+                                isSubmitting = false;
+                              });
+                            }
+                            await _showSnack(
+                              _normalizeStartMaintenanceErrorMessage(
+                                e.toString(),
+                              ),
+                            );
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  child: const Text('Start Maintenance'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (created == true) {
+      await _showSnack(successMessage ?? 'Maintenance started.');
+      await _loadInstrumentMaintenanceData();
+    }
+  }
+
+  Future<void> _openSubmitInstrumentMaintenanceDialog(
+    PathakInstrumentMaintenance item,
+  ) async {
+    final latestClosed = await _isLatestMaintenanceEventClosed();
+    if (latestClosed) {
+      await _showSnack('Maintenance event is closed.');
+      return;
+    }
+
+    final detail = await _withApiLoader(
+      () => MaintenanceService.fetchInstrumentMaintenanceDetail(item.id),
+    );
+    if (!mounted) return;
+
+    List<InventoryItem> dialogInventory = List<InventoryItem>.from(_inventory);
+    List<InventoryRequestItem> allRequests = List<InventoryRequestItem>.from(
+      _requests,
+    );
+
+    if (dialogInventory.isEmpty) {
+      try {
+        dialogInventory = await _withApiLoader(
+          MaintenanceService.fetchInventory,
+        );
+      } catch (_) {
+        dialogInventory = <InventoryItem>[];
+      }
+    }
+
+    if (allRequests.isEmpty) {
+      try {
+        allRequests = await _withApiLoader(
+          MaintenanceService.fetchInventoryRequests,
+        );
+      } catch (_) {
+        allRequests = <InventoryRequestItem>[];
+      }
+    }
+
+    final hasPendingStockRequest = _hasPendingStockRequestForMaintenance(
+      detail.maintenanceId,
+      allRequests,
+    );
+    if (hasPendingStockRequest) {
+      await _showSnack(
+        'Some stock requests are still pending approval. Please wait for approval or rejection before submitting maintenance.',
+      );
+      return;
+    }
+
+    final workPerformedController = TextEditingController(
+      text: detail.workPerformed,
+    );
+    final remarksController = TextEditingController(text: detail.remarks);
+    final participantsText = detail.participants
+        .map((participant) => participant.fullName.trim())
+        .where((name) => name.isNotEmpty)
+        .join(', ');
+    String? successMessage;
+
+    final submitted = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        var isSubmitting = false;
+        var canSubmit = workPerformedController.text.trim().isNotEmpty;
+        String? submitErrorMessage;
+
+        List<InventoryRequestItem> eventScopedMaintenanceStockRequests() {
+          final approvedOrPendingScoped = List<InventoryRequestItem>.from(
+            allRequests,
+          );
+          final explicitMaintenanceId = detail.maintenanceId;
+          final explicitEventId = detail.maintenanceEventId;
+          final explicitEventDay = detail.linkedEventDay;
+          if (explicitMaintenanceId == 0 &&
+              explicitEventId == null &&
+              explicitEventDay == null) {
+            return approvedOrPendingScoped;
+          }
+
+          return approvedOrPendingScoped.where((request) {
+            if (explicitMaintenanceId > 0 && request.maintenanceId != null) {
+              return request.maintenanceId == explicitMaintenanceId;
+            }
+
+            if (explicitEventId != null && request.maintenanceEventId != null) {
+              return request.maintenanceEventId == explicitEventId;
+            }
+
+            final linkedEventDay = request.linkedEventDay;
+            if (linkedEventDay != null && explicitEventDay != null) {
+              return linkedEventDay == explicitEventDay;
+            }
+
+            return false;
+          }).toList();
+        }
+
+        List<CompletionUsedItemPreview> stockUsedPreviews() {
+          if (detail.approvedStockUsed.isNotEmpty) {
+            return detail.approvedStockUsed
+                .map(
+                  (item) => CompletionUsedItemPreview(
+                    inventoryItemId: item.inventoryItem,
+                    inventoryItemName: item.inventoryItemName,
+                    quantityUsed: item.quantityUsed,
+                  ),
+                )
+                .toList();
+          }
+
+          final approvedRequests = eventScopedMaintenanceStockRequests()
+              .where((request) => request.normalizedStatus == 'approved')
+              .toList();
+          return buildCompletionUsedItems(approvedRequests);
+        }
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final autoStockUsedItems = stockUsedPreviews();
+
+            return AlertDialog(
+              title: Text('Submit Dhol #${detail.dholNumber} Maintenance'),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  maxWidth: 560,
+                  maxHeight: 620,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Dhol Number',
+                          border: OutlineInputBorder(),
+                        ),
+                        child: Text('Dhol #${detail.dholNumber}'),
+                      ),
+                      const SizedBox(height: 12),
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Participants',
+                          border: OutlineInputBorder(),
+                        ),
+                        child: Text(
+                          participantsText.isEmpty ? '-' : participantsText,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Maintenance Event',
+                          border: OutlineInputBorder(),
+                        ),
+                        child: Text(
+                          detail.maintenanceEventTitle.trim().isEmpty
+                              ? '-'
+                              : detail.maintenanceEventTitle,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Event Date',
+                          border: OutlineInputBorder(),
+                        ),
+                        child: Text(
+                          detail.maintenanceEventDate.trim().isEmpty
+                              ? '-'
+                              : detail.maintenanceEventDate,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: workPerformedController,
+                        minLines: 2,
+                        maxLines: 4,
+                        onChanged: (value) {
+                          if (!dialogContext.mounted) {
+                            return;
+                          }
+                          setDialogState(() {
+                            canSubmit = value.trim().isNotEmpty;
+                            submitErrorMessage = null;
+                          });
+                        },
+                        decoration: const InputDecoration(
+                          labelText: 'Work Performed',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: remarksController,
+                        minLines: 2,
+                        maxLines: 4,
+                        decoration: const InputDecoration(
+                          labelText: 'Remarks',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'Approved Stock Used',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      if (autoStockUsedItems.isEmpty)
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'No approved stock usage returned for this maintenance.',
+                            style: TextStyle(color: Colors.black54),
+                          ),
+                        )
+                      else
+                        ...autoStockUsedItems.map((usedItem) {
+                          final inventoryMatch = dialogInventory
+                              .where(
+                                (inv) => inv.id == usedItem.inventoryItemId,
+                              )
+                              .toList();
+                          final availableQty = inventoryMatch.isNotEmpty
+                              ? inventoryMatch.first.quantityAvailable
+                              : null;
+                          final itemName =
+                              usedItem.inventoryItemName.trim().isNotEmpty
+                              ? usedItem.inventoryItemName.trim()
+                              : 'Item #${usedItem.inventoryItemId}';
+
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.withValues(alpha: 0.05),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(color: Colors.black12),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        itemName,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        availableQty == null
+                                            ? 'Used ${usedItem.quantityUsed}'
+                                            : 'Used ${usedItem.quantityUsed} | Available $availableQty',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.black54,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      if (submitErrorMessage != null) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          submitErrorMessage!,
+                          style: TextStyle(
+                            color: Colors.red.shade700,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: (!canSubmit || isSubmitting)
+                      ? null
+                      : () async {
+                          setDialogState(() {
+                            isSubmitting = true;
+                            submitErrorMessage = null;
+                          });
+
+                          try {
+                            final response =
+                                await MaintenanceService.submitInstrumentMaintenance(
+                                  maintenanceId: detail.maintenanceId,
+                                  workPerformed: workPerformedController.text
+                                      .trim(),
+                                  remarks: remarksController.text.trim(),
+                                );
+                            _lastSubmittedCompletionRequestId = int.tryParse(
+                              response['completion_request_id']?.toString() ??
+                                  '',
+                            );
+                            successMessage =
+                                response['message']?.toString() ??
+                                'Maintenance submitted successfully.';
+                            if (dialogContext.mounted) {
+                              Navigator.of(dialogContext).pop(true);
+                            }
+                          } catch (e) {
+                            if (!dialogContext.mounted) {
+                              return;
+                            }
+                            setDialogState(() {
+                              isSubmitting = false;
+                              submitErrorMessage = e.toString().replaceFirst(
+                                'Exception: ',
+                                '',
+                              );
+                            });
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  child: const Text('Submit Maintenance'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    workPerformedController.dispose();
+    remarksController.dispose();
+
+    if (submitted == true) {
+      await _showSnack(successMessage ?? 'Maintenance submitted successfully.');
+      await Future.wait<void>([
+        _loadInstrumentMaintenanceData(),
+        _loadCompletionRequests(),
+      ]);
+      if (mounted && _lastSubmittedCompletionRequestId != null) {
+        _tabController.animateTo(_completionTabIndexForCurrentUser());
+      }
+    }
+  }
+
+  Future<void> _openInstrumentMaintenanceDetail(
+    PathakInstrumentMaintenance item, {
+    bool openSubmitOnStart = false,
+  }) async {
+    setState(() {
+      _loadingInstrumentMaintenanceDetailIds.add(item.id);
+    });
+
+    try {
+      final detail = await _withApiLoader(
+        () => MaintenanceService.fetchInstrumentMaintenanceDetail(item.id),
+      );
+      if (!mounted) return;
+      _instrumentMaintenanceDetails[item.id] = detail;
+
+      if (openSubmitOnStart && _canSubmitInstrumentMaintenanceItem(detail)) {
+        await _openSubmitInstrumentMaintenanceDialog(detail);
+        return;
+      }
+
+      final action = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) {
+          final detailStatus = _effectiveInstrumentMaintenanceStatus(detail);
+          final participantsText = detail.participants
+              .map((participant) => participant.fullName)
+              .where((name) => name.trim().isNotEmpty)
+              .join(', ');
+          final imageSection = (String title, List<String> images) => Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 4),
+              if (images.isEmpty)
+                const Text('-', style: TextStyle(color: Colors.black54))
+              else
+                ...images.map(
+                  (image) => Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      image,
+                      style: const TextStyle(color: Colors.black54),
+                    ),
+                  ),
+                ),
+            ],
+          );
+
+          return AlertDialog(
+            title: Text('Dhol #${detail.dholNumber} Maintenance'),
+            content: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560, maxHeight: 620),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Maintenance Event: ${detail.maintenanceEventTitle.trim().isEmpty ? '-' : detail.maintenanceEventTitle}',
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Event Date: ${detail.maintenanceEventDate.trim().isEmpty ? '-' : detail.maintenanceEventDate}',
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Status: ${_instrumentMaintenanceStatusLabel(detailStatus)}',
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Started By: ${detail.startedByName.isNotEmpty ? detail.startedByName : '-'}',
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Started At: ${detail.startedAt.isNotEmpty ? detail.startedAt : '-'}',
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Participants: ${participantsText.isEmpty ? '-' : participantsText}',
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Work Performed: ${detail.workPerformed.trim().isEmpty ? '-' : detail.workPerformed}',
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Remarks: ${detail.remarks.trim().isEmpty ? '-' : detail.remarks}',
+                    ),
+                    if (detail.approverNote.trim().isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text('Approver Note: ${detail.approverNote}'),
+                    ],
+                    if (detail.rejectionRemarks.trim().isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text('Rejection Remarks: ${detail.rejectionRemarks}'),
+                    ],
+                    const SizedBox(height: 12),
+                    imageSection('Before Images', detail.beforeImages),
+                    const SizedBox(height: 10),
+                    imageSection('After Images', detail.afterImages),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              if (_canSubmitInstrumentMaintenanceItem(detail))
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop('submit'),
+                  child: const Text('Submit Maintenance'),
+                ),
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (!mounted || action == null) return;
+      if (action == 'submit') {
+        await _openSubmitInstrumentMaintenanceDialog(detail);
+      }
+    } catch (e) {
+      await _showSnack(e.toString());
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loadingInstrumentMaintenanceDetailIds.remove(item.id);
+        });
+      }
+    }
+  }
+
+  Future<void> _openMarkDholAsDamagedDialog() async {
+    // Use the dedicated good-condition list (fetched via ?status=good_condition)
+    // so this works for non-admin checked-in users too.
+    final goodConditionDhols =
+        List<PathakDhol>.from(_goodConditionDhols)
+            .where((item) => !_todayMarkedDamagedDholIds.contains(item.id))
+            .toList()
+          ..sort((left, right) {
+            final leftNumber = int.tryParse(left.dholNumber);
+            final rightNumber = int.tryParse(right.dholNumber);
+            if (leftNumber != null && rightNumber != null) {
+              return leftNumber.compareTo(rightNumber);
+            }
+            return left.dholNumber.compareTo(right.dholNumber);
+          });
+
+    if (goodConditionDhols.isEmpty) {
+      await _showSnack('No good condition dhol is available.');
+      return;
+    }
+
+    int? selectedDholId;
+    final remarksController = TextEditingController();
+
+    final shouldSubmit = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        var isSubmitting = false;
+        String? validationMessage;
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Mark Dhol As Damaged'),
+              content: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: 520,
+                  maxHeight: MediaQuery.sizeOf(dialogContext).height * 0.7,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      DropdownButtonFormField<int>(
+                        initialValue: selectedDholId,
+                        decoration: const InputDecoration(
+                          labelText: 'Dhol Number',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: goodConditionDhols
+                            .map(
+                              (item) => DropdownMenuItem<int>(
+                                value: item.id,
+                                child: Text('Dhol #${item.dholNumber}'),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: isSubmitting
+                            ? null
+                            : (value) {
+                                setDialogState(() {
+                                  selectedDholId = value;
+                                  validationMessage = null;
+                                });
+                              },
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: remarksController,
+                        minLines: 2,
+                        maxLines: 4,
+                        enabled: !isSubmitting,
+                        decoration: const InputDecoration(
+                          labelText: 'Damage Remarks (Optional)',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      if (validationMessage != null) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          validationMessage!,
+                          style: const TextStyle(color: Colors.red),
+                        ),
+                      ],
+                      const SizedBox(height: 10),
+                      const Text(
+                        'Are you sure you want to mark this Dhol as damaged?',
+                        style: TextStyle(color: Colors.black54),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () {
+                          if (selectedDholId == null) {
+                            setDialogState(() {
+                              validationMessage = 'Please select a dhol.';
+                            });
+                            return;
+                          }
+
+                          isSubmitting = true;
+
+                          if (dialogContext.mounted) {
+                            Navigator.of(dialogContext).pop(true);
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  child: const Text('Mark As Damaged'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (shouldSubmit != true) {
+      remarksController.dispose();
+      return;
+    }
+
+    final targetDholId = selectedDholId;
+    remarksController.dispose();
+
+    if (targetDholId == null) {
+      return;
+    }
+
+    try {
+      final attendanceState = await _currentAttendanceState();
+      final isCheckedIn = attendanceState.$1;
+      final isCheckedOut = attendanceState.$2;
+      if (!isCheckedIn || isCheckedOut) {
+        await _showSnack('Please check in first.');
+        return;
+      }
+
+      final updateResult = await _withApiLoader(
+        () => MaintenanceService.updatePathakDholStatus(
+          dholId: targetDholId,
+          status: 'damaged',
+        ),
+      );
+      await _cacheTodayMarkedDamagedDhol(targetDholId);
+
+      final message =
+          updateResult['message']?.toString() ?? 'Dhol marked as damaged.';
+      await _showSnack(message);
+      await _withApiLoader(_loadInstrumentMaintenanceData);
+    } catch (e) {
+      await _showSnack(e.toString());
+    }
+  }
+
+  Widget _buildInstrumentMaintenanceTab() {
+    final sortedMaintenances = List<PathakInstrumentMaintenance>.from(
+      _activeInstrumentMaintenances,
+    )..sort((left, right) => right.startedAt.compareTo(left.startedAt));
+
+    return RefreshIndicator(
+      onRefresh: _loadInstrumentMaintenanceData,
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Report Dhol Damage',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Mark a good condition dhol as damaged when damage is observed.',
+                    style: TextStyle(color: Colors.black54),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Chip(
+                        label: Text(
+                          '${_goodConditionDhols.length} good condition dhol(s)',
+                        ),
+                      ),
+                      ElevatedButton.icon(
+                        onPressed: _isLoadingPathakDhols
+                            ? null
+                            : _openMarkDholAsDamagedDialog,
+                        style: ElevatedButton.styleFrom(
+                          foregroundColor: AppColors.primaryMaroon,
+                        ),
+                        icon: const Icon(Icons.report_problem_outlined),
+                        label: const Text('Mark Dhol As Damaged'),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _canReviewInstrumentMaintenances
+                ? 'Active Maintenance'
+                : 'My Active Maintenance',
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          if (_isLoadingActiveInstrumentMaintenances &&
+              sortedMaintenances.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 40),
+              child: Center(child: CircularProgressIndicator()),
+            )
+          else if (sortedMaintenances.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 32),
+              child: Center(child: Text('No active dhol maintenance found.')),
+            )
+          else
+            ...sortedMaintenances.map((item) {
+              final isLoadingDetail = _loadingInstrumentMaintenanceDetailIds
+                  .contains(item.id);
+              final participantNames = item.participants
+                  .map((participant) => participant.fullName)
+                  .where((name) => name.trim().isNotEmpty)
+                  .join(', ');
+
+              return Card(
+                margin: const EdgeInsets.only(bottom: 10),
+                child: InkWell(
+                  onTap: isLoadingDetail
+                      ? null
+                      : () => _openInstrumentMaintenanceDetail(item),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Dhol #${item.dholNumber}',
+                                style: const TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            if (isLoadingDetail)
+                              const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            else
+                              Chip(
+                                label: Text(
+                                  _instrumentMaintenanceStatusLabel(
+                                    _effectiveInstrumentMaintenanceStatus(item),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Started By: ${item.startedByName.isEmpty ? '-' : item.startedByName}',
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Started At: ${item.startedAt.isEmpty ? '-' : item.startedAt}',
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Participants: ${participantNames.isEmpty ? '-' : participantNames}',
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCategoryTab(String category) {
     final query = (_categorySearch[category] ?? '').trim().toLowerCase();
+    final latestEventId = latestMaintenanceEventId(_events);
+    final latestEvent = latestEventId == null
+        ? null
+        : _events.where((event) => event.id == latestEventId).firstOrNull;
+    final isLatestEventClosed = latestEvent?.isClosedStatus ?? false;
     final shouldDisableRequestButton =
-        !widget.canManageInventory && _hasBlockingCompletionForCurrentUser;
+        !widget.canManageInventory &&
+        (_hasBlockingCompletionForCurrentUser || isLatestEventClosed);
     final items = _inventory
         .where((item) => item.category.toLowerCase() == category)
         .where((item) {
@@ -2800,6 +5173,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                   items: const [
                     DropdownMenuItem(value: 'all', child: Text('All')),
                     DropdownMenuItem(value: 'active', child: Text('Active')),
+                    DropdownMenuItem(value: 'closed', child: Text('Closed')),
                     DropdownMenuItem(
                       value: 'completed',
                       child: Text('Completed'),
@@ -2908,6 +5282,10 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
             )
           else
             ..._events.map((event) {
+              final isUserActionableEvent = isLatestActiveMaintenanceEvent(
+                event,
+                _events,
+              );
               final hasPendingCompletion = userCompletionRequests.any(
                 (item) =>
                     item.event == event.id &&
@@ -2955,8 +5333,31 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                       Text('Date: ${event.eventDate}'),
                       if (event.assignedGatName.trim().isNotEmpty)
                         Text('Assigned Gat: ${event.assignedGatName}'),
+                      if (event.isClosedStatus)
+                        Text(
+                          'Closed By: ${event.closedByName.trim().isEmpty ? '-' : event.closedByName}',
+                        ),
+                      if (event.isClosedStatus)
+                        Text(
+                          'Closed At: ${event.closedAt.trim().isEmpty ? '-' : event.closedAt}',
+                        ),
+                      if (widget.canCreateMaintenanceEvents &&
+                          !event.isClosedStatus) ...[
+                        const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _closeMaintenanceEvent(event),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.red.shade700,
+                            ),
+                            icon: const Icon(Icons.lock_outline),
+                            label: const Text('Close Maintenance Event'),
+                          ),
+                        ),
+                      ],
                       const SizedBox(height: 8),
-                      if (event.shouldShowOnHome)
+                      if (isUserActionableEvent)
                         Align(
                           alignment: Alignment.centerRight,
                           child: hasPendingCompletion
@@ -2998,10 +5399,12 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                                   label: const Text('Submit'),
                                 ),
                         ),
-                      if (!event.shouldShowOnHome)
-                        const Text(
-                          'Closed for users. Only the current day stays open and it closes automatically after the day ends.',
-                          style: TextStyle(color: Colors.black54),
+                      if (!isUserActionableEvent)
+                        Text(
+                          event.isClosedStatus
+                              ? 'Maintenance Closed. Event is read-only.'
+                              : 'Closed for users. This maintenance day remains open only until a newer maintenance day is created.',
+                          style: const TextStyle(color: Colors.black54),
                         ),
                     ],
                   ),
@@ -3151,8 +5554,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
               child: Center(child: Text('No completion requests found.')),
             )
           else
-            ...visibleCompletionRequests.map(
-              (item) => Card(
+            ...visibleCompletionRequests.map((item) {
+              final usedItems = _resolvedCompletionUsedItems(item);
+              return Card(
                 margin: const EdgeInsets.only(bottom: 10),
                 child: Padding(
                   padding: const EdgeInsets.all(12),
@@ -3189,10 +5593,35 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                         style: const TextStyle(color: Colors.black54),
                       ),
                       const SizedBox(height: 6),
-                      Text(
-                        'Work: ${item.workNotes}',
-                        style: const TextStyle(fontWeight: FontWeight.w500),
-                      ),
+                      if (item.maintenanceId != null ||
+                          item.dholNumber.trim().isNotEmpty ||
+                          item.participants.isNotEmpty ||
+                          item.workPerformed.trim().isNotEmpty ||
+                          item.remarks.trim().isNotEmpty) ...[
+                        const Text(
+                          'Instrument Maintenance',
+                          style: TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        const SizedBox(height: 4),
+                        if (item.maintenanceId != null)
+                          Text('Maintenance ID: #${item.maintenanceId}'),
+                        if (item.dholNumber.trim().isNotEmpty)
+                          Text('Dhol Number: Dhol #${item.dholNumber}'),
+                        Text(
+                          'Participants: ${_completionParticipantsText(item.participants).isEmpty ? '-' : _completionParticipantsText(item.participants)}',
+                        ),
+                        Text(
+                          'Work Performed: ${item.workPerformed.trim().isNotEmpty ? item.workPerformed : item.workNotes}',
+                          style: const TextStyle(fontWeight: FontWeight.w500),
+                        ),
+                        Text(
+                          'Remarks: ${item.remarks.trim().isNotEmpty ? item.remarks : '-'}',
+                        ),
+                      ] else
+                        Text(
+                          'Work: ${item.workNotes}',
+                          style: const TextStyle(fontWeight: FontWeight.w500),
+                        ),
                       if (item.approverNote.trim().isNotEmpty) ...[
                         const SizedBox(height: 4),
                         Text(
@@ -3205,21 +5634,21 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                       ],
                       const SizedBox(height: 8),
                       const Text(
-                        'Used Items',
+                        'Approved Stock Used',
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 6),
-                      if (item.usedItems.isEmpty)
+                      if (usedItems.isEmpty)
                         const Text(
                           'No stock items recorded.',
                           style: TextStyle(color: Colors.black54),
                         )
                       else
-                        ...item.usedItems.map(
+                        ...usedItems.map(
                           (usedItem) => Padding(
                             padding: const EdgeInsets.only(bottom: 4),
                             child: Text(
-                              '- ${usedItem.inventoryItemName.isNotEmpty ? usedItem.inventoryItemName : 'Item #${usedItem.inventoryItem}'} x${usedItem.quantityUsed} (${usedItem.normalizedDisplayStatus})',
+                              '${usedItem.inventoryItemName.trim().isNotEmpty ? usedItem.inventoryItemName.trim() : 'Item'} × ${usedItem.quantityUsed}${usedItem.requestedByName.trim().isNotEmpty ? ' • ${usedItem.requestedByName.trim()}' : ''}',
                             ),
                           ),
                         ),
@@ -3252,8 +5681,8 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                     ],
                   ),
                 ),
-              ),
-            ),
+              );
+            }),
         ],
       ),
     );
@@ -3842,6 +6271,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       ..._allCategoryTabs.map((c) => c[0].toUpperCase() + c.substring(1)),
       'Approvals${pendingApprovalsCount > 0 ? ' ($pendingApprovalsCount)' : ''}',
       'Events',
+      'Instrument Maintenance',
+      'Dhol Range Management',
+      'Dhol Status Management',
       if (_showAdminCompletionTab)
         'Completion${pendingCompletionCount > 0 ? ' ($pendingCompletionCount)' : ''}',
       if (_showLegacyEntriesTab)
@@ -3864,6 +6296,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                   : 'Approvals',
             ),
             const Tab(text: 'Events'),
+            const Tab(text: 'Instrument Maintenance'),
+            const Tab(text: 'Dhol Range Management'),
+            const Tab(text: 'Dhol Status Management'),
             if (_showAdminCompletionTab)
               Tab(
                 text: pendingCompletionCount > 0
@@ -3882,6 +6317,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
             ...categoryTabWidgets,
             Tab(text: isRequestApprover ? 'Approvals' : 'My Requests'),
             const Tab(text: 'Events'),
+            const Tab(text: 'Dhol Maintenance'),
             Tab(
               text: canApproveCompletion
                   ? 'Completion Approvals'
@@ -3894,6 +6330,9 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
             ..._allCategoryTabs.map((c) => _buildCategoryTab(c)),
             _buildRequestsTab(),
             _buildEventsTab(),
+            _buildInstrumentMaintenanceTab(),
+            _buildDholRangeManagementTab(),
+            _buildDholStatusManagementTab(),
             if (_showAdminCompletionTab) _buildCompletionRequestsTab(),
             if (_showLegacyEntriesTab) _buildEntriesTab(),
             _buildAnalysisTab(),
@@ -3902,6 +6341,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
             ..._visibleCategoryTabs.map((c) => _buildCategoryTab(c)),
             isRequestApprover ? _buildRequestsTab() : _buildMyRequestsTab(),
             _buildEventsTab(),
+            _buildInstrumentMaintenanceTab(),
             _buildCompletionRequestsTab(),
           ];
 
@@ -3925,6 +6365,8 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                 ? 'Completion ($pendingCompletionCount)'
                 : 'Completion',
           ),
+        const Tab(text: 'Dhol Range Management'),
+        const Tab(text: 'Dhol Status Management'),
         if (_showLegacyEntriesTab)
           Tab(
             text: pendingEntriesCount > 0
@@ -3938,6 +6380,8 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           ..._allCategoryTabs.map((c) => _buildCategoryTab(c)),
         if (showStockApprovalRequests) _buildRequestsTab(),
         if (_showAdminCompletionTab) _buildCompletionRequestsTab(),
+        _buildDholRangeManagementTab(),
+        _buildDholStatusManagementTab(),
         if (_showLegacyEntriesTab) _buildEntriesTab(),
       ];
 

@@ -57,6 +57,8 @@ dependencies:
   qr_flutter: ^4.1.0
   mobile_scanner: ^6.0.2
   table_calendar: ^3.1.2
+  pdf: ^3.11.1
+  printing: ^5.13.1
 
 dev_dependencies:
   flutter_test:

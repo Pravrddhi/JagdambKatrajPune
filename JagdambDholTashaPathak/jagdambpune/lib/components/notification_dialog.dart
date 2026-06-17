@@ -81,8 +81,18 @@ class _NotificationDialogState extends State<_NotificationDialog> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         final parentContext = widget.parentContext;
         if (!parentContext.mounted) return;
-        ScaffoldMessenger.of(parentContext).showSnackBar(
-          const SnackBar(content: Text('Notification sent successfully!')),
+        showDialog<void>(
+          context: parentContext,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Success'),
+            content: const Text('Notification sent successfully!'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
         );
       });
     } catch (e) {
@@ -124,11 +134,19 @@ class _NotificationDialogState extends State<_NotificationDialog> {
       }
 
       final message = e.toString().replaceFirst('Exception: ', '').trim();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Error'),
           content: Text(
             message.isEmpty ? ApiEndpoints.genericApiFailureMessage : message,
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('OK'),
+            ),
+          ],
         ),
       );
     } finally {

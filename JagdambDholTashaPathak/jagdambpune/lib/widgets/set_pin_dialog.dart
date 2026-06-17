@@ -8,6 +8,7 @@ import '../services/bug_report_service.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import '../components/get_device_id.dart';
 
 /// Opens a blocking dialog to set or reset a 6-digit PIN.
 ///
@@ -21,6 +22,7 @@ Future<String> showSetPinDialog(
   final pinController = TextEditingController();
   final GlobalKey<FormState> formKey = GlobalKey<FormState>();
   const storage = FlutterSecureStorage();
+  const cachedFcmTokenKey = 'cached_fcm_token';
   String? errorText;
   bool isLoading = false;
 
@@ -70,6 +72,63 @@ Future<String> showSetPinDialog(
                   setState(() => isLoading = false);
 
                   if (isSuccessful) {
+                    if (isResetFlow) {
+                      try {
+                        final rawUserId = data['user_id'];
+                        final userId = rawUserId is int
+                            ? rawUserId
+                            : int.tryParse(rawUserId?.toString() ?? '');
+                        final localDeviceId = await getDeviceId();
+                        final cachedFcmToken = await storage.read(
+                          key: cachedFcmTokenKey,
+                        );
+                        if (userId != null &&
+                            localDeviceId != 'unknown' &&
+                            localDeviceId != 'unsupported_platform') {
+                          final verifyResponse = await http.post(
+                            Uri.parse(ApiEndpoints.updateDeviceByUser),
+                            headers: ApiEndpoints.jsonHeaders(),
+                            body: jsonEncode({
+                              'user_id': userId,
+                              'device_id': localDeviceId,
+                              if (cachedFcmToken != null &&
+                                  cachedFcmToken.trim().isNotEmpty)
+                                'fcm_token': cachedFcmToken.trim(),
+                            }),
+                          );
+
+                          if (verifyResponse.statusCode < 200 ||
+                              verifyResponse.statusCode >= 300) {
+                            await BugReportService.reportApiFailure(
+                              title:
+                                  'Update device-by-user API failed after reset pin',
+                              errorMessage: verifyResponse.body,
+                              pageUrl: '/set-pin',
+                              statusCode: verifyResponse.statusCode,
+                              endpoint: ApiEndpoints.updateDeviceByUser,
+                            );
+                          }
+                        } else if (userId == null) {
+                          await BugReportService.reportApiFailure(
+                            title:
+                                'Reset pin success missing user_id for device update',
+                            errorMessage: response.body,
+                            pageUrl: '/set-pin',
+                            statusCode: response.statusCode,
+                            endpoint: ApiEndpoints.resetPin,
+                          );
+                        }
+                      } catch (e) {
+                        await BugReportService.reportApiFailure(
+                          title:
+                              'Update device-by-user API exception after reset pin',
+                          errorMessage: e.toString(),
+                          pageUrl: '/set-pin',
+                          endpoint: ApiEndpoints.updateDeviceByUser,
+                        );
+                      }
+                    }
+
                     await storage.write(key: 'pin', value: pinController.text);
                     // Reset flow only confirms PIN update and sends the user
                     // back to login. Registration flow receives fresh tokens.

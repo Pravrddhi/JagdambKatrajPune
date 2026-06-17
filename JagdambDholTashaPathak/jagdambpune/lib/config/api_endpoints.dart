@@ -9,10 +9,10 @@ class ApiEndpoints {
   // Base URL for API requests.
   // Override with: --dart-define=API_BASE_URL=https://your-domain/api
   // This allows separate dev/prod builds without code edits.
-  static const String _defaultBaseUrl = AppConfig.defaultApiBaseUrl;
+  static final String _defaultBaseUrl = AppConfig.defaultApiBaseUrl;
   static const String baseUrlFromDefine = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: _defaultBaseUrl,
+    defaultValue: '',
   );
   static String get baseUrl {
     final normalized = baseUrlFromDefine.trim();
@@ -127,6 +127,10 @@ class ApiEndpoints {
   static final String verifyDevicePhone =
       '$baseUrl/auth/device/verify-phone-device/';
 
+  /// Update device ID mapping by user id (no token required)
+  static final String updateDeviceByUser =
+      '$baseUrl/auth/device/update-by-user/';
+
   /// Terms and conditions list (pathak scoped)
   static final String termsAndConditions = '$baseUrl/terms-and-conditions/';
 
@@ -207,6 +211,10 @@ class ApiEndpoints {
   /// List my attendance entries (calendar view)
   static final String myAttendance = '$baseUrl/attendance/my/';
 
+  /// Get my current attendance status (checked-in / checked-out)
+  static final String myCurrentAttendanceStatus =
+      '$baseUrl/attendance/me/current-status/';
+
   /// List attendance grouped by user (pathak_admin and gat_pramukh)
   static final String attendanceByUser = '$baseUrl/attendance/by-user/';
 
@@ -262,6 +270,13 @@ class ApiEndpoints {
   /// Fetch all assignable groups for pathak admin
   static final String fetchGroups = '$baseUrl/groups/';
 
+  /// Get home screen photos for logged-in user's pathak
+  static final String homeScreenPhotos = '$baseUrl/home-screen/photos/';
+
+  /// Manage home screen photos (pathak admin)
+  static final String homeScreenPhotosManage =
+      '$baseUrl/home-screen/photos/manage/';
+
   /// Base endpoint for a specific user by id (api/user/<int:id>/)
   static final String userByIdBase = '$baseUrl/user';
 
@@ -316,12 +331,19 @@ class ApiEndpoints {
   /// Maintenance stock analysis dashboard
   static final String maintenanceAnalysis = '$baseUrl/maintenance/analysis/';
 
+  /// Full user analysis (profile, gat, attendance, maintenance, documents)
+  static String userAnalysis(int userId) => '$baseUrl/users/$userId/analysis/';
+
   /// Maintenance events list/create
   static final String maintenanceEvents = '$baseUrl/maintenance/events/';
 
   /// Maintenance event details by id
   static String getMaintenanceEventDetail(int eventId) =>
       '$baseUrl/maintenance/events/$eventId/';
+
+  /// Close a maintenance event
+  static String getMaintenanceEventClose(int eventId) =>
+      '$baseUrl/maintenance/events/$eventId/close/';
 
   /// Submit completion request for a maintenance event
   static String getMaintenanceEventCompletionRequests(int eventId) =>
@@ -337,6 +359,50 @@ class ApiEndpoints {
 
   /// Maintenance audit logs
   static final String maintenanceAuditLogs = '$baseUrl/maintenance/audit-logs/';
+
+  /// Create dhol number ranges for the pathak
+  static final String maintenanceDholRanges =
+      '$baseUrl/maintenance/dhol-ranges/';
+
+  /// List dhols created for the pathak
+  static final String maintenancePathakDhols =
+      '$baseUrl/maintenance/pathak-dhols/';
+
+  /// Update a specific pathak dhol status
+  static String getMaintenancePathakDholStatus(int dholId) =>
+      '$baseUrl/maintenance/pathak-dhols/$dholId/status/';
+
+  /// Mark a specific pathak dhol as damaged
+  static String getMaintenancePathakDholMarkDamaged(int dholId) =>
+      '$baseUrl/maintenance/pathak-dhols/$dholId/mark-damaged/';
+
+  /// Checked-in members eligible to join pathak instrument maintenance
+  static final String maintenanceCheckedInMembers =
+      '$baseUrl/maintenance/pathak-instruments/checked-in-members/';
+
+  /// Start a pathak instrument maintenance
+  static final String maintenanceStartPathakInstrument =
+      '$baseUrl/maintenance/pathak-instruments/maintenances/start/';
+
+  /// Active pathak instrument maintenances for current user/role
+  static final String maintenanceMyActivePathakInstruments =
+      '$baseUrl/maintenance/pathak-instruments/maintenances/my-active/';
+
+  /// Role-aware pathak instrument maintenance list (admin/reviewer queues)
+  static final String maintenancePathakInstrumentMaintenances =
+      '$baseUrl/maintenance/pathak-instruments/maintenances/';
+
+  /// Pathak instrument maintenance detail
+  static String getPathakInstrumentMaintenanceDetail(int maintenanceId) =>
+      '$baseUrl/maintenance/pathak-instruments/maintenances/$maintenanceId/';
+
+  /// Submit pathak instrument maintenance work
+  static String getPathakInstrumentMaintenanceSubmit(int maintenanceId) =>
+      '$baseUrl/maintenance/pathak-instruments/maintenances/$maintenanceId/submit/';
+
+  /// Approve or reject pathak instrument maintenance
+  static String getPathakInstrumentMaintenanceAction(int maintenanceId) =>
+      '$baseUrl/maintenance/pathak-instruments/maintenances/$maintenanceId/action/';
 
   // -------------------
   // Miscellaneous Constants
