@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 
 import '../config/api_endpoints.dart';
 import 'refresh_token_service.dart';
+import 'session_service.dart';
 
 class AuthorizedApiService {
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
@@ -19,6 +20,7 @@ class AuthorizedApiService {
         : await _storage.read(key: ApiEndpoints.accessTokenKey);
 
     if (token == null || token.trim().isEmpty) {
+      await SessionService.logoutDueToSessionExpiry();
       return null;
     }
 
@@ -29,6 +31,7 @@ class AuthorizedApiService {
 
     final refreshed = await AuthService.refreshAccessToken();
     if (!refreshed) {
+      await SessionService.logoutDueToSessionExpiry();
       return response;
     }
 
@@ -36,9 +39,14 @@ class AuthorizedApiService {
       key: ApiEndpoints.accessTokenKey,
     );
     if (refreshedToken == null || refreshedToken.trim().isEmpty) {
+      await SessionService.logoutDueToSessionExpiry();
       return response;
     }
 
-    return await request(refreshedToken) as http.Response;
+    final retried = await request(refreshedToken) as http.Response;
+    if (retried.statusCode == 401) {
+      await SessionService.logoutDueToSessionExpiry();
+    }
+    return retried;
   }
 }

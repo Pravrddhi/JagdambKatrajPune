@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 
 import '../components/notification_dialog.dart';
@@ -32,7 +34,7 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
   List<Map<String, dynamic>> _gats = [];
   bool _isLoading = true;
   bool _isAssigning = false;
-  bool _isCreating = false;
+  bool _isApplyingChanges = false;
   String? _errorMessage;
 
   String _userDisplayName(User user) {
@@ -113,6 +115,10 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
     final nestedPramukhName = nestedPramukh is Map
         ? (nestedPramukh['name']?.toString() ?? '').trim()
         : '';
+    final nestedSecondaryPramukh = nested['gat_pramukh_secondary'];
+    final nestedSecondaryPramukhName = nestedSecondaryPramukh is Map
+        ? (nestedSecondaryPramukh['name']?.toString() ?? '').trim()
+        : '';
 
     normalized['id'] =
         raw['id'] ?? raw['gat_id'] ?? nested['id'] ?? nested['gat_id'];
@@ -124,6 +130,20 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
         nested['gat_pramukh_name'] ??
         nested['gatPramukhName'] ??
         (nestedPramukhName.isEmpty ? null : nestedPramukhName);
+    normalized['gat_pramukh_secondary_id'] =
+        raw['gat_pramukh_secondary_id'] ??
+        raw['gatPramukhSecondaryId'] ??
+        nested['gat_pramukh_secondary_id'] ??
+        nested['gatPramukhSecondaryId'] ??
+        (nestedSecondaryPramukh is Map ? nestedSecondaryPramukh['id'] : null);
+    normalized['gat_pramukh_secondary_name'] =
+        raw['gat_pramukh_secondary_name'] ??
+        raw['gatPramukhSecondaryName'] ??
+        nested['gat_pramukh_secondary_name'] ??
+        nested['gatPramukhSecondaryName'] ??
+        (nestedSecondaryPramukhName.isEmpty
+            ? null
+            : nestedSecondaryPramukhName);
     normalized['members'] = members;
     normalized['members_count'] =
         raw['members_count'] ?? nested['members_count'] ?? members.length;
@@ -208,14 +228,17 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
 
   Future<void> _openAutoAssignDialog() async {
     final formKey = GlobalKey<FormState>();
-    final yearController = TextEditingController(
-      text: DateTime.now().year.toString(),
-    );
     final seedController = TextEditingController();
+    final currentYear = DateTime.now().year;
+    final availableYears = <int>[
+      0,
+      ...List<int>.generate(10, (index) => currentYear - index),
+      ...List<int>.generate(10, (index) => currentYear + index + 1),
+    ];
+    var selectedYear = currentYear;
     var reassign = false;
-    var dryRun = false;
 
-    final shouldSubmit = await showDialog<bool>(
+    final action = await showDialog<String>(
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
@@ -229,19 +252,34 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      TextFormField(
-                        controller: yearController,
-                        keyboardType: TextInputType.number,
+                      DropdownButtonFormField<int>(
+                        initialValue: selectedYear,
                         decoration: const InputDecoration(
                           labelText: 'Year',
                           border: OutlineInputBorder(),
                         ),
-                        validator: (value) {
-                          final year = int.tryParse(value?.trim() ?? '');
-                          if (year == null) {
-                            return 'Enter a valid year';
+                        items: availableYears
+                            .map(
+                              (year) => DropdownMenuItem<int>(
+                                value: year,
+                                child: Text(
+                                  year == 0 ? 'All' : year.toString(),
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setDialogState(() {
+                              selectedYear = value;
+                            });
                           }
-                          if (year < 1900 || year > 3000) {
+                        },
+                        validator: (value) {
+                          if (value == null) {
+                            return 'Select a year';
+                          }
+                          if (value != 0 && (value < 1900 || value > 3000)) {
                             return 'Year must be between 1900 and 3000';
                           }
                           return null;
@@ -268,17 +306,6 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                       ),
                       const SizedBox(height: 8),
                       CheckboxListTile(
-                        value: dryRun,
-                        onChanged: (value) {
-                          setDialogState(() {
-                            dryRun = value ?? false;
-                          });
-                        },
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('Dry run (no DB changes)'),
-                        controlAffinity: ListTileControlAffinity.leading,
-                      ),
-                      CheckboxListTile(
                         value: reassign,
                         onChanged: (value) {
                           setDialogState(() {
@@ -295,16 +322,27 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  onPressed: () => Navigator.of(dialogContext).pop('cancel'),
                   child: const Text('Cancel'),
                 ),
                 ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
                   onPressed: () {
                     if (formKey.currentState?.validate() ?? false) {
-                      Navigator.of(dialogContext).pop(true);
+                      Navigator.of(dialogContext).pop('preview');
                     }
                   },
-                  child: const Text('Run'),
+                  child: const Text('Preview Assignments'),
+                ),
+                FilledButton(
+                  onPressed: () {
+                    if (formKey.currentState?.validate() ?? false) {
+                      Navigator.of(dialogContext).pop('apply');
+                    }
+                  },
+                  child: const Text('Apply Changes'),
                 ),
               ],
             );
@@ -313,21 +351,24 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
       },
     );
 
-    if (shouldSubmit != true || !mounted) {
+    if (action == null || action == 'cancel' || !mounted) {
       return;
     }
 
-    final year = int.parse(yearController.text.trim());
+    final year = selectedYear;
     final seedText = seedController.text.trim();
     final seed = seedText.isEmpty ? null : int.parse(seedText);
+    final dryRun = action == 'preview';
 
     setState(() {
       _isAssigning = true;
+      _isApplyingChanges = !dryRun;
     });
 
     try {
       final result = await ApiService.autoAssignMembersToGats(
         year: year,
+        assignmentMode: 'balanced',
         reassign: reassign,
         dryRun: dryRun,
         seed: seed,
@@ -339,20 +380,98 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
       final auditId = result['audit_id'];
       final data = result['data'];
 
-      await showDialog<void>(
+      final applyRequested = await showDialog<bool>(
         context: context,
         builder: (context) {
           final resultData = data is Map<String, dynamic>
               ? data
               : <String, dynamic>{};
+          final skippedReasonsRaw = resultData['skipped_reasons'];
           final gats = resultData['gats'] is List
               ? List<Map<String, dynamic>>.from(resultData['gats'])
               : <Map<String, dynamic>>[];
 
+          List<Widget> buildSkippedReasonWidgets() {
+            if (skippedReasonsRaw is Map) {
+              final entries = skippedReasonsRaw.entries
+                  .map((entry) => MapEntry(entry.key.toString(), entry.value))
+                  .toList();
+              if (entries.isEmpty) {
+                return const <Widget>[Text('No skipped reasons reported')];
+              }
+              return entries.map((entry) {
+                final value = entry.value;
+                final displayValue = value is List
+                    ? value.map((item) => item.toString()).join(', ')
+                    : value.toString();
+                final label = entry.key
+                    .split('_')
+                    .where((part) => part.isNotEmpty)
+                    .map(
+                      (part) =>
+                          '${part[0].toUpperCase()}${part.substring(1).toLowerCase()}',
+                    )
+                    .join(' ');
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text('$label: $displayValue'),
+                );
+              }).toList();
+            }
+
+            if (skippedReasonsRaw is List && skippedReasonsRaw.isNotEmpty) {
+              return skippedReasonsRaw
+                  .map(
+                    (item) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Text(item.toString()),
+                    ),
+                  )
+                  .toList();
+            }
+
+            return const <Widget>[Text('No skipped reasons reported')];
+          }
+
+          Widget buildSummaryCard(String label, Object? value) {
+            return Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.primaryMaroon,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${value ?? 0}',
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.primaryMaroon,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
           return AlertDialog(
             title: const Text('Auto Assign Result'),
             content: SizedBox(
-              width: 420,
+              width: 560,
               child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -362,15 +481,41 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                     Text('Audit ID: ${auditId ?? '-'}'),
                     Text('Year: ${resultData['year'] ?? '-'}'),
                     Text(
+                      'Assignment mode: ${resultData['assignment_mode'] ?? 'balanced'}',
+                    ),
+                    Text(
                       'Dry run: ${resultData['dry_run'] == true ? 'Yes' : 'No'}',
                     ),
                     Text(
                       'Reassign: ${resultData['reassign'] == true ? 'Yes' : 'No'}',
                     ),
-                    Text(
-                      'Candidates: ${resultData['total_candidates'] ?? 0} | Assigned: ${resultData['total_assigned'] ?? 0}',
+                    Text('Seed: ${resultData['seed'] ?? '-'}'),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        buildSummaryCard(
+                          'Total Candidates',
+                          resultData['total_candidates'],
+                        ),
+                        const SizedBox(width: 8),
+                        buildSummaryCard(
+                          'Total Assigned',
+                          resultData['total_assigned'],
+                        ),
+                        const SizedBox(width: 8),
+                        buildSummaryCard(
+                          'Total Skipped',
+                          resultData['total_skipped'],
+                        ),
+                      ],
                     ),
-                    Text('Skipped: ${resultData['total_skipped'] ?? 0}'),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Skipped Reasons',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 8),
+                    ...buildSkippedReasonWidgets(),
                     const SizedBox(height: 12),
                     const Text(
                       'Gat Summary',
@@ -391,28 +536,57 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
 
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 10),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '${gat['gat_name'] ?? '-'}: +${gat['added_count'] ?? 0} (final ${gat['final_count'] ?? 0})',
+                          child: Container(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.grey.shade300),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: ExpansionTile(
+                              tilePadding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 4,
                               ),
-                              const SizedBox(height: 4),
-                              if (members.isEmpty)
-                                const Text(
-                                  'No member names returned',
-                                  style: TextStyle(color: Colors.black54),
-                                )
-                              else
-                                ...members.map((member) {
-                                  final name = member['name']
-                                      ?.toString()
-                                      .trim();
-                                  return Text(
-                                    '- ${name != null && name.isNotEmpty ? name : 'Unnamed member'}',
-                                  );
-                                }),
-                            ],
+                              title: Text(gat['gat_name']?.toString() ?? '-'),
+                              subtitle: Text(
+                                'Added: ${gat['added_count'] ?? 0}   Final: ${gat['final_count'] ?? 0}',
+                              ),
+                              childrenPadding: const EdgeInsets.fromLTRB(
+                                12,
+                                0,
+                                12,
+                                12,
+                              ),
+                              children: [
+                                if (members.isEmpty)
+                                  const Align(
+                                    alignment: Alignment.centerLeft,
+                                    child: Text(
+                                      'No member preview returned',
+                                      style: TextStyle(color: Colors.black54),
+                                    ),
+                                  )
+                                else
+                                  ...members.map((member) {
+                                    final name = member['name']
+                                        ?.toString()
+                                        .trim();
+                                    final email = member['email']
+                                        ?.toString()
+                                        .trim();
+                                    final text = name != null && name.isNotEmpty
+                                        ? name
+                                        : 'Unnamed member';
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 4),
+                                      child: Text(
+                                        email != null && email.isNotEmpty
+                                            ? '$text ($email)'
+                                            : text,
+                                      ),
+                                    );
+                                  }),
+                              ],
+                            ),
                           ),
                         );
                       }),
@@ -421,8 +595,13 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
               ),
             ),
             actions: [
+              if (dryRun)
+                FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('Apply Changes'),
+                ),
               TextButton(
-                onPressed: () => Navigator.of(context).pop(),
+                onPressed: () => Navigator.of(context).pop(false),
                 child: const Text('Close'),
               ),
             ],
@@ -430,9 +609,65 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
         },
       );
 
+      if (dryRun && applyRequested == true) {
+        if (mounted) {
+          setState(() {
+            _isApplyingChanges = true;
+          });
+        }
+
+        final applyResult = await ApiService.autoAssignMembersToGats(
+          year: year,
+          assignmentMode: 'balanced',
+          reassign: reassign,
+          dryRun: false,
+          seed: seed,
+        );
+
+        if (!mounted) return;
+
+        final applyMessage =
+            applyResult['message']?.toString() ??
+            'Members assigned successfully.';
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(applyMessage),
+            backgroundColor: Colors.green.shade700,
+          ),
+        );
+        await _loadGats();
+        return;
+      }
+
       if (!dryRun) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.green.shade700,
+          ),
+        );
         await _loadGats();
       }
+    } on ApiValidationException catch (e) {
+      if (!mounted) return;
+      final errorText = e.errors.entries
+          .expand((entry) => entry.value.map((value) => '${entry.key}: $value'))
+          .join('\n');
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Error'),
+          content: Text(errorText.isNotEmpty ? errorText : e.message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       await showDialog<void>(
@@ -452,6 +687,7 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
       if (mounted) {
         setState(() {
           _isAssigning = false;
+          _isApplyingChanges = false;
         });
       }
     }
@@ -483,21 +719,112 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
 
     final formKey = GlobalKey<FormState>();
     final nameController = TextEditingController();
-    User? selectedGatPramukh;
-    var userSearchQuery = '';
+    final pathakScopedUsers = pathakUsers
+        .where((user) => user.id != null)
+        .toList();
+    int? selectedPrimaryId;
+    int? selectedSecondaryId;
+    bool isSubmitting = false;
+    String? formMessage;
+    bool isSuccess = false;
+    final fieldErrors = <String, String?>{};
 
-    final shouldSubmit = await showDialog<bool>(
+    if (!mounted) return;
+
+    await showDialog<void>(
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
-            final filteredUsers = pathakUsers.where((user) {
-              final q = userSearchQuery.trim().toLowerCase();
-              if (q.isEmpty) return true;
-              final name = _userDisplayName(user).toLowerCase();
-              final phone = (user.phoneNumber ?? '').toLowerCase();
-              return name.contains(q) || phone.contains(q);
-            }).toList();
+            Future<void> submitForm() async {
+              FocusScope.of(dialogContext).unfocus();
+              fieldErrors.clear();
+              formMessage = null;
+
+              if (!(formKey.currentState?.validate() ?? false)) {
+                setDialogState(() {});
+                return;
+              }
+
+              if (selectedPrimaryId == null) {
+                fieldErrors['gat_pramukh_id'] =
+                    'Primary GAT pramukh is required';
+                setDialogState(() {});
+                return;
+              }
+
+              if (selectedSecondaryId != null &&
+                  selectedSecondaryId == selectedPrimaryId) {
+                fieldErrors['gat_pramukh_secondary_id'] =
+                    'Secondary GAT pramukh must be different from primary';
+                setDialogState(() {});
+                return;
+              }
+
+              setDialogState(() {
+                isSubmitting = true;
+                isSuccess = false;
+              });
+
+              try {
+                final result = await ApiService.createGat(
+                  name: nameController.text.trim(),
+                  gatPramukhId: selectedPrimaryId,
+                  gatPramukhSecondaryId: selectedSecondaryId,
+                );
+
+                if (!mounted) return;
+
+                final successMessage =
+                    result['message']?.toString() ?? 'Gat created successfully';
+
+                setDialogState(() {
+                  isSuccess = true;
+                  formMessage = successMessage;
+                });
+
+                if (!dialogContext.mounted) return;
+                Navigator.of(dialogContext).pop();
+
+                if (!mounted) return;
+
+                await showDialog<void>(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Success'),
+                    content: Text(successMessage),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('OK'),
+                      ),
+                    ],
+                  ),
+                );
+                await _loadGats();
+              } on ApiValidationException catch (e) {
+                if (!mounted) return;
+                setDialogState(() {
+                  formMessage = e.message;
+                  for (final entry in e.errors.entries) {
+                    if (entry.value.isNotEmpty) {
+                      fieldErrors[entry.key] = entry.value.first;
+                    }
+                  }
+                });
+              } catch (e) {
+                if (!mounted) return;
+                setDialogState(() {
+                  formMessage = e.toString().replaceFirst('Exception: ', '');
+                });
+              } finally {
+                if (mounted) {
+                  setDialogState(() {
+                    isSubmitting = false;
+                  });
+                }
+              }
+            }
 
             return AlertDialog(
               title: const Text('Create Gat'),
@@ -510,11 +837,29 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        if (isSubmitting)
+                          const Padding(
+                            padding: EdgeInsets.only(bottom: 12),
+                            child: LinearProgressIndicator(),
+                          ),
+                        if (formMessage != null &&
+                            formMessage!.trim().isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 12),
+                            child: Text(
+                              formMessage!,
+                              style: TextStyle(
+                                color: isSuccess ? Colors.green : Colors.red,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
                         TextFormField(
                           controller: nameController,
-                          decoration: const InputDecoration(
+                          decoration: InputDecoration(
                             labelText: 'Gat Name',
-                            border: OutlineInputBorder(),
+                            border: const OutlineInputBorder(),
+                            errorText: fieldErrors['name'],
                           ),
                           validator: (value) {
                             if ((value ?? '').trim().isEmpty) {
@@ -524,100 +869,85 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
                           },
                         ),
                         const SizedBox(height: 12),
+                        DropdownButtonFormField<int>(
+                          initialValue: selectedPrimaryId,
+                          decoration: InputDecoration(
+                            labelText: 'Primary GAT Pramukh',
+                            border: const OutlineInputBorder(),
+                            errorText: fieldErrors['gat_pramukh_id'],
+                          ),
+                          items: pathakScopedUsers
+                              .map(
+                                (user) => DropdownMenuItem<int>(
+                                  value: user.id,
+                                  child: Text(
+                                    '${_userDisplayName(user)}${(user.phoneNumber ?? '').isNotEmpty ? ' • ${user.phoneNumber}' : ''}',
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: isSubmitting
+                              ? null
+                              : (value) {
+                                  setDialogState(() {
+                                    selectedPrimaryId = value;
+                                    fieldErrors.remove('gat_pramukh_id');
+                                    if (selectedSecondaryId == value) {
+                                      selectedSecondaryId = null;
+                                    }
+                                  });
+                                },
+                          validator: (value) {
+                            if (value == null) {
+                              return 'Primary GAT pramukh is required';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<int>(
+                          initialValue: selectedSecondaryId,
+                          decoration: InputDecoration(
+                            labelText: 'Secondary GAT Pramukh (Optional)',
+                            border: const OutlineInputBorder(),
+                            errorText: fieldErrors['gat_pramukh_secondary_id'],
+                          ),
+                          items: <DropdownMenuItem<int>>[
+                            const DropdownMenuItem<int>(
+                              value: null,
+                              child: Text('None'),
+                            ),
+                            ...pathakScopedUsers
+                                .where((user) => user.id != selectedPrimaryId)
+                                .map(
+                                  (user) => DropdownMenuItem<int>(
+                                    value: user.id,
+                                    child: Text(
+                                      '${_userDisplayName(user)}${(user.phoneNumber ?? '').isNotEmpty ? ' • ${user.phoneNumber}' : ''}',
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ),
+                          ],
+                          onChanged: isSubmitting
+                              ? null
+                              : (value) {
+                                  setDialogState(() {
+                                    selectedSecondaryId = value;
+                                    fieldErrors.remove(
+                                      'gat_pramukh_secondary_id',
+                                    );
+                                  });
+                                },
+                        ),
+                        const SizedBox(height: 8),
                         const Text(
-                          'Select Gat Pramukh',
+                          'Both pramukh users must belong to your pathak.',
                           style: TextStyle(
                             color: AppColors.primaryMaroon,
                             fontWeight: FontWeight.w600,
                           ),
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          onChanged: (value) {
-                            setDialogState(() {
-                              userSearchQuery = value;
-                            });
-                          },
-                          decoration: InputDecoration(
-                            hintText: 'Search by name',
-                            prefixIcon: const Icon(Icons.search),
-                            filled: true,
-                            fillColor: Colors.white,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 8,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          constraints: const BoxConstraints(maxHeight: 220),
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: AppColors.primaryMaroon.withValues(
-                                alpha: 0.2,
-                              ),
-                            ),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: filteredUsers.isEmpty
-                              ? const Center(
-                                  child: Padding(
-                                    padding: EdgeInsets.all(12),
-                                    child: Text('No users found'),
-                                  ),
-                                )
-                              : ListView.separated(
-                                  shrinkWrap: true,
-                                  itemCount: filteredUsers.length,
-                                  separatorBuilder: (_, __) =>
-                                      const Divider(height: 1),
-                                  itemBuilder: (_, index) {
-                                    final user = filteredUsers[index];
-                                    final isSelected =
-                                        selectedGatPramukh?.id == user.id;
-                                    return ListTile(
-                                      dense: true,
-                                      selected: isSelected,
-                                      title: Text(_userDisplayName(user)),
-                                      subtitle: Text(
-                                        'ID: ${user.id ?? '-'}${(user.phoneNumber ?? '').isNotEmpty ? ' • ${user.phoneNumber}' : ''}',
-                                      ),
-                                      trailing: isSelected
-                                          ? const Icon(
-                                              Icons.check_circle,
-                                              color: Colors.green,
-                                            )
-                                          : null,
-                                      onTap: () {
-                                        setDialogState(() {
-                                          selectedGatPramukh = user;
-                                        });
-                                      },
-                                    );
-                                  },
-                                ),
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          children: [
-                            if (selectedGatPramukh != null)
-                              Chip(
-                                label: Text(
-                                  'Selected: ${_userDisplayName(selectedGatPramukh!)}',
-                                ),
-                                deleteIcon: const Icon(Icons.close),
-                                onDeleted: () {
-                                  setDialogState(() {
-                                    selectedGatPramukh = null;
-                                  });
-                                },
-                              ),
-                          ],
                         ),
                         const SizedBox(height: 4),
                         Text(
@@ -636,34 +966,14 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(false),
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(),
                   child: const Text('Cancel'),
                 ),
                 ElevatedButton(
-                  onPressed: () {
-                    if (formKey.currentState?.validate() ?? false) {
-                      if (selectedGatPramukh == null) {
-                        showDialog<void>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Error'),
-                            content: const Text(
-                              'Gat Pramukh is required for creating gat.',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.of(context).pop(),
-                                child: const Text('OK'),
-                              ),
-                            ],
-                          ),
-                        );
-                        return;
-                      }
-                      Navigator.of(dialogContext).pop(true);
-                    }
-                  },
-                  child: const Text('Create'),
+                  onPressed: isSubmitting ? null : submitForm,
+                  child: Text(isSubmitting ? 'Creating...' : 'Create'),
                 ),
               ],
             );
@@ -671,64 +981,6 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
         );
       },
     );
-
-    if (shouldSubmit != true || !mounted) {
-      return;
-    }
-
-    final gatName = nameController.text.trim();
-    final gatPramukhId = selectedGatPramukh?.id;
-
-    setState(() {
-      _isCreating = true;
-    });
-
-    try {
-      final result = await ApiService.createGat(
-        name: gatName,
-        gatPramukhId: gatPramukhId,
-      );
-
-      if (!mounted) return;
-
-      final message =
-          result['message']?.toString() ?? 'Gat created successfully.';
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Success'),
-          content: Text(message),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-      await _loadGats();
-    } catch (e) {
-      if (!mounted) return;
-      await showDialog<void>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Error'),
-          content: Text(e.toString().replaceFirst('Exception: ', '')),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isCreating = false;
-        });
-      }
-    }
   }
 
   Future<void> _openGatMembersPopup(Map<String, dynamic> gat) async {
@@ -838,6 +1090,135 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final body = _isLoading
+        ? const Center(
+            child: CircularProgressIndicator(color: AppColors.accentYellow),
+          )
+        : _errorMessage != null
+        ? Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _errorMessage!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: AppColors.primaryMaroon),
+                  ),
+                  if (widget.canCreateGat || widget.showAutoAssignAction) ...[
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: _loadGats,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.accentYellow,
+                        foregroundColor: AppColors.primaryMaroon,
+                      ),
+                      child: const Text('Retry'),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          )
+        : _gats.isEmpty
+        ? const Center(
+            child: Text(
+              'No gats found',
+              style: TextStyle(color: AppColors.primaryMaroon, fontSize: 16),
+            ),
+          )
+        : RefreshIndicator(
+            onRefresh: _loadGats,
+            color: AppColors.accentYellow,
+            child: ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: _gats.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 12),
+              itemBuilder: (context, index) {
+                final gat = _gats[index];
+                final members = _extractMembers(gat);
+                final primaryPramukhName =
+                    gat['gat_pramukh_name']?.toString().trim() ?? '';
+                final secondaryPramukhName =
+                    gat['gat_pramukh_secondary_name']?.toString().trim() ?? '';
+                final membersCount =
+                    (gat['members_count'] as num?)?.toInt() ?? members.length;
+                return Card(
+                  color: Colors.white,
+                  elevation: 2,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: ListTile(
+                    onTap: () => _openGatMembersPopup(gat),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    leading: CircleAvatar(
+                      backgroundColor: AppColors.primaryMaroon,
+                      child: Text(
+                        '${gat['id'] ?? index + 1}',
+                        style: const TextStyle(
+                          color: AppColors.accentYellow,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    title: Text(
+                      _gatNameFrom(gat),
+                      style: const TextStyle(
+                        color: AppColors.primaryMaroon,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
+                      ),
+                    ),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Gat Pramukh: ${primaryPramukhName.isEmpty ? '-' : primaryPramukhName}',
+                          style: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Gat Pramukh: ${secondaryPramukhName.isEmpty ? '-' : secondaryPramukhName}',
+                          style: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Members ($membersCount)',
+                          style: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          members.isEmpty
+                              ? 'Tap to view details'
+                              : 'Tap to view all members',
+                          style: const TextStyle(
+                            color: AppColors.primaryMaroon,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
@@ -859,14 +1240,8 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
           if (widget.canCreateGat)
             IconButton(
               tooltip: 'Create Gat',
-              onPressed: _isCreating ? null : _openCreateGatDialog,
-              icon: _isCreating
-                  ? const SizedBox(
-                      height: 16,
-                      width: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.add_circle_outline),
+              onPressed: _openCreateGatDialog,
+              icon: const Icon(Icons.add_circle_outline),
             ),
           if (widget.showAutoAssignAction)
             Padding(
@@ -889,122 +1264,49 @@ class _GatDetailsScreenState extends State<GatDetailsScreen> {
             ),
         ],
       ),
-      body: _isLoading
-          ? const Center(
-              child: CircularProgressIndicator(color: AppColors.accentYellow),
-            )
-          : _errorMessage != null
-          ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      _errorMessage!,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: AppColors.primaryMaroon),
-                    ),
-                    if (widget.canCreateGat || widget.showAutoAssignAction) ...[
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: _loadGats,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.accentYellow,
-                          foregroundColor: AppColors.primaryMaroon,
-                        ),
-                        child: const Text('Retry'),
+      body: Stack(
+        children: [
+          body,
+          if (_isApplyingChanges)
+            Positioned.fill(
+              child: AbsorbPointer(
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 4, sigmaY: 4),
+                  child: Container(
+                    color: Colors.black.withValues(alpha: 0.18),
+                    alignment: Alignment.center,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 24,
+                        vertical: 20,
                       ),
-                    ],
-                  ],
-                ),
-              ),
-            )
-          : _gats.isEmpty
-          ? const Center(
-              child: Text(
-                'No gats found',
-                style: TextStyle(color: AppColors.primaryMaroon, fontSize: 16),
-              ),
-            )
-          : RefreshIndicator(
-              onRefresh: _loadGats,
-              color: AppColors.accentYellow,
-              child: ListView.separated(
-                padding: const EdgeInsets.all(16),
-                itemCount: _gats.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 12),
-                itemBuilder: (context, index) {
-                  final gat = _gats[index];
-                  final members = _extractMembers(gat);
-                  final membersCount =
-                      (gat['members_count'] as num?)?.toInt() ?? members.length;
-                  return Card(
-                    color: Colors.white,
-                    elevation: 2,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: ListTile(
-                      onTap: () => _openGatMembersPopup(gat),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.92),
+                        borderRadius: BorderRadius.circular(16),
                       ),
-                      leading: CircleAvatar(
-                        backgroundColor: AppColors.primaryMaroon,
-                        child: Text(
-                          '${gat['id'] ?? index + 1}',
-                          style: const TextStyle(
-                            color: AppColors.accentYellow,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      title: Text(
-                        _gatNameFrom(gat),
-                        style: const TextStyle(
-                          color: AppColors.primaryMaroon,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
-                        ),
-                      ),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      child: const Column(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            'Gat Pramukh: ${gat['gat_pramukh_name'] ?? '-'}',
-                            style: const TextStyle(
-                              color: AppColors.primaryMaroon,
-                              fontSize: 13,
-                            ),
+                          CircularProgressIndicator(
+                            color: AppColors.primaryMaroon,
                           ),
-                          const SizedBox(height: 4),
+                          SizedBox(height: 16),
                           Text(
-                            'Members ($membersCount)',
-                            style: const TextStyle(
+                            'Applying changes...',
+                            style: TextStyle(
                               color: AppColors.primaryMaroon,
-                              fontSize: 12,
                               fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            members.isEmpty
-                                ? 'Tap to view details'
-                                : 'Tap to view all members',
-                            style: const TextStyle(
-                              color: AppColors.primaryMaroon,
-                              fontSize: 12,
                             ),
                           ),
                         ],
                       ),
                     ),
-                  );
-                },
+                  ),
+                ),
               ),
             ),
+        ],
+      ),
     );
   }
 

@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../config/api_endpoints.dart';
 import 'bug_report_service.dart';
+import 'session_service.dart';
 
 class AuthService {
   static const _storage = FlutterSecureStorage();
@@ -13,6 +14,7 @@ class AuthService {
     final refreshToken = await _storage.read(key: ApiEndpoints.refreshTokenKey);
 
     if (refreshToken == null || refreshToken.isEmpty) {
+      await SessionService.logoutDueToSessionExpiry();
       return false;
     }
 
@@ -50,6 +52,7 @@ class AuthService {
           // Refresh token is invalid/expired
           await _storage.delete(key: ApiEndpoints.refreshTokenKey);
           await _storage.delete(key: ApiEndpoints.accessTokenKey);
+          await SessionService.logoutDueToSessionExpiry();
         }
         return false;
       }
