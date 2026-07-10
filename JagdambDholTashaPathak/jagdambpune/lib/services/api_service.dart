@@ -12,6 +12,21 @@ import 'bug_report_service.dart';
 import 'refresh_token_service.dart'; // Import your AuthService that handles token refresh
 import 'authorized_api_service.dart';
 
+class ApiValidationException implements Exception {
+  final int statusCode;
+  final String message;
+  final Map<String, List<String>> errors;
+
+  const ApiValidationException({
+    required this.statusCode,
+    required this.message,
+    this.errors = const <String, List<String>>{},
+  });
+
+  @override
+  String toString() => message;
+}
+
 class ApiService {
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
   static const Set<String> _allowedDocumentTypes = {
@@ -187,6 +202,7 @@ class ApiService {
   static Future<Map<String, dynamic>> createGat({
     required String name,
     int? gatPramukhId,
+    int? gatPramukhSecondaryId,
   }) async {
     try {
       final trimmedName = name.trim();
@@ -200,6 +216,8 @@ class ApiService {
       final payload = <String, dynamic>{
         'name': trimmedName,
         'gat_pramukh_id': gatPramukhId,
+        if (gatPramukhSecondaryId != null)
+          'gat_pramukh_secondary_id': gatPramukhSecondaryId,
       };
 
       final response = await AuthorizedApiService.sendWithAutoRefresh(
@@ -231,6 +249,29 @@ class ApiService {
 
       if (decoded is Map<String, dynamic>) {
         final errors = decoded['errors'];
+        if (errors is Map) {
+          final normalizedErrors = <String, List<String>>{};
+          for (final entry in errors.entries) {
+            final key = entry.key.toString();
+            final value = entry.value;
+            if (value is List) {
+              normalizedErrors[key] = value
+                  .map((item) => item.toString())
+                  .where((item) => item.trim().isNotEmpty)
+                  .toList();
+            } else if (value != null) {
+              final message = value.toString().trim();
+              if (message.isNotEmpty) {
+                normalizedErrors[key] = <String>[message];
+              }
+            }
+          }
+          throw ApiValidationException(
+            statusCode: response.statusCode,
+            message: decoded['message']?.toString() ?? 'Validation error.',
+            errors: normalizedErrors,
+          );
+        }
         if (errors is String && errors.trim().isNotEmpty) {
           throw Exception(errors.trim());
         }
@@ -345,6 +386,7 @@ class ApiService {
 
   static Future<Map<String, dynamic>> autoAssignMembersToGats({
     required int year,
+    String assignmentMode = 'balanced',
     bool reassign = false,
     bool dryRun = false,
     int? seed,
@@ -352,6 +394,7 @@ class ApiService {
     try {
       final payload = <String, dynamic>{
         'year': year,
+        'assignment_mode': assignmentMode,
         'reassign': reassign,
         'dry_run': dryRun,
       };
@@ -395,6 +438,31 @@ class ApiService {
           );
         }
         return decoded;
+      }
+
+      final errors = decoded['errors'];
+      if (errors is Map) {
+        final normalizedErrors = <String, List<String>>{};
+        for (final entry in errors.entries) {
+          final key = entry.key.toString();
+          final value = entry.value;
+          if (value is List) {
+            normalizedErrors[key] = value
+                .map((item) => item.toString())
+                .where((item) => item.trim().isNotEmpty)
+                .toList();
+          } else if (value != null) {
+            final normalized = value.toString().trim();
+            if (normalized.isNotEmpty) {
+              normalizedErrors[key] = <String>[normalized];
+            }
+          }
+        }
+        throw ApiValidationException(
+          statusCode: response.statusCode,
+          message: message?.isNotEmpty == true ? message! : 'Validation error.',
+          errors: normalizedErrors,
+        );
       }
 
       if (message != null && message.isNotEmpty) {

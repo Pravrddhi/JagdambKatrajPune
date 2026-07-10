@@ -67,6 +67,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     detectionSpeed: DetectionSpeed.noDuplicates,
     detectionTimeoutMs: 500,
   );
+  bool _isNativeScannerRunning = false;
 
   bool _isGenerating = false;
   bool _isDownloadingQr = false;
@@ -181,6 +182,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       _tabController.removeListener(_handleTabControllerTick);
     }
     _pauseAllScanners();
+    _isNativeScannerRunning = false;
     _scannerController.dispose();
     _tabController.dispose();
     _nameSearchController.dispose();
@@ -425,11 +427,15 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
   void _pauseNativeScanner() {
     if (kIsWeb) return;
+    if (!_isNativeScannerRunning) return;
+    _isNativeScannerRunning = false;
     unawaited(_scannerController.stop());
   }
 
   void _resumeNativeScanner() {
     if (kIsWeb) return;
+    if (_isNativeScannerRunning) return;
+    _isNativeScannerRunning = true;
     unawaited(_scannerController.start());
   }
 
@@ -3679,7 +3685,6 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       );
     } else {
       // Native (Android / iOS): use mobile_scanner.
-      _resumeNativeScanner();
       scannerWidget = MobileScanner(
         controller: _scannerController,
         onDetect: (capture) {
