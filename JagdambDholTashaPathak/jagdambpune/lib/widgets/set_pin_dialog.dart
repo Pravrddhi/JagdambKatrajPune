@@ -5,6 +5,7 @@ import '../widgets/input_box.dart';
 import 'common_button.dart';
 import '../config/api_endpoints.dart';
 import '../services/bug_report_service.dart';
+import '../services/web_api_service.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -30,6 +31,8 @@ Future<String> showSetPinDialog(
         context: context,
         barrierDismissible: false,
         builder: (BuildContext dialogContext) {
+          final navigator = Navigator.of(dialogContext);
+
           return StatefulBuilder(
             builder: (BuildContext context, StateSetter setState) {
               Future<void> submitPin() async {
@@ -64,6 +67,7 @@ Future<String> showSetPinDialog(
                     headers: {'Content-Type': 'application/json'},
                     body: jsonEncode(body),
                   );
+                  debugPrint('API set-or-reset-pin RESPONSE ${response.body}');
 
                   final data = jsonDecode(response.body);
                   final bool isSuccessful =
@@ -72,59 +76,94 @@ Future<String> showSetPinDialog(
                   setState(() => isLoading = false);
 
                   if (isSuccessful) {
+                    final responsePayload = data is Map<String, dynamic>
+                        ? data
+                        : <String, dynamic>{};
+                    final nestedData =
+                        responsePayload['data'] is Map<String, dynamic>
+                        ? Map<String, dynamic>.from(responsePayload['data'])
+                        : const <String, dynamic>{};
+                    final accessToken =
+                        responsePayload['access_token']?.toString().trim() ??
+                        nestedData['access_token']?.toString().trim() ??
+                        '';
+                    final refreshToken =
+                        responsePayload['refresh_token']?.toString().trim() ??
+                        nestedData['refresh_token']?.toString().trim() ??
+                        '';
+                    final storedAccessToken = await storage.read(
+                      key: ApiEndpoints.accessTokenKey,
+                    );
+                    final effectiveAccessToken = accessToken.isNotEmpty
+                        ? accessToken
+                        : (storedAccessToken?.trim() ?? '');
+
                     if (isResetFlow) {
                       try {
-                        final rawUserId = data['user_id'];
-                        final userId = rawUserId is int
-                            ? rawUserId
-                            : int.tryParse(rawUserId?.toString() ?? '');
                         final localDeviceId = await getDeviceId();
                         final cachedFcmToken = await storage.read(
                           key: cachedFcmTokenKey,
                         );
-                        if (userId != null &&
+                        if (effectiveAccessToken.isNotEmpty &&
                             localDeviceId != 'unknown' &&
                             localDeviceId != 'unsupported_platform') {
-                          final verifyResponse = await http.post(
-                            Uri.parse(ApiEndpoints.updateDeviceByUser),
-                            headers: ApiEndpoints.jsonHeaders(),
-                            body: jsonEncode({
-                              'user_id': userId,
-                              'device_id': localDeviceId,
-                              if (cachedFcmToken != null &&
-                                  cachedFcmToken.trim().isNotEmpty)
-                                'fcm_token': cachedFcmToken.trim(),
-                            }),
+                          await WebApiService.updateClientTypeToDevice(
+                            accessToken: effectiveAccessToken,
+                            deviceId: localDeviceId,
+                            fcmToken: cachedFcmToken,
                           );
+                        } else {
+                          final rawUserId = data['user_id'];
+                          final userId = rawUserId is int
+                              ? rawUserId
+                              : int.tryParse(rawUserId?.toString() ?? '');
+                          if (userId != null &&
+                              localDeviceId != 'unknown' &&
+                              localDeviceId != 'unsupported_platform') {
+                            final verifyResponse = await http.post(
+                              Uri.parse(ApiEndpoints.updateDeviceByUser),
+                              headers: ApiEndpoints.jsonHeaders(),
+                              body: jsonEncode({
+                                'user_id': userId,
+                                'device_id': localDeviceId,
+                                if (cachedFcmToken != null &&
+                                    cachedFcmToken.trim().isNotEmpty)
+                                  'fcm_token': cachedFcmToken.trim(),
+                              }),
+                            );
+                            debugPrint(
+                              'API update-device-by-user RESPONSE ${verifyResponse.body}',
+                            );
 
-                          if (verifyResponse.statusCode < 200 ||
-                              verifyResponse.statusCode >= 300) {
+                            if (verifyResponse.statusCode < 200 ||
+                                verifyResponse.statusCode >= 300) {
+                              await BugReportService.reportApiFailure(
+                                title:
+                                    'Update device-by-user API failed after reset pin',
+                                errorMessage: verifyResponse.body,
+                                pageUrl: '/set-pin',
+                                statusCode: verifyResponse.statusCode,
+                                endpoint: ApiEndpoints.updateDeviceByUser,
+                              );
+                            }
+                          } else if (userId == null) {
                             await BugReportService.reportApiFailure(
                               title:
-                                  'Update device-by-user API failed after reset pin',
-                              errorMessage: verifyResponse.body,
+                                  'Reset pin success missing user_id for device update',
+                              errorMessage: response.body,
                               pageUrl: '/set-pin',
-                              statusCode: verifyResponse.statusCode,
-                              endpoint: ApiEndpoints.updateDeviceByUser,
+                              statusCode: response.statusCode,
+                              endpoint: ApiEndpoints.resetPin,
                             );
                           }
-                        } else if (userId == null) {
-                          await BugReportService.reportApiFailure(
-                            title:
-                                'Reset pin success missing user_id for device update',
-                            errorMessage: response.body,
-                            pageUrl: '/set-pin',
-                            statusCode: response.statusCode,
-                            endpoint: ApiEndpoints.resetPin,
-                          );
                         }
                       } catch (e) {
                         await BugReportService.reportApiFailure(
                           title:
-                              'Update device-by-user API exception after reset pin',
+                              'Update client type/device mapping exception after reset pin',
                           errorMessage: e.toString(),
                           pageUrl: '/set-pin',
-                          endpoint: ApiEndpoints.updateDeviceByUser,
+                          endpoint: ApiEndpoints.updateClientType,
                         );
                       }
                     }
@@ -133,20 +172,22 @@ Future<String> showSetPinDialog(
                     // Reset flow only confirms PIN update and sends the user
                     // back to login. Registration flow receives fresh tokens.
                     if (isResetFlow) {
-                      Navigator.of(dialogContext).pop();
-                      Navigator.of(
-                        dialogContext,
-                      ).pushReplacementNamed('/login');
+                      navigator.pop();
+                      navigator.pushReplacementNamed('/login');
                     } else {
-                      await storage.write(
-                        key: 'access_token',
-                        value: data['access_token'],
-                      );
-                      await storage.write(
-                        key: 'refresh_token',
-                        value: data['refresh_token'],
-                      );
-                      Navigator.of(dialogContext).pop(data['access_token']);
+                      if (effectiveAccessToken.isNotEmpty) {
+                        await storage.write(
+                          key: ApiEndpoints.accessTokenKey,
+                          value: effectiveAccessToken,
+                        );
+                      }
+                      if (refreshToken.isNotEmpty) {
+                        await storage.write(
+                          key: ApiEndpoints.refreshTokenKey,
+                          value: refreshToken,
+                        );
+                      }
+                      navigator.pop(effectiveAccessToken);
                     }
                   } else {
                     await BugReportService.reportApiFailure(

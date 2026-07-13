@@ -131,6 +131,14 @@ class ApiEndpoints {
   static final String updateDeviceByUser =
       '$baseUrl/auth/device/update-by-user/';
 
+  /// Update client type using token-authenticated user context
+  static final String updateClientType =
+      '$baseUrl/auth/device/client-type-update/';
+
+  /// Check current client_type using access token after login
+  static final String clientTypeCheck =
+      '$baseUrl/auth/device/client-type-check/';
+
   /// Terms and conditions list (pathak scoped)
   static final String termsAndConditions = '$baseUrl/terms-and-conditions/';
 

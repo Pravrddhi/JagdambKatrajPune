@@ -24,6 +24,7 @@ class AttendanceModuleScreen extends StatefulWidget {
   final bool canViewByUserAttendance;
   final bool isPathakAdmin;
   final bool scanOnly;
+  final String? userInstrument;
 
   const AttendanceModuleScreen({
     super.key,
@@ -33,6 +34,7 @@ class AttendanceModuleScreen extends StatefulWidget {
     required this.canViewByUserAttendance,
     this.isPathakAdmin = false,
     this.scanOnly = false,
+    this.userInstrument,
   });
 
   @override
@@ -247,7 +249,25 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  bool get _requiresMaintenanceApprovalForCheckout {
+    final normalized = (widget.userInstrument ?? '')
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z]'), '');
+    return normalized == 'dhol';
+  }
+
   Future<bool> _validateMaintenanceApprovalForCheckout() async {
+    if (!_requiresMaintenanceApprovalForCheckout) {
+      if (mounted && _isAttendanceBlocked) {
+        setState(() {
+          _isAttendanceBlocked = false;
+          _attendanceBlockedMessage = null;
+        });
+      }
+      return true;
+    }
+
     try {
       final maintenances =
           await MaintenanceService.fetchMyActiveInstrumentMaintenances();
@@ -406,6 +426,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
   Future<void> _ensureAttendanceApprovalGate({bool force = false}) async {
     if (!mounted) return;
+    if (!_requiresMaintenanceApprovalForCheckout) return;
     if (_isCheckingAttendanceApproval) return;
     if (!force && _hasResolvedAttendanceApprovalGate) return;
     if (!_isScanTabActive) return;
@@ -3546,7 +3567,9 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
       _pauseAllScanners();
       final isGatePending =
-          !_hasResolvedAttendanceApprovalGate || _isCheckingAttendanceApproval;
+          _requiresMaintenanceApprovalForCheckout &&
+          (!_hasResolvedAttendanceApprovalGate ||
+              _isCheckingAttendanceApproval);
       final maintenanceBlocked = _isAttendanceBlocked || isGatePending;
       final maintenanceBlockedMessage = isGatePending
           ? _maintenanceCheckoutBlockedMessage
