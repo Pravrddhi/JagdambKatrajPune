@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import '../../config/api_endpoints.dart';
 import '../../services/bug_report_service.dart';
+import '../../services/web_api_service.dart';
 import '../../theme/app_colors.dart';
 import '../../widgets/common_button.dart';
 import '../../widgets/dropdown.dart';
@@ -111,6 +112,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
     final url = Uri.parse("${ApiEndpoints.getInstruments}/$pathakId/");
     try {
       final response = await http.get(url);
+      debugPrint('API get-instruments RESPONSE ${response.body}');
       final dynamic data = json.decode(response.body);
 
       if (response.statusCode == 200) {
@@ -285,6 +287,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(requestPayload),
       );
+      debugPrint('API check-phone-number RESPONSE ${response.body}');
 
       final responseData = jsonDecode(response.body);
 
@@ -343,6 +346,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
           'pathak_id': ApiEndpoints.pathakIdInt,
         }),
       );
+      debugPrint('API check-adhaar-number RESPONSE ${response.body}');
 
       bool isDuplicate = false;
       if (response.statusCode == 200) {
@@ -455,7 +459,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
           : null,
       'joining_year': selectedJoiningYear,
       'has_accepted_terms': _hasAcceptedTerms,
-      'device_id': 'web',
+      'client_type': 'web',
     };
 
     try {
@@ -464,6 +468,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(requestPayload),
       );
+      debugPrint('API register RESPONSE ${response.body}');
 
       final responseData = jsonDecode(response.body);
 
@@ -478,6 +483,19 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
             key: ApiEndpoints.accessTokenKey,
             value: normalizedAccessToken,
           );
+
+          try {
+            await WebApiService.updateClientTypeToWeb(
+              accessToken: normalizedAccessToken,
+            );
+          } catch (e) {
+            await BugReportService.reportApiFailure(
+              title: 'Registration client_type update failed (web)',
+              errorMessage: e.toString(),
+              pageUrl: '/registration',
+              endpoint: ApiEndpoints.updateClientType,
+            );
+          }
         }
 
         if (!mounted) return;
@@ -561,6 +579,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
         '${ApiEndpoints.termsAndConditions}?pathak_id=${ApiEndpoints.pathakIdInt}',
       );
       final response = await http.get(uri, headers: ApiEndpoints.jsonHeaders());
+      debugPrint('API terms-and-conditions RESPONSE ${response.body}');
 
       if (response.statusCode != 200) {
         await BugReportService.reportApiFailure(

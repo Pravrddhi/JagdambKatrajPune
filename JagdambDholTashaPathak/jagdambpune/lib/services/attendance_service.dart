@@ -245,6 +245,7 @@ class AttendanceService {
     int radiusMeters = 100,
     String? checkInTime,
     String? checkOutTime,
+    int? checkoutCooldownMinutes,
     int? allowedBeforeMinutes,
     int? allowedAfterMinutes,
     double? minimumPresentHours,
@@ -260,6 +261,8 @@ class AttendanceService {
         'check_in_time': checkInTime.trim(),
       if (checkOutTime != null && checkOutTime.trim().isNotEmpty)
         'check_out_time': checkOutTime.trim(),
+      if (checkoutCooldownMinutes != null)
+        'checkout_cooldown_minutes': checkoutCooldownMinutes,
       if (allowedBeforeMinutes != null)
         'allowed_minutes_before_check_in': allowedBeforeMinutes,
       if (allowedAfterMinutes != null)

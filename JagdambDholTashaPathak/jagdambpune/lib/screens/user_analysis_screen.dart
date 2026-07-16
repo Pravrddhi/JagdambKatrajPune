@@ -57,6 +57,83 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
     super.dispose();
   }
 
+  UserAnalysisStockUsage _buildStockUsageFromMaintenance(
+    UserAnalysisMaintenance maintenance,
+  ) {
+    final aggregatedByName = <String, _StockUsageAggregate>{};
+    for (final record in maintenance.records) {
+      for (final usedItem in record.usedStock) {
+        final itemName = usedItem.itemName.trim();
+        if (itemName.isEmpty) continue;
+
+        final key = itemName.toLowerCase();
+        final aggregate = aggregatedByName.putIfAbsent(
+          key,
+          () => _StockUsageAggregate(itemName: itemName),
+        );
+        aggregate.totalQuantityUsed += usedItem.quantityUsed;
+        if (usedItem.quantityUsed > 0) {
+          aggregate.eventsCount += 1;
+        }
+        aggregate.usageHistory.add(
+          StockUsageHistory(
+            eventId: record.eventId,
+            eventTitle: record.eventTitle,
+            eventDate: record.eventDate,
+            quantityUsed: usedItem.quantityUsed,
+          ),
+        );
+      }
+    }
+
+    final items =
+        aggregatedByName.values.map((aggregate) {
+          aggregate.usageHistory.sort((left, right) {
+            final leftDate = DateTime.tryParse(left.eventDate) ?? DateTime(0);
+            final rightDate = DateTime.tryParse(right.eventDate) ?? DateTime(0);
+            return rightDate.compareTo(leftDate);
+          });
+          return StockUsageItem(
+            inventoryItemId: 0,
+            itemName: aggregate.itemName,
+            category: 'maintenance',
+            totalQuantityUsed: aggregate.totalQuantityUsed,
+            eventsCount: aggregate.eventsCount,
+            usageHistory: aggregate.usageHistory,
+          );
+        }).toList()..sort((left, right) {
+          final quantityOrder = right.totalQuantityUsed.compareTo(
+            left.totalQuantityUsed,
+          );
+          if (quantityOrder != 0) return quantityOrder;
+          return left.itemName.toLowerCase().compareTo(
+            right.itemName.toLowerCase(),
+          );
+        });
+
+    final totalQuantityUsed = items.fold<int>(
+      0,
+      (sum, item) => sum + item.totalQuantityUsed,
+    );
+    final totalEventsWithUsage = maintenance.records.where((record) {
+      return record.usedStock.any((item) => item.quantityUsed > 0);
+    }).length;
+
+    return UserAnalysisStockUsage(
+      totalEventsWithUsage: totalEventsWithUsage,
+      totalQuantityUsed: totalQuantityUsed,
+      items: items,
+    );
+  }
+
+  UserAnalysisStockUsage _resolveStockUsage(UserAnalysis data) {
+    final stockUsage = data.stockUsage;
+    if (stockUsage != null && stockUsage.items.isNotEmpty) {
+      return stockUsage;
+    }
+    return _buildStockUsageFromMaintenance(data.maintenance);
+  }
+
   Future<void> _fetchAnalysis() async {
     setState(() {
       _isLoading = true;
@@ -138,7 +215,7 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
     final attendance = data.attendance;
     final maintenance = data.maintenance;
     final documents = data.documents;
-    final stockUsage = data.stockUsage ?? UserAnalysisStockUsage.empty;
+    final stockUsage = _resolveStockUsage(data);
 
     // Load profile photo if available
     pw.ImageProvider? profileImage;
@@ -517,11 +594,12 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
                       width: 0.5,
                     ),
                     columnWidths: {
-                      0: const pw.FlexColumnWidth(3),
-                      1: const pw.FlexColumnWidth(1.5),
-                      2: const pw.FlexColumnWidth(1.5),
-                      3: const pw.FlexColumnWidth(1.5),
-                      4: const pw.FlexColumnWidth(2),
+                      0: const pw.FlexColumnWidth(2.7),
+                      1: const pw.FlexColumnWidth(1.3),
+                      2: const pw.FlexColumnWidth(1.1),
+                      3: const pw.FlexColumnWidth(2.0),
+                      4: const pw.FlexColumnWidth(1.4),
+                      5: const pw.FlexColumnWidth(1.8),
                     },
                     children: [
                       pw.TableRow(
@@ -529,6 +607,8 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
                         children: [
                           'Event',
                           'Date',
+                          'Dhol',
+                          'Stock Used',
                           'Work Type',
                           'Status',
                           'Approved By',
@@ -539,6 +619,21 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
                           children: [
                             _tableCell(r.eventTitle),
                             _tableCell(_formatDate(r.eventDate)),
+                            _tableCell(
+                              r.dholNumber?.trim().isNotEmpty == true
+                                  ? 'Dhol #${r.dholNumber!.trim()}'
+                                  : '-',
+                            ),
+                            _tableCell(
+                              r.usedStock.isEmpty
+                                  ? '-'
+                                  : r.usedStock
+                                        .map(
+                                          (item) =>
+                                              '${item.itemName}${item.quantityUsed > 0 ? ' x${item.quantityUsed}' : ''}',
+                                        )
+                                        .join(', '),
+                            ),
                             _tableCell(r.workType.replaceAll('_', ' ')),
                             _tableCell(r.status.toUpperCase()),
                             _tableCell(r.approvedBy ?? '—'),
@@ -896,6 +991,7 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
     }
 
     final data = _data!;
+    final stockUsage = _resolveStockUsage(data);
     return TabBarView(
       controller: _tabController,
       children: [
@@ -903,9 +999,7 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
         _GatTab(gat: data.gat),
         _AttendanceTab(attendance: data.attendance),
         _MaintenanceTab(maintenance: data.maintenance),
-        _StockUsageTab(
-          stockUsage: data.stockUsage ?? UserAnalysisStockUsage.empty,
-        ),
+        _StockUsageTab(stockUsage: stockUsage),
         _DocumentsTab(documents: data.documents),
       ],
     );
@@ -1314,6 +1408,22 @@ class _MaintenanceCard extends StatelessWidget {
                   icon: Icons.calendar_today,
                   label: _fmtDate(record.eventDate),
                 ),
+                if (record.dholNumber != null &&
+                    record.dholNumber!.trim().isNotEmpty)
+                  _MetaChip(
+                    icon: Icons.music_note,
+                    label: 'Dhol #${record.dholNumber!.trim()}',
+                  ),
+                if (record.usedStock.isNotEmpty)
+                  _MetaChip(
+                    icon: Icons.inventory_2_outlined,
+                    label: record.usedStock
+                        .map(
+                          (item) =>
+                              '${item.itemName}${item.quantityUsed > 0 ? ' x${item.quantityUsed}' : ''}',
+                        )
+                        .join(', '),
+                  ),
                 _MetaChip(
                   icon: Icons.build,
                   label: record.workType.replaceAll('_', ' '),
@@ -1367,7 +1477,7 @@ class _StockUsageTab extends StatelessWidget {
         child: Padding(
           padding: EdgeInsets.all(24),
           child: Text(
-            'No stock usage recorded.',
+            'No stock usage recorded from maintenance events.',
             style: TextStyle(color: Colors.grey),
           ),
         ),
@@ -1386,7 +1496,7 @@ class _StockUsageTab extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             _AttendanceStat(
-              label: 'Total Used',
+              label: 'Used Till Date',
               count: stockUsage.totalQuantityUsed,
               color: Colors.deepOrange,
             ),
@@ -1434,7 +1544,7 @@ class _StockUsageItemCard extends StatelessWidget {
           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
         ),
         subtitle: Text(
-          '${item.category[0].toUpperCase()}${item.category.substring(1)} · ${item.eventsCount} event${item.eventsCount == 1 ? '' : 's'}',
+          '${item.category[0].toUpperCase()}${item.category.substring(1)} · ${item.eventsCount} event${item.eventsCount == 1 ? '' : 's'} · Used till date: ${item.totalQuantityUsed}',
           style: const TextStyle(fontSize: 12, color: Colors.grey),
         ),
         trailing: Container(
@@ -1452,49 +1562,74 @@ class _StockUsageItemCard extends StatelessWidget {
             ),
           ),
         ),
-        children: item.usageHistory.map((h) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Row(
-              children: [
-                const Icon(Icons.event_note, size: 14, color: Colors.grey),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    h.eventTitle,
-                    style: const TextStyle(fontSize: 12),
-                  ),
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'Total used till date: ${item.totalQuantityUsed}',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primaryMaroon,
                 ),
-                Text(
-                  _fmtDate(h.eventDate),
-                  style: const TextStyle(fontSize: 11, color: Colors.grey),
-                ),
-                const SizedBox(width: 10),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 7,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryMaroon.withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    'x${h.quantityUsed}',
-                    style: const TextStyle(
-                      color: AppColors.primaryMaroon,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 11,
+              ),
+            ),
+          ),
+          ...item.usageHistory.map((h) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.event_note, size: 14, color: Colors.grey),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      h.eventTitle,
+                      style: const TextStyle(fontSize: 12),
                     ),
                   ),
-                ),
-              ],
-            ),
-          );
-        }).toList(),
+                  Text(
+                    _fmtDate(h.eventDate),
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryMaroon.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'x${h.quantityUsed}',
+                      style: const TextStyle(
+                        color: AppColors.primaryMaroon,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
       ),
     );
   }
+}
+
+class _StockUsageAggregate {
+  final String itemName;
+  int totalQuantityUsed = 0;
+  int eventsCount = 0;
+  final List<StockUsageHistory> usageHistory = <StockUsageHistory>[];
+
+  _StockUsageAggregate({required this.itemName});
 }
 
 // ── Documents Tab ──────────────────────────────────────────────────────────
