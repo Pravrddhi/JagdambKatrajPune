@@ -1445,6 +1445,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           otherCategoryName: otherCategoryController.text.trim(),
           name: nameController.text.trim(),
           quantity: int.parse(quantityController.text.trim()),
+          adjustmentType: 'increase',
         ),
       );
 
@@ -1460,65 +1461,126 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   Future<void> _openUpdateStockForm(InventoryItem item) async {
     final formKey = GlobalKey<FormState>();
     final quantityController = TextEditingController();
+    var isIncrease = true;
 
     final shouldSubmit = await showDialog<bool>(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('Update Stock'),
-          content: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Item: ${item.name}',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            return AlertDialog(
+              title: const Text('Update Stock'),
+              content: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Item: ${item.name}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Current Quantity: ${item.quantityAvailable}',
+                      style: const TextStyle(color: Colors.black54),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Text(
+                          'Action:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: ToggleButtons(
+                              isSelected: <bool>[isIncrease, !isIncrease],
+                              borderRadius: BorderRadius.circular(10),
+                              borderWidth: 1.6,
+                              borderColor: AppColors.primaryMaroon,
+                              selectedBorderColor: AppColors.primaryMaroon,
+                              color: AppColors.primaryMaroon,
+                              selectedColor: Colors.white,
+                              fillColor: AppColors.primaryMaroon,
+                              textStyle: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                              ),
+                              constraints: const BoxConstraints(
+                                minHeight: 40,
+                                minWidth: 48,
+                              ),
+                              onPressed: (index) {
+                                setLocalState(() {
+                                  isIncrease = index == 0;
+                                });
+                              },
+                              children: const [
+                                Tooltip(
+                                  message: 'Increase stock',
+                                  child: Text('+'),
+                                ),
+                                Tooltip(
+                                  message: 'Decrease stock',
+                                  child: Text('-'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: quantityController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: isIncrease
+                            ? 'Quantity to Add'
+                            : 'Quantity to Remove',
+                      ),
+                      validator: (value) {
+                        final qty = int.tryParse(value ?? '');
+                        if (qty == null || qty <= 0) {
+                          return 'Enter a valid quantity';
+                        }
+                        if (!isIncrease && qty > item.quantityAvailable) {
+                          return 'Cannot remove more than available stock';
+                        }
+                        return null;
+                      },
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'Current Quantity: ${item.quantityAvailable}',
-                  style: const TextStyle(color: Colors.black54),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: quantityController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Quantity to Add',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
                   ),
-                  validator: (value) {
-                    final qty = int.tryParse(value ?? '');
-                    if (qty == null || qty <= 0) {
-                      return 'Enter a valid quantity';
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    if (formKey.currentState?.validate() ?? false) {
+                      Navigator.of(context).pop(true);
                     }
-                    return null;
                   },
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  child: const Text('Update'),
                 ),
               ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.primaryMaroon,
-              ),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (formKey.currentState?.validate() ?? false) {
-                  Navigator.of(context).pop(true);
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                foregroundColor: AppColors.primaryMaroon,
-              ),
-              child: const Text('Update'),
-            ),
-          ],
+            );
+          },
         );
       },
     );
@@ -1529,14 +1591,21 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
 
     try {
+      final absoluteQty = int.parse(quantityController.text.trim());
+      final adjustmentType = isIncrease ? 'increase' : 'decrease';
+      debugPrint(
+        'API update-stock REQUEST item=${item.id} qty=$absoluteQty adjustment_type=$adjustmentType',
+      );
       final response = await _withApiLoader(
         () => MaintenanceService.createOrUpdateInventory(
           category: item.category,
           otherCategoryName: item.otherCategoryName,
           name: item.name,
-          quantity: int.parse(quantityController.text.trim()),
+          quantity: absoluteQty,
+          adjustmentType: adjustmentType,
         ),
       );
+      debugPrint('API update-stock RESPONSE ${response.toString()}');
       _showSnack(response['message']?.toString() ?? 'Stock updated.');
       await _loadInventory();
     } catch (e) {
@@ -1763,6 +1832,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           inventoryItemId: item.id,
           requestedQuantity: int.parse(quantityController.text.trim()),
           note: noteController.text.trim(),
+          adjustmentType: 'increase',
           eventId: selectedEventId,
         ),
       );
@@ -1911,6 +1981,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           inventoryItemId: item.id,
           requestedQuantity: 1,
           note: noteController.text.trim(),
+          adjustmentType: 'decrease',
           maintenanceId: selectedMaintenance?.maintenanceId,
           eventId: selectedEventId,
         ),

@@ -10,6 +10,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:table_calendar/table_calendar.dart';
 
+import '../config/app_config.dart';
 import '../services/attendance_service.dart';
 import '../config/api_endpoints.dart';
 import '../services/maintenance_service.dart';
@@ -43,7 +44,8 @@ class AttendanceModuleScreen extends StatefulWidget {
 
 class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     with SingleTickerProviderStateMixin {
-  static const int _checkoutCooldownMinutes = 30;
+  static const int _defaultCheckoutCooldownMinutes =
+      AppConfig.defaultCheckoutCooldownMinutes;
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
   static const String _maintenanceCheckoutBlockedMessage =
       'Complete and get your Dhol maintenance approved to unlock checkout.';
@@ -85,6 +87,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
   String? _configuredCheckOutTime; // e.g. "18:00"
   int _configuredAllowedBeforeMinutes = 15;
   int _configuredAllowedAfterMinutes = 15;
+  int _configuredCheckoutCooldownMinutes = _defaultCheckoutCooldownMinutes;
   double _configuredMinimumPresentHours = 4.0;
   DateTime? _configuredSeasonStartDate;
   DateTime? _configuredSeasonEndDate;
@@ -254,7 +257,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         .trim()
         .toLowerCase()
         .replaceAll(RegExp(r'[^a-z]'), '');
-    return normalized == 'dhol';
+    return normalized.contains('dhol');
   }
 
   Future<bool> _validateMaintenanceApprovalForCheckout() async {
@@ -277,6 +280,17 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         final completionBlockMessage =
             await _resolveCheckoutBlockFromCompletionRequests();
         if (completionBlockMessage == null) {
+          if (_requiresMaintenanceApprovalForCheckout) {
+            if (mounted) {
+              setState(() {
+                _isAttendanceBlocked = true;
+                _attendanceBlockedMessage ??=
+                    _maintenanceCheckoutBlockedMessage;
+              });
+            }
+            return false;
+          }
+
           if (mounted && _isAttendanceBlocked) {
             setState(() {
               _isAttendanceBlocked = false;
@@ -346,6 +360,16 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
       return true;
     } catch (_) {
       // Keep checkout flow resilient on transient validation errors.
+      if (_requiresMaintenanceApprovalForCheckout) {
+        if (mounted) {
+          setState(() {
+            _isAttendanceBlocked = true;
+            _attendanceBlockedMessage ??= _maintenanceCheckoutBlockedMessage;
+          });
+        }
+        return false;
+      }
+
       if (mounted && _isAttendanceBlocked) {
         setState(() {
           _isAttendanceBlocked = false;
@@ -772,7 +796,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     }
     final checkInAt = _lastSuccessfulCheckInAt;
     if (checkInAt == null) return null;
-    return checkInAt.add(const Duration(minutes: _checkoutCooldownMinutes));
+    return checkInAt.add(Duration(minutes: _configuredCheckoutCooldownMinutes));
   }
 
   DateTime get _effectiveNowForCooldown {
@@ -819,7 +843,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
 
   double get _checkoutCooldownProgress {
     final remaining = _checkoutCooldownRemaining ?? Duration.zero;
-    const totalSeconds = _checkoutCooldownMinutes * 60;
+    final totalSeconds = _configuredCheckoutCooldownMinutes * 60;
     final remainingSeconds = remaining.inSeconds.clamp(0, totalSeconds);
     return 1 - (remainingSeconds / totalSeconds);
   }
@@ -886,7 +910,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
     _serverClockOffsetSeconds = restoredOffset;
 
     final checkInAt = allowedAt.subtract(
-      const Duration(minutes: _checkoutCooldownMinutes),
+      Duration(minutes: _configuredCheckoutCooldownMinutes),
     );
 
     if (allowedAt.isBefore(_effectiveNowForCooldown)) {
@@ -1256,6 +1280,14 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           ) ??
           int.tryParse(response['allowed_after_minutes']?.toString() ?? '') ??
           int.tryParse(response['check_in_after_minutes']?.toString() ?? '');
+      final checkoutCooldownMinutes =
+          int.tryParse(
+            response['checkout_cooldown_minutes']?.toString() ?? '',
+          ) ??
+          int.tryParse(
+            response['check_out_cooldown_minutes']?.toString() ?? '',
+          ) ??
+          int.tryParse(response['checkout_wait_minutes']?.toString() ?? '');
       final minimumPresentHours =
           double.tryParse(
             response['minimum_present_hours']?.toString() ?? '',
@@ -1294,6 +1326,9 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         }
         if (allowedAfter != null) {
           _configuredAllowedAfterMinutes = allowedAfter;
+        }
+        if (checkoutCooldownMinutes != null && checkoutCooldownMinutes > 0) {
+          _configuredCheckoutCooldownMinutes = checkoutCooldownMinutes;
         }
         if (minimumPresentHours != null) {
           _configuredMinimumPresentHours = minimumPresentHours;
@@ -1465,7 +1500,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           if (serverAllowedAt != null) {
             effectiveAllowedAt = serverAllowedAt;
             inferredCheckInAt = serverAllowedAt.subtract(
-              const Duration(minutes: _checkoutCooldownMinutes),
+              Duration(minutes: _configuredCheckoutCooldownMinutes),
             );
             source = 'server';
           } else {
@@ -1480,7 +1515,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
                 : null;
             inferredCheckInAt = configuredFallback ?? nowTime;
             effectiveAllowedAt = inferredCheckInAt.add(
-              const Duration(minutes: _checkoutCooldownMinutes),
+              Duration(minutes: _configuredCheckoutCooldownMinutes),
             );
           }
 
@@ -1586,10 +1621,10 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           final effectiveAllowedAt =
               serverAllowedAt ??
               nowTime.add(
-                const Duration(minutes: _checkoutCooldownMinutes - 1),
+                Duration(minutes: _configuredCheckoutCooldownMinutes - 1),
               );
           final effectiveCheckInAt = effectiveAllowedAt.subtract(
-            const Duration(minutes: _checkoutCooldownMinutes),
+            Duration(minutes: _configuredCheckoutCooldownMinutes),
           );
 
           _lastSuccessfulCheckInAt = effectiveCheckInAt;
@@ -1598,7 +1633,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
           _isCheckoutScannerUnlocked = false;
           _hasMarkedFromCurrentScan = false;
           _scanInfo =
-              'Checkout is allowed only after 30 minutes from check-in.';
+              'Checkout is allowed only after $_configuredCheckoutCooldownMinutes minutes from check-in.';
 
           await _persistCheckoutCooldown(
             checkInAt: effectiveCheckInAt,
@@ -1674,13 +1709,13 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
         final responseServerNow = _parseServerDateTime(response['server_now']);
         final checkInRecordedAt =
             responseAllowedAt?.subtract(
-              const Duration(minutes: _checkoutCooldownMinutes),
+              Duration(minutes: _configuredCheckoutCooldownMinutes),
             ) ??
             DateTime.now();
         final checkoutAllowedAt =
             responseAllowedAt ??
             checkInRecordedAt.add(
-              const Duration(minutes: _checkoutCooldownMinutes),
+              Duration(minutes: _configuredCheckoutCooldownMinutes),
             );
         popupTitle = isLateStatus
             ? 'Late Check-in Marked!'
@@ -1690,7 +1725,7 @@ class _AttendanceModuleScreenState extends State<AttendanceModuleScreen>
             : '\nStatus: Present.';
         final checkoutLine =
             '\nCheckout can be marked after ${_formatTimeLabel(checkoutAllowedAt)} '
-            '($_checkoutCooldownMinutes min cooldown).';
+            '($_configuredCheckoutCooldownMinutes min cooldown).';
         final missedCheckoutNote = hadMissedCheckoutFromPreviousDay
             ? '\nNote: Previous day checkout was missed. Backend should mark that day as absent.'
             : '';

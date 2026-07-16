@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../config/app_config.dart';
 import '../services/attendance_service.dart';
 import '../theme/app_colors.dart';
 import '../utils/qr_download_helper.dart';
@@ -39,6 +40,8 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
   int _configuredRadiusMeters = 100;
   String? _configuredCheckInTime;
   String? _configuredCheckOutTime;
+  int _configuredCheckoutCooldownMinutes =
+      AppConfig.defaultCheckoutCooldownMinutes;
   int _configuredAllowedBeforeMinutes = 15;
   int _configuredAllowedAfterMinutes = 15;
   double _configuredMinimumPresentHours = 4.0;
@@ -231,6 +234,14 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
           ) ??
           int.tryParse(response['allowed_after_minutes']?.toString() ?? '') ??
           int.tryParse(response['check_in_after_minutes']?.toString() ?? '');
+      final checkoutCooldownMinutes =
+          int.tryParse(
+            response['checkout_cooldown_minutes']?.toString() ?? '',
+          ) ??
+          int.tryParse(
+            response['check_out_cooldown_minutes']?.toString() ?? '',
+          ) ??
+          int.tryParse(response['checkout_wait_minutes']?.toString() ?? '');
       final minimumPresentHours =
           double.tryParse(
             response['minimum_present_hours']?.toString() ?? '',
@@ -269,6 +280,9 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
         }
         if (allowedAfter != null) {
           _configuredAllowedAfterMinutes = allowedAfter;
+        }
+        if (checkoutCooldownMinutes != null && checkoutCooldownMinutes > 0) {
+          _configuredCheckoutCooldownMinutes = checkoutCooldownMinutes;
         }
         if (minimumPresentHours != null) {
           _configuredMinimumPresentHours = minimumPresentHours;
@@ -344,6 +358,7 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
         radiusMeters: _configuredRadiusMeters,
         checkInTime: _configuredCheckInTime,
         checkOutTime: _configuredCheckOutTime,
+        checkoutCooldownMinutes: _configuredCheckoutCooldownMinutes,
         allowedBeforeMinutes: _configuredAllowedBeforeMinutes,
         allowedAfterMinutes: _configuredAllowedAfterMinutes,
         minimumPresentHours: _configuredMinimumPresentHours,
@@ -386,6 +401,9 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
     );
     final allowedAfterCtrl = TextEditingController(
       text: _configuredAllowedAfterMinutes.toString(),
+    );
+    final checkoutCooldownCtrl = TextEditingController(
+      text: _configuredCheckoutCooldownMinutes.toString(),
     );
     final minimumPresentHoursCtrl = TextEditingController(
       text: _minimumPresentHoursLabel,
@@ -521,6 +539,29 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                       hintText: 'e.g. 15',
+                      suffixText: 'min',
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Checkout Cooldown After Check-in (minutes)',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'Users can mark checkout only after this cooldown.',
+                    style: TextStyle(fontSize: 11, color: Colors.grey),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: checkoutCooldownCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: 'e.g. 30',
                       suffixText: 'min',
                     ),
                   ),
@@ -683,6 +724,21 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                   final allowedAfter =
                       int.tryParse(allowedAfterCtrl.text.trim()) ??
                       _configuredAllowedAfterMinutes;
+                  final checkoutCooldown =
+                      int.tryParse(checkoutCooldownCtrl.text.trim()) ??
+                      _configuredCheckoutCooldownMinutes;
+                  if (checkoutCooldown <= 0) {
+                    ScaffoldMessenger.of(dialogContext)
+                      ..hideCurrentSnackBar()
+                      ..showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Checkout cooldown must be greater than 0 minutes.',
+                          ),
+                        ),
+                      );
+                    return;
+                  }
                   final minimumPresentHours =
                       double.tryParse(minimumPresentHoursCtrl.text.trim()) ??
                       _configuredMinimumPresentHours;
@@ -709,6 +765,7 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                     'radius': radius,
                     'allowedBefore': allowedBefore,
                     'allowedAfter': allowedAfter,
+                    'checkoutCooldown': checkoutCooldown,
                     'minimumPresentHours': minimumPresentHours,
                     'checkInStr': checkInStr,
                     'checkOutStr': checkOutStr,
@@ -728,6 +785,7 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
       final radius = settingsResult['radius'] as int;
       final allowedBefore = settingsResult['allowedBefore'] as int;
       final allowedAfter = settingsResult['allowedAfter'] as int;
+      final checkoutCooldown = settingsResult['checkoutCooldown'] as int;
       final minimumPresentHours =
           settingsResult['minimumPresentHours'] as double;
       final checkInStr = settingsResult['checkInStr'] as String?;
@@ -753,6 +811,7 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
           radiusMeters: radius,
           checkInTime: checkInStr,
           checkOutTime: checkOutStr,
+          checkoutCooldownMinutes: checkoutCooldown,
           allowedBeforeMinutes: allowedBefore,
           allowedAfterMinutes: allowedAfter,
           minimumPresentHours: minimumPresentHours,
@@ -766,6 +825,7 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
             _configuredRadiusMeters = radius;
             _configuredAllowedBeforeMinutes = allowedBefore;
             _configuredAllowedAfterMinutes = allowedAfter;
+            _configuredCheckoutCooldownMinutes = checkoutCooldown;
             _configuredMinimumPresentHours = minimumPresentHours;
             _configuredCheckInTime = checkInStr;
             _configuredCheckOutTime = checkOutStr;
@@ -784,6 +844,7 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
     radiusCtrl.dispose();
     allowedBeforeCtrl.dispose();
     allowedAfterCtrl.dispose();
+    checkoutCooldownCtrl.dispose();
     minimumPresentHoursCtrl.dispose();
   }
 
@@ -1030,6 +1091,11 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
                       ),
                       const SizedBox(height: 4),
                       Text(
+                        'Checkout cooldown: $_configuredCheckoutCooldownMinutes min after check-in',
+                        style: const TextStyle(color: AppColors.primaryMaroon),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
                         'Present if stayed at least: $_minimumPresentHoursLabel hour(s)',
                         style: const TextStyle(color: AppColors.primaryMaroon),
                       ),
@@ -1093,7 +1159,7 @@ class _AttendanceSettingsPanelState extends State<AttendanceSettingsPanel> {
             ),
             const SizedBox(height: 4),
             const Text(
-              'Set check-in time, attendance window, minimum present hours, season dates, and radius.',
+              'Set check-in time, checkout cooldown, attendance window, minimum present hours, season dates, and radius.',
               style: TextStyle(
                 color: AppColors.primaryMaroon,
                 fontSize: 12,

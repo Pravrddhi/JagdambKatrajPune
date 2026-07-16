@@ -66,12 +66,15 @@ class MaintenanceService {
     required String name,
     required int quantity,
     String otherCategoryName = '',
+    String? adjustmentType,
   }) async {
     final payload = <String, dynamic>{
       'category': category,
       'name': name,
       'quantity': quantity,
       'other_category_name': otherCategoryName,
+      if (adjustmentType != null && adjustmentType.trim().isNotEmpty)
+        'adjustment_type': adjustmentType.trim(),
     };
 
     final response = await AuthorizedApiService.sendWithAutoRefresh(
@@ -111,6 +114,38 @@ class MaintenanceService {
     return _decodeAndValidate(
       response,
       fallbackError: 'Failed to rename inventory item.',
+    );
+  }
+
+  static Future<Map<String, dynamic>> updateInventoryQuantity({
+    required int inventoryItemId,
+    required int quantity,
+    required String adjustmentType,
+    required String name,
+    String? category,
+    String otherCategoryName = '',
+  }) async {
+    final payload = <String, dynamic>{
+      'quantity': quantity,
+      'adjustment_type': adjustmentType,
+      'name': name,
+      if (category != null && category.trim().isNotEmpty) 'category': category,
+      if (otherCategoryName.trim().isNotEmpty)
+        'other_category_name': otherCategoryName,
+    };
+
+    final response = await AuthorizedApiService.sendWithAutoRefresh(
+      null,
+      (token) => http.patch(
+        Uri.parse(ApiEndpoints.getMaintenanceInventoryItem(inventoryItemId)),
+        headers: ApiEndpoints.authorizedHeaders(token),
+        body: jsonEncode(payload),
+      ),
+    );
+
+    return _decodeAndValidate(
+      response,
+      fallbackError: 'Failed to update stock quantity.',
     );
   }
 
@@ -163,11 +198,14 @@ class MaintenanceService {
     String note = '',
     int? maintenanceId,
     int? eventId,
+    String? adjustmentType,
   }) async {
     final payload = <String, dynamic>{
       'inventory_item_id': inventoryItemId,
       'requested_quantity': requestedQuantity,
       'note': note,
+      if (adjustmentType != null && adjustmentType.trim().isNotEmpty)
+        'adjustment_type': adjustmentType.trim(),
       if (maintenanceId != null) 'maintenance_id': maintenanceId,
       if (eventId != null) 'event_id': eventId,
     };
