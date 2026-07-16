@@ -89,4 +89,7 @@ class AppConfig {
 
   /// Pathak identifier sent with registration and instrument-fetch requests.
   static const String pathakId = '1';
+
+  /// Default checkout cooldown after check-in in minutes.
+  static const int defaultCheckoutCooldownMinutes = 30;
 }

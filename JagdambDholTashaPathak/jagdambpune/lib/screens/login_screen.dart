@@ -215,8 +215,8 @@ class _LoginScreenState extends State<LoginScreen> {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => WillPopScope(
-        onWillPop: () async => false,
+      builder: (_) => PopScope(
+        canPop: false,
         child: AlertDialog(
           title: const Text('Update Required'),
           content: Text(
@@ -336,10 +336,10 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _login() async {
-    final bool isWeb = kIsWeb;
+    const bool isWeb = kIsWeb;
     final String pin = _pinController.text.trim();
     final String phoneNumber = _phoneController.text.trim();
-    final String webPin = _passwordController.text;
+    final String webPassword = _passwordController.text;
 
     if (isWeb) {
       if (phoneNumber.length != 10) {
@@ -348,7 +348,7 @@ class _LoginScreenState extends State<LoginScreen> {
         });
         return;
       }
-      if (webPin.isEmpty || webPin.length < 6) {
+      if (webPassword.isEmpty || webPassword.length < 6) {
         setState(() {
           _errorMessage = 'Please enter a valid 6-digit PIN.';
         });
@@ -369,36 +369,53 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final Map<String, dynamic> data;
+      String? loginDeviceId;
 
       if (isWeb) {
         data = await WebApiService.loginWithPassword(
           phoneNumber: phoneNumber,
-          pin: webPin,
+          password: webPassword,
         );
       } else {
-        final response = await http.post(
-          Uri.parse(ApiEndpoints.loginWithPin),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({'pin': pin, 'device_id': await getDeviceId()}),
-        );
+        final deviceId = await getDeviceId();
+        loginDeviceId = deviceId;
 
-        final decoded = jsonDecode(response.body);
-        final bool isSuccessful =
-            response.statusCode == 200 && decoded['status'] == true;
-        if (!isSuccessful) {
+        Map<String, dynamic> resolvedData;
+        try {
+          final response = await http.post(
+            Uri.parse(ApiEndpoints.loginWithPin),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'pin': pin, 'device_id': deviceId}),
+          );
+          debugPrint('API login-with-pin RESPONSE ${response.body}');
+
+          final decoded = jsonDecode(response.body);
+          final bool isSuccessful =
+              response.statusCode == 200 && decoded['status'] == true;
+          if (!isSuccessful) {
+            await BugReportService.reportApiFailure(
+              title: 'Login API failed',
+              errorMessage: response.body,
+              pageUrl: '/login',
+              statusCode: response.statusCode,
+              endpoint: ApiEndpoints.loginWithPin,
+            );
+            setState(() {
+              _errorMessage = _extractLoginErrorMessageFromResponse(decoded);
+            });
+            return;
+          }
+          resolvedData = decoded;
+        } catch (e) {
           await BugReportService.reportApiFailure(
-            title: 'Login API failed',
-            errorMessage: response.body,
+            title: 'PIN Login API exception',
+            errorMessage: e.toString(),
             pageUrl: '/login',
-            statusCode: response.statusCode,
             endpoint: ApiEndpoints.loginWithPin,
           );
-          setState(() {
-            _errorMessage = _extractLoginErrorMessageFromResponse(decoded);
-          });
-          return;
+          rethrow;
         }
-        data = decoded;
+        data = resolvedData;
       }
 
       final isGatPramukh =
@@ -426,6 +443,57 @@ class _LoginScreenState extends State<LoginScreen> {
         });
         return;
       }
+
+      final responseUserId = _extractUserIdFromResponse(data);
+      final tokenUserId = _extractUserIdFromAccessToken(accessToken);
+      final userId = responseUserId ?? tokenUserId;
+      debugPrint(
+        'API resolve-user-id RESPONSE {"response_user_id":$responseUserId,"token_user_id":$tokenUserId,"resolved_user_id":$userId}',
+      );
+      final cachedFcmToken = await storage.read(key: 'cached_fcm_token');
+      final normalizedClientType = _extractClientTypeFromResponse(
+        data,
+      )?.trim().toLowerCase();
+      final isClientTypeNull =
+          normalizedClientType == null ||
+          normalizedClientType.isEmpty ||
+          normalizedClientType == 'null' ||
+          normalizedClientType == 'none';
+
+      if (isClientTypeNull) {
+        try {
+          if (isWeb) {
+            await WebApiService.updateClientTypeToWeb(
+              fcmToken: cachedFcmToken,
+              accessToken: accessToken,
+            );
+          } else {
+            await WebApiService.updateClientTypeToDevice(
+              fcmToken: cachedFcmToken,
+              accessToken: accessToken,
+              deviceId: loginDeviceId,
+            );
+          }
+        } catch (e) {
+          await BugReportService.reportApiFailure(
+            title: 'Update client_type failed after client-type-check',
+            errorMessage: e.toString(),
+            pageUrl: '/login',
+            endpoint: ApiEndpoints.updateClientType,
+          );
+        }
+      }
+
+      if (isWeb && normalizedClientType == 'device') {
+        if (mounted) {
+          setState(() {
+            _errorMessage =
+                'You are registered on mobile. You cannot login using web.';
+          });
+        }
+        return;
+      }
+
       final shouldShowRejectionPopup = data['show_rejection_popup'] == true;
       final rejectionTitle = data['rejection_title']?.toString().trim();
       final rejectionMessage = data['rejection_message']?.toString().trim();
@@ -595,10 +663,30 @@ class _LoginScreenState extends State<LoginScreen> {
             ? ApiEndpoints.passwordLogin
             : ApiEndpoints.loginWithPin,
       );
+
+      if (isWeb && e is WebLoginException && e.statusCode == 403) {
+        final popupMessage = e.clientTypeMissing
+            ? 'Client type is blank for this account. Please try again.'
+            : 'You are registered on mobile. You cannot login using web.';
+        if (mounted) {
+          setState(() {
+            _errorMessage = popupMessage;
+          });
+        }
+
+        await _showLoginErrorPopup(popupMessage);
+        return;
+      }
+
+      final friendlyMessage = _friendlyErrorMessage(e);
       if (mounted) {
         setState(() {
-          _errorMessage = _friendlyErrorMessage(e);
+          _errorMessage = friendlyMessage;
         });
+      }
+
+      if (isWeb) {
+        await _showLoginErrorPopup(friendlyMessage);
       }
     } finally {
       if (mounted) {
@@ -616,7 +704,145 @@ class _LoginScreenState extends State<LoginScreen> {
     await storage.delete(key: ApiEndpoints.gatPramukhNameKey);
   }
 
+  Future<void> _showLoginErrorPopup(String message) async {
+    if (!mounted || message.trim().isEmpty) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Login Error'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _normalizeDigits(String value) => value.replaceAll(RegExp(r'\D'), '');
+
+  String? _extractClientTypeFromResponse(Map<String, dynamic> data) {
+    String? asText(dynamic value) {
+      final text = value?.toString().trim() ?? '';
+      return text.isEmpty ? null : text;
+    }
+
+    final topLevel = asText(data['client_type']);
+    if (topLevel != null) return topLevel;
+
+    final topLevelAlt = asText(data['clientType']);
+    if (topLevelAlt != null) return topLevelAlt;
+
+    final nestedData = data['data'];
+    if (nestedData is Map<String, dynamic>) {
+      final nested = asText(nestedData['client_type']);
+      if (nested != null) return nested;
+
+      final nestedAlt = asText(nestedData['clientType']);
+      if (nestedAlt != null) return nestedAlt;
+
+      final userNode = nestedData['user'];
+      if (userNode is Map<String, dynamic>) {
+        final userType = asText(userNode['client_type']);
+        if (userType != null) return userType;
+      }
+    }
+
+    final userNode = data['user'];
+    if (userNode is Map<String, dynamic>) {
+      final userType = asText(userNode['client_type']);
+      if (userType != null) return userType;
+    }
+
+    return null;
+  }
+
+  int? _findUserIdInDynamic(dynamic node, {int depth = 0}) {
+    if (depth > 4 || node == null) return null;
+
+    int? asInt(dynamic value) {
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      if (value != null) return int.tryParse(value.toString());
+      return null;
+    }
+
+    if (node is Map<String, dynamic>) {
+      const directKeys = <String>[
+        'user_id',
+        'userId',
+        'userid',
+        'id',
+        'uid',
+        'pk',
+        'sub',
+      ];
+
+      for (final key in directKeys) {
+        final value = asInt(node[key]);
+        if (value != null && value > 0) return value;
+      }
+
+      final nestedKeys = <String>['user', 'data', 'result', 'profile'];
+      for (final key in nestedKeys) {
+        final nested = node[key];
+        final found = _findUserIdInDynamic(nested, depth: depth + 1);
+        if (found != null && found > 0) return found;
+      }
+
+      for (final value in node.values) {
+        if (value is Map || value is List) {
+          final found = _findUserIdInDynamic(value, depth: depth + 1);
+          if (found != null && found > 0) return found;
+        }
+      }
+      return null;
+    }
+
+    if (node is Map) {
+      for (final value in node.values) {
+        final found = _findUserIdInDynamic(value, depth: depth + 1);
+        if (found != null && found > 0) return found;
+      }
+      return null;
+    }
+
+    if (node is List) {
+      for (final item in node) {
+        final found = _findUserIdInDynamic(item, depth: depth + 1);
+        if (found != null && found > 0) return found;
+      }
+      return null;
+    }
+
+    return null;
+  }
+
+  int? _extractUserIdFromResponse(Map<String, dynamic> data) {
+    return _findUserIdInDynamic(data);
+  }
+
+  int? _extractUserIdFromAccessToken(String accessToken) {
+    try {
+      final parts = accessToken.split('.');
+      if (parts.length < 2) return null;
+
+      String payload = parts[1];
+      payload = payload.replaceAll('-', '+').replaceAll('_', '/');
+      while (payload.length % 4 != 0) {
+        payload += '=';
+      }
+
+      final decoded = utf8.decode(base64Decode(payload));
+      final map = jsonDecode(decoded);
+      return _findUserIdInDynamic(map);
+    } catch (_) {
+      return null;
+    }
+  }
 
   dynamic _pickRejectedField(
     Map<String, dynamic> payload,
@@ -1139,11 +1365,11 @@ class _LoginScreenState extends State<LoginScreen> {
               isFeatureFlagsLoading:
                   flagsProvider.isLoading && flagsProvider.flags == null,
               onLogin: _login,
-              onRegistrationTap: () {
-                Navigator.pushNamed(context, '/register');
-              },
               onResetPinTap: () {
                 Navigator.pushNamed(context, '/resetPin');
+              },
+              onRegistrationTap: () {
+                Navigator.pushNamed(context, '/register');
               },
               onPhoneChanged: (_) {
                 if (_errorMessage.isNotEmpty) {

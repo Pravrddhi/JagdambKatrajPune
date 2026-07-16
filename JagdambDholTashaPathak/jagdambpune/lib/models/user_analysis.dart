@@ -159,6 +159,8 @@ class MaintenanceRecord {
   final int eventId;
   final String eventTitle;
   final String eventDate;
+  final String? dholNumber;
+  final List<MaintenanceUsedStockItem> usedStock;
   final String? instrumentName;
   final String workType;
   final String status;
@@ -171,6 +173,8 @@ class MaintenanceRecord {
     required this.eventId,
     required this.eventTitle,
     required this.eventDate,
+    this.dholNumber,
+    this.usedStock = const <MaintenanceUsedStockItem>[],
     this.instrumentName,
     required this.workType,
     required this.status,
@@ -181,10 +185,28 @@ class MaintenanceRecord {
   });
 
   factory MaintenanceRecord.fromJson(Map<String, dynamic> j) {
+    final rawUsedStock =
+        j['used_stock'] ??
+        j['used_items'] ??
+        j['stock_used'] ??
+        j['stock_items'];
+    final usedStock = rawUsedStock is List
+        ? rawUsedStock
+              .whereType<Map<String, dynamic>>()
+              .map(MaintenanceUsedStockItem.fromJson)
+              .toList()
+        : <MaintenanceUsedStockItem>[];
+
     return MaintenanceRecord(
       eventId: (j['event_id'] as num?)?.toInt() ?? 0,
       eventTitle: j['event_title']?.toString() ?? '',
       eventDate: j['event_date']?.toString() ?? '',
+      dholNumber:
+          j['dhol_number']?.toString() ??
+          j['dholNumber']?.toString() ??
+          j['dhol_no']?.toString() ??
+          j['dholNo']?.toString(),
+      usedStock: usedStock,
       instrumentName: j['instrument_name']?.toString(),
       workType: j['work_type']?.toString() ?? '',
       status: j['status']?.toString() ?? '',
@@ -192,6 +214,32 @@ class MaintenanceRecord {
       completedAt: j['completed_at']?.toString(),
       approvedBy: j['approved_by']?.toString(),
       approvedAt: j['approved_at']?.toString(),
+    );
+  }
+}
+
+class MaintenanceUsedStockItem {
+  final String itemName;
+  final int quantityUsed;
+
+  const MaintenanceUsedStockItem({
+    required this.itemName,
+    required this.quantityUsed,
+  });
+
+  factory MaintenanceUsedStockItem.fromJson(Map<String, dynamic> j) {
+    return MaintenanceUsedStockItem(
+      itemName:
+          j['item_name']?.toString() ??
+          j['name']?.toString() ??
+          j['stock_name']?.toString() ??
+          j['inventory_item_name']?.toString() ??
+          '',
+      quantityUsed:
+          (j['quantity_used'] as num?)?.toInt() ??
+          (j['used_quantity'] as num?)?.toInt() ??
+          (j['quantity'] as num?)?.toInt() ??
+          0,
     );
   }
 }
