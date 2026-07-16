@@ -12,6 +12,21 @@ import 'bug_report_service.dart';
 import 'refresh_token_service.dart'; // Import your AuthService that handles token refresh
 import 'authorized_api_service.dart';
 
+class ApiValidationException implements Exception {
+  final int statusCode;
+  final String message;
+  final Map<String, List<String>> errors;
+
+  const ApiValidationException({
+    required this.statusCode,
+    required this.message,
+    this.errors = const <String, List<String>>{},
+  });
+
+  @override
+  String toString() => message;
+}
+
 class ApiService {
   static const FlutterSecureStorage _storage = FlutterSecureStorage();
   static const Set<String> _allowedDocumentTypes = {
@@ -187,16 +202,22 @@ class ApiService {
   static Future<Map<String, dynamic>> createGat({
     required String name,
     int? gatPramukhId,
+    int? gatPramukhSecondaryId,
   }) async {
     try {
       final trimmedName = name.trim();
       if (trimmedName.isEmpty) {
         throw Exception('Gat name is required.');
       }
+      if (gatPramukhId == null) {
+        throw Exception('Gat Pramukh is required for creating gat.');
+      }
 
       final payload = <String, dynamic>{
         'name': trimmedName,
-        if (gatPramukhId != null) 'gat_pramukh_id': gatPramukhId,
+        'gat_pramukh_id': gatPramukhId,
+        if (gatPramukhSecondaryId != null)
+          'gat_pramukh_secondary_id': gatPramukhSecondaryId,
       };
 
       final response = await AuthorizedApiService.sendWithAutoRefresh(
@@ -227,6 +248,37 @@ class ApiService {
       }
 
       if (decoded is Map<String, dynamic>) {
+        final errors = decoded['errors'];
+        if (errors is Map) {
+          final normalizedErrors = <String, List<String>>{};
+          for (final entry in errors.entries) {
+            final key = entry.key.toString();
+            final value = entry.value;
+            if (value is List) {
+              normalizedErrors[key] = value
+                  .map((item) => item.toString())
+                  .where((item) => item.trim().isNotEmpty)
+                  .toList();
+            } else if (value != null) {
+              final message = value.toString().trim();
+              if (message.isNotEmpty) {
+                normalizedErrors[key] = <String>[message];
+              }
+            }
+          }
+          throw ApiValidationException(
+            statusCode: response.statusCode,
+            message: decoded['message']?.toString() ?? 'Validation error.',
+            errors: normalizedErrors,
+          );
+        }
+        if (errors is String && errors.trim().isNotEmpty) {
+          throw Exception(errors.trim());
+        }
+        if (errors is List && errors.isNotEmpty) {
+          throw Exception(errors.first.toString());
+        }
+
         final detail = decoded['detail']?.toString();
         if (detail != null && detail.isNotEmpty) {
           throw Exception(detail);
@@ -334,6 +386,7 @@ class ApiService {
 
   static Future<Map<String, dynamic>> autoAssignMembersToGats({
     required int year,
+    String assignmentMode = 'balanced',
     bool reassign = false,
     bool dryRun = false,
     int? seed,
@@ -341,6 +394,7 @@ class ApiService {
     try {
       final payload = <String, dynamic>{
         'year': year,
+        'assignment_mode': assignmentMode,
         'reassign': reassign,
         'dry_run': dryRun,
       };
@@ -365,23 +419,54 @@ class ApiService {
           ? jsonDecode(response.body)
           : <String, dynamic>{};
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        if (decoded is Map<String, dynamic>) {
-          return decoded;
-        }
+      if (decoded is! Map<String, dynamic>) {
         throw Exception('Invalid response format');
       }
 
-      if (decoded is Map<String, dynamic>) {
-        final detail = decoded['detail']?.toString();
-        if (detail != null && detail.isNotEmpty) {
-          throw Exception(detail);
-        }
+      final detail = decoded['detail']?.toString();
+      if (detail != null && detail.isNotEmpty) {
+        throw Exception(detail);
+      }
 
-        final message = decoded['message']?.toString();
-        if (message != null && message.isNotEmpty) {
-          throw Exception(message);
+      final message = decoded['message']?.toString();
+      final status = decoded['status'];
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (status == false) {
+          throw Exception(
+            message?.isNotEmpty == true ? message : 'Request failed',
+          );
         }
+        return decoded;
+      }
+
+      final errors = decoded['errors'];
+      if (errors is Map) {
+        final normalizedErrors = <String, List<String>>{};
+        for (final entry in errors.entries) {
+          final key = entry.key.toString();
+          final value = entry.value;
+          if (value is List) {
+            normalizedErrors[key] = value
+                .map((item) => item.toString())
+                .where((item) => item.trim().isNotEmpty)
+                .toList();
+          } else if (value != null) {
+            final normalized = value.toString().trim();
+            if (normalized.isNotEmpty) {
+              normalizedErrors[key] = <String>[normalized];
+            }
+          }
+        }
+        throw ApiValidationException(
+          statusCode: response.statusCode,
+          message: message?.isNotEmpty == true ? message! : 'Validation error.',
+          errors: normalizedErrors,
+        );
+      }
+
+      if (message != null && message.isNotEmpty) {
+        throw Exception(message);
       }
 
       throw Exception(
@@ -394,6 +479,312 @@ class ApiService {
         stackTrace: st.toString(),
         pageUrl: '/gats/auto-assign-members',
         endpoint: ApiEndpoints.autoAssignMembersToGats,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>> fetchHomeScreenPhotos() async {
+    try {
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) => http.get(
+          Uri.parse(ApiEndpoints.homeScreenPhotos),
+          headers: ApiEndpoints.authorizedHeaders(token),
+        ),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (decoded is! Map<String, dynamic>) {
+        throw Exception('Invalid response format');
+      }
+
+      final message = decoded['message']?.toString();
+      final detail = decoded['detail']?.toString();
+      if (detail != null && detail.isNotEmpty) {
+        throw Exception(detail);
+      }
+
+      if (response.statusCode == 200) {
+        if (decoded['status'] == false) {
+          throw Exception(
+            message?.isNotEmpty == true ? message : 'Request failed',
+          );
+        }
+        return decoded;
+      }
+
+      if (message != null && message.isNotEmpty) {
+        throw Exception(message);
+      }
+
+      throw Exception(
+        'Failed to load home screen photos (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Home screen photos API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/home-screen/photos',
+        endpoint: ApiEndpoints.homeScreenPhotos,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<List<Map<String, dynamic>>>
+  fetchManageHomeScreenPhotos() async {
+    try {
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) => http.get(
+          Uri.parse(ApiEndpoints.homeScreenPhotosManage),
+          headers: ApiEndpoints.authorizedHeaders(token),
+        ),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (decoded is! Map<String, dynamic>) {
+        throw Exception('Invalid response format');
+      }
+
+      if (response.statusCode == 200) {
+        if (decoded['status'] == false) {
+          final message = decoded['message']?.toString();
+          throw Exception(
+            message?.isNotEmpty == true ? message : 'Request failed',
+          );
+        }
+        final photos = decoded['photos'];
+        if (photos is List) {
+          return photos
+              .whereType<Map>()
+              .map((e) => Map<String, dynamic>.from(e))
+              .toList();
+        }
+        return <Map<String, dynamic>>[];
+      }
+
+      final detail = decoded['detail']?.toString();
+      if (detail != null && detail.isNotEmpty) {
+        throw Exception(detail);
+      }
+      final message = decoded['message']?.toString();
+      if (message != null && message.isNotEmpty) {
+        throw Exception(message);
+      }
+
+      throw Exception(
+        'Failed to load managed home screen photos (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Manage home screen photos API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/home-screen/photos/manage',
+        endpoint: ApiEndpoints.homeScreenPhotosManage,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>> uploadHomeScreenPhoto({
+    required Uint8List imageBytes,
+    required String fileName,
+    String? caption,
+    bool isActive = true,
+  }) async {
+    try {
+      final normalizedFileName = fileName.trim().isEmpty
+          ? 'home_photo.jpg'
+          : fileName.trim();
+
+      final token = await _storage.read(key: ApiEndpoints.accessTokenKey);
+      if (token == null || token.trim().isEmpty) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      Future<http.Response> sendRequest(String accessToken) async {
+        final request =
+            http.MultipartRequest(
+                'POST',
+                Uri.parse(ApiEndpoints.homeScreenPhotosManage),
+              )
+              ..headers['Authorization'] = 'Bearer $accessToken'
+              ..fields['is_active'] = isActive.toString();
+
+        final normalizedCaption = caption?.trim();
+        if (normalizedCaption != null && normalizedCaption.isNotEmpty) {
+          request.fields['caption'] = normalizedCaption;
+        }
+
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'image',
+            imageBytes,
+            filename: normalizedFileName,
+          ),
+        );
+
+        final streamed = await request.send().timeout(
+          const Duration(seconds: 90),
+        );
+        return http.Response.fromStream(streamed);
+      }
+
+      var response = await sendRequest(token);
+      if (response.statusCode == 401) {
+        final refreshed = await AuthService.refreshAccessToken();
+        if (refreshed) {
+          final refreshedToken = await _storage.read(
+            key: ApiEndpoints.accessTokenKey,
+          );
+          if (refreshedToken != null && refreshedToken.trim().isNotEmpty) {
+            response = await sendRequest(refreshedToken);
+          }
+        }
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (decoded is! Map<String, dynamic>) {
+        throw Exception('Invalid response format');
+      }
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        if (decoded['status'] == false) {
+          final message = decoded['message']?.toString();
+          throw Exception(
+            message?.isNotEmpty == true ? message : 'Request failed',
+          );
+        }
+        return decoded;
+      }
+
+      final errors = decoded['errors'];
+      if (errors is Map) {
+        final imageErrors = errors['image'];
+        if (imageErrors is List && imageErrors.isNotEmpty) {
+          throw Exception(imageErrors.first.toString());
+        }
+      }
+
+      final detail = decoded['detail']?.toString();
+      if (detail != null && detail.isNotEmpty) {
+        throw Exception(detail);
+      }
+
+      final message = decoded['message']?.toString();
+      if (message != null && message.isNotEmpty) {
+        throw Exception(message);
+      }
+
+      throw Exception(
+        'Failed to upload home screen photo (status code ${response.statusCode})',
+      );
+    } on TimeoutException catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Upload home screen photo API timeout',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/home-screen/photos/manage',
+        endpoint: ApiEndpoints.homeScreenPhotosManage,
+      );
+      throw Exception('Upload timed out. Please try again.');
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Upload home screen photo API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/home-screen/photos/manage',
+        endpoint: ApiEndpoints.homeScreenPhotosManage,
+      );
+      rethrow;
+    }
+  }
+
+  static Future<Map<String, dynamic>> deleteHomeScreenPhotos({
+    int? photoId,
+    List<int>? photoIds,
+  }) async {
+    try {
+      if (photoId == null && (photoIds == null || photoIds.isEmpty)) {
+        throw Exception('photo_id or photo_ids is required.');
+      }
+
+      final payload = <String, dynamic>{
+        if (photoId != null) 'photo_id': photoId,
+        if (photoIds != null && photoIds.isNotEmpty) 'photo_ids': photoIds,
+      };
+
+      final response = await AuthorizedApiService.sendWithAutoRefresh(
+        null,
+        (token) => http.delete(
+          Uri.parse(ApiEndpoints.homeScreenPhotosManage),
+          headers: ApiEndpoints.authorizedHeaders(token),
+          body: jsonEncode(payload),
+        ),
+      );
+
+      if (response == null) {
+        throw Exception('Session expired. Please login again.');
+      }
+
+      final decoded = response.body.isNotEmpty
+          ? jsonDecode(response.body)
+          : <String, dynamic>{};
+
+      if (decoded is! Map<String, dynamic>) {
+        throw Exception('Invalid response format');
+      }
+
+      if (response.statusCode == 200) {
+        if (decoded['status'] == false) {
+          final message = decoded['message']?.toString();
+          throw Exception(
+            message?.isNotEmpty == true ? message : 'Request failed',
+          );
+        }
+        return decoded;
+      }
+
+      final detail = decoded['detail']?.toString();
+      if (detail != null && detail.isNotEmpty) {
+        throw Exception(detail);
+      }
+      final message = decoded['message']?.toString();
+      if (message != null && message.isNotEmpty) {
+        throw Exception(message);
+      }
+
+      throw Exception(
+        'Failed to delete home screen photo(s) (status code ${response.statusCode})',
+      );
+    } catch (e, st) {
+      await BugReportService.reportApiFailure(
+        title: 'Delete home screen photos API failure',
+        errorMessage: e.toString(),
+        stackTrace: st.toString(),
+        pageUrl: '/home-screen/photos/manage',
+        endpoint: ApiEndpoints.homeScreenPhotosManage,
       );
       rethrow;
     }

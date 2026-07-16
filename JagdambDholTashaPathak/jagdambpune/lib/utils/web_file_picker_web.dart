@@ -47,3 +47,44 @@ Future<MapEntry<Uint8List, String>?> pickJpegFile({
 
   return MapEntry(bytes, file.name);
 }
+
+Future<List<MapEntry<Uint8List, String>>> pickJpegFiles({
+  bool useCamera = false,
+}) async {
+  final input = html.FileUploadInputElement()
+    ..accept = useCamera ? 'image/*' : 'image/jpeg,image/jpg,.jpg,.jpeg'
+    ..multiple = !useCamera;
+
+  if (useCamera) {
+    input.setAttribute('capture', 'environment');
+  }
+
+  input.click();
+  await input.onChange.first;
+
+  final files = input.files;
+  if (files == null || files.isEmpty) {
+    return <MapEntry<Uint8List, String>>[];
+  }
+
+  final results = <MapEntry<Uint8List, String>>[];
+  for (final file in files) {
+    final reader = html.FileReader();
+    reader.readAsArrayBuffer(file);
+    await reader.onLoad.first;
+
+    final resultObj = reader.result;
+    Uint8List? bytes;
+    if (resultObj is ByteBuffer) {
+      bytes = resultObj.asUint8List();
+    } else if (resultObj is List<int>) {
+      bytes = Uint8List.fromList(resultObj);
+    }
+
+    if (bytes != null) {
+      results.add(MapEntry(bytes, file.name));
+    }
+  }
+
+  return results;
+}

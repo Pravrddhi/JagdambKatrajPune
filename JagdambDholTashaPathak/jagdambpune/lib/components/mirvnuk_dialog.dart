@@ -390,11 +390,20 @@ class MirvnukForm {
                           if (accessToken == null ||
                               accessToken.trim().isEmpty) {
                             if (dialogContext.mounted) {
-                              ScaffoldMessenger.of(dialogContext).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
+                              showDialog<void>(
+                                context: dialogContext,
+                                builder: (popupContext) => AlertDialog(
+                                  title: const Text('Error'),
+                                  content: const Text(
                                     'Session expired. Please login again.',
                                   ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(popupContext).pop(),
+                                      child: const Text('OK'),
+                                    ),
+                                  ],
                                 ),
                               );
                             }
@@ -431,11 +440,20 @@ class MirvnukForm {
                                 );
 
                             if (response == null) {
-                              ScaffoldMessenger.of(dialogContext).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
+                              showDialog<void>(
+                                context: dialogContext,
+                                builder: (popupContext) => AlertDialog(
+                                  title: const Text('Error'),
+                                  content: const Text(
                                     'Session expired. Please login again.',
                                   ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(popupContext).pop(),
+                                      child: const Text('OK'),
+                                    ),
+                                  ],
                                 ),
                               );
                               return;
@@ -445,17 +463,37 @@ class MirvnukForm {
                                 response.statusCode == 201) {
                               _dialogPopped = true;
                               Navigator.of(dialogContext).pop();
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Mirvnuk added successfully'),
+                              showDialog<void>(
+                                context: context,
+                                builder: (popupContext) => AlertDialog(
+                                  title: const Text('Success'),
+                                  content: const Text(
+                                    'Mirvnuk added successfully',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(popupContext).pop(),
+                                      child: const Text('OK'),
+                                    ),
+                                  ],
                                 ),
                               );
                             } else if (response.statusCode == 401) {
-                              ScaffoldMessenger.of(dialogContext).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
+                              showDialog<void>(
+                                context: dialogContext,
+                                builder: (popupContext) => AlertDialog(
+                                  title: const Text('Error'),
+                                  content: const Text(
                                     'Session expired. Please login again.',
                                   ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(popupContext).pop(),
+                                      child: const Text('OK'),
+                                    ),
+                                  ],
                                 ),
                               );
                             } else {
@@ -466,11 +504,20 @@ class MirvnukForm {
                                 statusCode: response.statusCode,
                                 endpoint: ApiEndpoints.createEvent,
                               );
-                              ScaffoldMessenger.of(dialogContext).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
+                              showDialog<void>(
+                                context: dialogContext,
+                                builder: (popupContext) => AlertDialog(
+                                  title: const Text('Error'),
+                                  content: const Text(
                                     ApiEndpoints.genericApiFailureMessage,
                                   ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(popupContext).pop(),
+                                      child: const Text('OK'),
+                                    ),
+                                  ],
                                 ),
                               );
                             }
@@ -481,11 +528,20 @@ class MirvnukForm {
                               pageUrl: '/events/create',
                               endpoint: ApiEndpoints.createEvent,
                             );
-                            ScaffoldMessenger.of(dialogContext).showSnackBar(
-                              const SnackBar(
-                                content: Text(
+                            showDialog<void>(
+                              context: dialogContext,
+                              builder: (popupContext) => AlertDialog(
+                                title: const Text('Error'),
+                                content: const Text(
                                   ApiEndpoints.genericApiFailureMessage,
                                 ),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.of(popupContext).pop(),
+                                    child: const Text('OK'),
+                                  ),
+                                ],
                               ),
                             );
                           } finally {

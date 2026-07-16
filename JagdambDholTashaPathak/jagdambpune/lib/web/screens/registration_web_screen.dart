@@ -409,7 +409,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
       errors['dob'] = 'Date of Birth is required.';
     }
     if (!validateSelection(selectedSex)) {
-      errors['sex'] = 'Please select a gender.';
+      errors['gender'] = 'Please select a gender.';
     }
     if (!validateSelection(selectedInstrument)) {
       errors['instrument'] = 'Please select an instrument.';
@@ -866,11 +866,11 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                       _validateForm();
                     },
                   ),
-                  if (_fieldErrors['sex'] != null)
+                  if (_fieldErrors['gender'] != null)
                     Padding(
                       padding: const EdgeInsets.only(top: 4.0, left: 4.0),
                       child: Text(
-                        _fieldErrors['sex']!,
+                        _fieldErrors['gender']!,
                         style: const TextStyle(
                           color: AppColors.accentYellow,
                           fontSize: 13,

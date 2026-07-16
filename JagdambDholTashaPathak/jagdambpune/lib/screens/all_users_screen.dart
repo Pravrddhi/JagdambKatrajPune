@@ -3,6 +3,7 @@ import '../config/api_endpoints.dart';
 import '../models/user.dart';
 import '../services/api_service.dart';
 import '../theme/app_colors.dart';
+import 'user_analysis_screen.dart';
 
 class AllUsersScreen extends StatefulWidget {
   final bool showStatusFilters;
@@ -10,6 +11,7 @@ class AllUsersScreen extends StatefulWidget {
   final bool canUpdateUserGroup;
   final bool isGatPramukh;
   final String? gatPramukhName;
+  final bool canViewUserAnalysis;
 
   const AllUsersScreen({
     super.key,
@@ -18,6 +20,7 @@ class AllUsersScreen extends StatefulWidget {
     this.canUpdateUserGroup = false,
     this.isGatPramukh = false,
     this.gatPramukhName,
+    this.canViewUserAnalysis = false,
   });
 
   @override
@@ -308,6 +311,26 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
     return error.toString().replaceFirst('Exception: ', '').trim();
   }
 
+  Future<void> _showMessageDialog(
+    String message, {
+    String title = 'Message',
+  }) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _redirectToLoginWithMessage() async {
     if (!mounted) {
       return;
@@ -364,8 +387,9 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         return;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text(ApiEndpoints.genericApiFailureMessage)),
+      await _showMessageDialog(
+        ApiEndpoints.genericApiFailureMessage,
+        title: 'Error',
       );
     } finally {
       if (mounted) {
@@ -420,9 +444,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         return;
       }
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.toString())));
+      await _showMessageDialog(_cleanErrorMessage(e), title: 'Error');
       setState(() {
         _isLoading = false;
       });
@@ -496,9 +518,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                       setState(() {
                         _isLoading = false;
                       });
-                      ScaffoldMessenger.of(
-                        this.context,
-                      ).showSnackBar(SnackBar(content: Text(message)));
+                      await _showMessageDialog(message, title: 'Success');
                     } catch (e) {
                       if (!mounted) return;
 
@@ -507,9 +527,10 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                         return;
                       }
 
-                      ScaffoldMessenger.of(
-                        this.context,
-                      ).showSnackBar(SnackBar(content: Text(e.toString())));
+                      await _showMessageDialog(
+                        _cleanErrorMessage(e),
+                        title: 'Error',
+                      );
                       setState(() {
                         _isLoading = false;
                       });
@@ -600,9 +621,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
       _statusFilter = 'deleted';
       _applyFilters();
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(successMessage)));
+      await _showMessageDialog(successMessage, title: 'Success');
     } catch (e) {
       if (!mounted) return;
 
@@ -611,9 +630,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         return;
       }
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(_cleanErrorMessage(e))));
+      await _showMessageDialog(_cleanErrorMessage(e), title: 'Error');
     } finally {
       if (mounted) {
         setState(() {
@@ -664,9 +681,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
       }).toList();
       _applyFilters();
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(message)));
+      await _showMessageDialog(message, title: 'Success');
     } catch (e) {
       if (!mounted) return;
 
@@ -675,9 +690,7 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
         return;
       }
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(_cleanErrorMessage(e))));
+      await _showMessageDialog(_cleanErrorMessage(e), title: 'Error');
     } finally {
       if (mounted) {
         setState(() {
@@ -814,6 +827,33 @@ class _AllUsersScreenState extends State<AllUsersScreen> {
                     'Approve',
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
+                ),
+              if (effectiveUserId != null && widget.canViewUserAnalysis)
+                TextButton.icon(
+                  icon: const Icon(
+                    Icons.bar_chart,
+                    color: AppColors.primaryMaroon,
+                    size: 18,
+                  ),
+                  label: const Text(
+                    'Analysis',
+                    style: TextStyle(
+                      color: AppColors.primaryMaroon,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(dialogCtx);
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => UserAnalysisScreen(
+                          userId: effectiveUserId,
+                          userName: _fullName(user),
+                        ),
+                      ),
+                    );
+                  },
                 ),
               TextButton(
                 onPressed: () => Navigator.pop(dialogCtx),

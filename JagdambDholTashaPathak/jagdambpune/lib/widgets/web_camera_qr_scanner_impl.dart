@@ -31,6 +31,8 @@ class WebCameraQrScannerWidget extends StatefulWidget {
 
 class _WebCameraQrScannerWidgetState extends State<WebCameraQrScannerWidget> {
   static int _idCounter = 0;
+  static const double _scanCropRatio = 0.72;
+  static const int _sameCodeConfirmationsRequired = 2;
   late final String _viewId;
 
   html.DivElement? _container;
@@ -42,6 +44,8 @@ class _WebCameraQrScannerWidgetState extends State<WebCameraQrScannerWidget> {
   bool _started = false;
   bool _starting = false;
   String? _errorMessage;
+  String? _lastDecodedValue;
+  int _sameDecodedCount = 0;
 
   @override
   void initState() {
@@ -137,23 +141,61 @@ class _WebCameraQrScannerWidgetState extends State<WebCameraQrScannerWidget> {
     final h = _video!.videoHeight;
     if (w == 0 || h == 0) return;
 
-    _canvas!.width = w;
-    _canvas!.height = h;
-    // dart:html uses drawImageScaled for the (source, dx, dy, dw, dh) form
-    _canvas!.context2D.drawImageScaled(_video!, 0, 0, w, h);
+    final cropWidth = (w * _scanCropRatio).round();
+    final cropHeight = (h * _scanCropRatio).round();
+    final cropX = ((w - cropWidth) / 2).round();
+    final cropY = ((h - cropHeight) / 2).round();
 
-    final imageData = _canvas!.context2D.getImageData(0, 0, w, h);
+    _canvas!.width = cropWidth;
+    _canvas!.height = cropHeight;
+    _canvas!.context2D.drawImageScaledFromSource(
+      _video!,
+      cropX,
+      cropY,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      cropWidth,
+      cropHeight,
+    );
+
+    final imageData = _canvas!.context2D.getImageData(
+      0,
+      0,
+      cropWidth,
+      cropHeight,
+    );
 
     if (!js.context.hasProperty('jsQR')) return;
 
     try {
-      // jsQR(data, width, height) — options param omitted, defaults are fine
-      final result = js.context.callMethod('jsQR', [imageData.data, w, h]);
+      // jsQR(data, width, height, options)
+      final result = js.context.callMethod('jsQR', [
+        imageData.data,
+        cropWidth,
+        cropHeight,
+        js.JsObject.jsify({'inversionAttempts': 'attemptBoth'}),
+      ]);
       if (result != null) {
         final data = (result as js.JsObject)['data']?.toString();
         if (data != null && data.isNotEmpty && mounted) {
-          widget.onQrDetected(data);
+          if (_lastDecodedValue == data) {
+            _sameDecodedCount += 1;
+          } else {
+            _lastDecodedValue = data;
+            _sameDecodedCount = 1;
+          }
+
+          if (_sameDecodedCount >= _sameCodeConfirmationsRequired) {
+            _sameDecodedCount = 0;
+            _lastDecodedValue = null;
+            widget.onQrDetected(data);
+          }
         }
+      } else {
+        _lastDecodedValue = null;
+        _sameDecodedCount = 0;
       }
     } catch (_) {}
   }
@@ -168,6 +210,8 @@ class _WebCameraQrScannerWidgetState extends State<WebCameraQrScannerWidget> {
       _stream = null;
     }
     _started = false;
+    _lastDecodedValue = null;
+    _sameDecodedCount = 0;
   }
 
   @override

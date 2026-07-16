@@ -23,6 +23,8 @@ import 'screens/reset_pin.dart';
 import 'screens/splash_screen.dart';
 import 'config/app_config.dart';
 import 'theme/app_colors.dart';
+import 'navigation/app_route_observer.dart';
+import 'services/session_service.dart';
 import 'web/screens/registration_web_screen.dart';
 import 'web/screens/new_registration_web_screen.dart';
 
@@ -43,7 +45,6 @@ const AndroidNotificationChannel channel = AndroidNotificationChannel(
 const FlutterSecureStorage _bgStorage = FlutterSecureStorage();
 const String _notificationStorageKey = 'app_notifications';
 bool _firebaseReady = false;
-final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -308,7 +309,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   Future<BuildContext?> _resolveDialogContext() async {
     if (!mounted) return null;
 
-    final direct = _rootNavigatorKey.currentContext;
+    final direct = SessionService.navigatorKey.currentContext;
     if (direct != null) {
       return direct;
     }
@@ -317,7 +318,7 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     for (var i = 0; i < 3; i++) {
       await WidgetsBinding.instance.endOfFrame;
       if (!mounted) return null;
-      final next = _rootNavigatorKey.currentContext;
+      final next = SessionService.navigatorKey.currentContext;
       if (next != null) {
         return next;
       }
@@ -483,7 +484,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      navigatorKey: _rootNavigatorKey,
+      navigatorKey: SessionService.navigatorKey,
+      navigatorObservers: [appRouteObserver],
       title: AppConfig.appTitle,
       theme: ThemeData(
         primaryColor: AppColors.primaryMaroon,
