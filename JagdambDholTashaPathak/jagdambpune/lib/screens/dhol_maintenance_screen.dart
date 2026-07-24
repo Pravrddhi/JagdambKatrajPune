@@ -1966,10 +1966,11 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
 
     final blockedByCompletion = await _isStockRequestBlockedByCompletion(
       eventId: selectedEventId,
+      maintenanceId: selectedMaintenance?.maintenanceId,
     );
     if (blockedByCompletion) {
       _showSnack(
-        'Completion already submitted (pending/approved) for this maintenance day. You cannot send stock request now.',
+        'Completion already submitted (pending/approved) for this maintenance. You cannot send stock request now.',
       );
       noteController.dispose();
       return;
@@ -2399,6 +2400,13 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       return;
     }
 
+    final selectedMaintenance = _currentUserMaintenanceForEvent(event);
+    final selectedMaintenanceId = selectedMaintenance?.maintenanceId ?? 0;
+    if (selectedMaintenanceId <= 0) {
+      _showSnack('Start a maintenance cycle before submitting completion.');
+      return;
+    }
+
     List<MaintenanceCompletionRequest> dayScopedRequests;
     try {
       dayScopedRequests = await _withApiLoader(
@@ -2406,13 +2414,20 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       );
     } catch (_) {
       dayScopedRequests = _completionRequests
-          .where((request) => request.event == event.id)
+          .where(
+            (request) =>
+                request.event == event.id ||
+                request.maintenanceId == selectedMaintenanceId,
+          )
           .toList();
     }
 
-    final userScopedDayRequests = _filterCompletionsForCurrentUser(
-      dayScopedRequests,
-    );
+    final userScopedDayRequests =
+        _filterCompletionsForCurrentUser(dayScopedRequests).where((request) {
+          final requestMaintenanceId = request.maintenanceId;
+          return requestMaintenanceId != null &&
+              requestMaintenanceId == selectedMaintenanceId;
+        }).toList();
 
     final hasPendingOrApprovedCompletion = userScopedDayRequests.any((request) {
       final status = request.status.toLowerCase();
@@ -2425,33 +2440,16 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       );
       _showSnack(
         hasPending
-            ? 'Completion already submitted and pending approval for this day.'
-            : 'Completion already approved for this day.',
+            ? 'Completion already submitted and pending approval for this maintenance.'
+            : 'Completion already approved for this maintenance.',
       );
       return;
     }
 
-    final selectedMaintenance = _currentUserMaintenanceForEvent(event);
-    final selectedMaintenanceId = selectedMaintenance?.maintenanceId ?? 0;
-
-    final maintenanceScopedStockRequests = _requests;
-
-    final eventScopedRequests = maintenanceScopedStockRequests.where((request) {
-      if (request.maintenanceId != null && selectedMaintenanceId > 0) {
-        return request.maintenanceId == selectedMaintenanceId;
-      }
-
-      if (request.maintenanceEventId != null) {
-        return request.maintenanceEventId == event.id;
-      }
-
-      final linkedEventDay = request.linkedEventDay;
-      final eventDay = event.parsedEventDate;
-      if (linkedEventDay != null && eventDay != null) {
-        return linkedEventDay == eventDay;
-      }
-
-      return false;
+    final eventScopedRequests = _requests.where((request) {
+      final requestMaintenanceId = request.maintenanceId;
+      return requestMaintenanceId != null &&
+          requestMaintenanceId == selectedMaintenanceId;
     }).toList();
 
     final hasPendingStockRequest = selectedMaintenanceId > 0
@@ -2724,8 +2722,11 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     });
   }
 
-  Future<bool> _isStockRequestBlockedByCompletion({int? eventId}) async {
-    if (eventId == null) {
+  Future<bool> _isStockRequestBlockedByCompletion({
+    int? eventId,
+    int? maintenanceId,
+  }) async {
+    if (eventId == null || maintenanceId == null || maintenanceId <= 0) {
       return false;
     }
 
@@ -2740,9 +2741,12 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           .toList();
     }
 
-    final userScopedDayRequests = _filterCompletionsForCurrentUser(
-      dayScopedRequests,
-    );
+    final userScopedDayRequests =
+        _filterCompletionsForCurrentUser(dayScopedRequests).where((request) {
+          final requestMaintenanceId = request.maintenanceId;
+          return requestMaintenanceId != null &&
+              requestMaintenanceId == maintenanceId;
+        }).toList();
 
     return userScopedDayRequests.any((request) {
       final status = request.status.trim().toLowerCase();
@@ -2773,20 +2777,21 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   }
 
   bool get _hasBlockingCompletionForCurrentUser {
-    // Only block stock requests when there is a currently active maintenance
-    // event. Outside of maintenance days there should be no restriction.
-    final activeEventIds = _events
-        .where((e) => e.isActiveStatus)
-        .map((e) => e.id)
-        .toSet();
+    final activeEventId = latestActiveMaintenanceEventId(_events);
+    if (activeEventId == null) return false;
 
-    if (activeEventIds.isEmpty) return false;
+    final activeEvent = _events.where((e) => e.id == activeEventId).firstOrNull;
+    if (activeEvent == null) return false;
+
+    final maintenance = _currentUserMaintenanceForEvent(activeEvent);
+    final maintenanceId = maintenance?.maintenanceId;
+    if (maintenanceId == null || maintenanceId <= 0) return false;
 
     final userCompletionRequests = _filterCompletionsForCurrentUser(
       _completionRequests,
     );
     return userCompletionRequests.any((request) {
-      if (!activeEventIds.contains(request.event)) return false;
+      if (request.maintenanceId != maintenanceId) return false;
       final status = request.status.trim().toLowerCase();
       return status == 'pending' || status == 'approved';
     });
@@ -3185,7 +3190,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   }
 
   Widget _buildDholStatusManagementTab() {
-    final searchQuery = _dholSearchController.text.trim().toLowerCase();
     final statusCounts = <String, int>{
       for (final status in _dholStatusValues) status: 0,
     };
@@ -3198,13 +3202,10 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
 
     final filtered =
         _pathakDhols.where((item) {
-          final matchesSearch = searchQuery.isEmpty
-              ? true
-              : item.dholNumber.toLowerCase().contains(searchQuery);
           final matchesStatus = _dholStatusFilter == 'all'
               ? true
               : item.normalizedStatus == _dholStatusFilter;
-          return matchesSearch && matchesStatus;
+          return matchesStatus;
         }).toList()..sort((a, b) {
           final left = int.tryParse(a.dholNumber);
           final right = int.tryParse(b.dholNumber);
@@ -3222,71 +3223,46 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           Card(
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Column(
-                children: [
-                  TextField(
-                    controller: _dholSearchController,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      hintText: 'Search by Dhol Number',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: _dholSearchController.text.trim().isEmpty
-                          ? null
-                          : IconButton(
-                              onPressed: () {
-                                _dholSearchController.clear();
-                                setState(() {});
-                              },
-                              icon: const Icon(Icons.clear),
-                            ),
-                      border: const OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<String>(
-                    initialValue: _dholStatusFilter,
-                    decoration: const InputDecoration(
-                      labelText: 'Filter by Status',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: [
-                      const DropdownMenuItem(value: 'all', child: Text('All')),
-                      ..._dholStatusValues.map(
-                        (status) => DropdownMenuItem(
-                          value: status,
-                          child: Text(_dholStatusLabel(status)),
-                        ),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setState(() {
-                        _dholStatusFilter = value;
-                      });
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
               child: Wrap(
                 spacing: 10,
                 runSpacing: 10,
                 children: [
-                  Chip(
+                  ChoiceChip(
+                    selected: _dholStatusFilter == 'all',
+                    onSelected: (_) {
+                      setState(() {
+                        _dholStatusFilter = 'all';
+                      });
+                    },
                     label: Text('All (${_pathakDhols.length})'),
-                    labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+                    labelStyle: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: _dholStatusFilter == 'all'
+                          ? Colors.white
+                          : AppColors.primaryMaroon,
+                    ),
+                    selectedColor: AppColors.primaryMaroon,
                   ),
                   ..._dholStatusValues.map(
-                    (status) => Chip(
+                    (status) => ChoiceChip(
+                      selected: _dholStatusFilter == status,
+                      onSelected: (_) {
+                        setState(() {
+                          _dholStatusFilter = _dholStatusFilter == status
+                              ? 'all'
+                              : status;
+                        });
+                      },
                       label: Text(
                         '${_dholStatusLabel(status)} (${statusCounts[status] ?? 0})',
                       ),
-                      labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+                      labelStyle: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        color: _dholStatusFilter == status
+                            ? Colors.white
+                            : AppColors.primaryMaroon,
+                      ),
+                      selectedColor: AppColors.primaryMaroon,
                     ),
                   ),
                 ],
@@ -4046,33 +4022,15 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         String? submitErrorMessage;
 
         List<InventoryRequestItem> eventScopedMaintenanceStockRequests() {
-          final approvedOrPendingScoped = List<InventoryRequestItem>.from(
-            allRequests,
-          );
           final explicitMaintenanceId = detail.maintenanceId;
-          final explicitEventId = detail.maintenanceEventId;
-          final explicitEventDay = detail.linkedEventDay;
-          if (explicitMaintenanceId == 0 &&
-              explicitEventId == null &&
-              explicitEventDay == null) {
-            return approvedOrPendingScoped;
+          if (explicitMaintenanceId <= 0) {
+            return <InventoryRequestItem>[];
           }
 
-          return approvedOrPendingScoped.where((request) {
-            if (explicitMaintenanceId > 0 && request.maintenanceId != null) {
-              return request.maintenanceId == explicitMaintenanceId;
-            }
-
-            if (explicitEventId != null && request.maintenanceEventId != null) {
-              return request.maintenanceEventId == explicitEventId;
-            }
-
-            final linkedEventDay = request.linkedEventDay;
-            if (linkedEventDay != null && explicitEventDay != null) {
-              return linkedEventDay == explicitEventDay;
-            }
-
-            return false;
+          return allRequests.where((request) {
+            final requestMaintenanceId = request.maintenanceId;
+            return requestMaintenanceId != null &&
+                requestMaintenanceId == explicitMaintenanceId;
           }).toList();
         }
 
@@ -4370,7 +4328,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
               .map((participant) => participant.fullName)
               .where((name) => name.trim().isNotEmpty)
               .join(', ');
-          final imageSection = (String title, List<String> images) => Column(
+          Column imageSection(String title, List<String> images) => Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -5165,12 +5123,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
 
   Widget _buildEventsTab() {
     final canCreateEvent = widget.canCreateMaintenanceEvents;
-    final userCompletionRequests = _filterCompletionsForCurrentUser(
-      _completionRequests,
-    );
-    final hasPendingStockRequestForUser = _requests
-        .where(_isInventoryRequestOwnedByCurrentUser)
-        .any(_isPendingInventoryRequest);
 
     return RefreshIndicator(
       onRefresh: _loadEvents,
@@ -5296,21 +5248,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
             )
           else
             ..._events.map((event) {
-              final isUserActionableEvent = isLatestActiveMaintenanceEvent(
-                event,
-                _events,
-              );
-              final hasPendingCompletion = userCompletionRequests.any(
-                (item) =>
-                    item.event == event.id &&
-                    item.status.toLowerCase() == 'pending',
-              );
-              final hasApprovedCompletion = userCompletionRequests.any(
-                (item) =>
-                    item.event == event.id &&
-                    item.status.toLowerCase() == 'approved',
-              );
-
               return Card(
                 margin: const EdgeInsets.only(bottom: 10),
                 child: Padding(
@@ -5370,56 +5307,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                           ),
                         ),
                       ],
-                      const SizedBox(height: 8),
-                      if (isUserActionableEvent)
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: hasPendingCompletion
-                              ? OutlinedButton.icon(
-                                  onPressed: null,
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.orange,
-                                  ),
-                                  icon: const Icon(Icons.hourglass_top),
-                                  label: const Text('Pending'),
-                                )
-                              : hasApprovedCompletion
-                              ? OutlinedButton.icon(
-                                  onPressed: null,
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.green,
-                                  ),
-                                  icon: const Icon(Icons.check_circle_outline),
-                                  label: const Text('Approved'),
-                                )
-                              : hasPendingStockRequestForUser
-                              ? OutlinedButton.icon(
-                                  onPressed: null,
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: Colors.orange,
-                                  ),
-                                  icon: const Icon(Icons.inventory_2_outlined),
-                                  label: const Text('Stock Request Pending'),
-                                )
-                              : OutlinedButton.icon(
-                                  onPressed: () =>
-                                      _openCompletionRequestForm(event),
-                                  style: OutlinedButton.styleFrom(
-                                    foregroundColor: AppColors.primaryMaroon,
-                                  ),
-                                  icon: const Icon(
-                                    Icons.assignment_turned_in_outlined,
-                                  ),
-                                  label: const Text('Submit'),
-                                ),
-                        ),
-                      if (!isUserActionableEvent)
-                        Text(
-                          event.isClosedStatus
-                              ? 'Maintenance Closed. Event is read-only.'
-                              : 'Closed for users. This maintenance day remains open only until a newer maintenance day is created.',
-                          style: const TextStyle(color: Colors.black54),
-                        ),
                     ],
                   ),
                 ),
