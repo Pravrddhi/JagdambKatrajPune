@@ -381,7 +381,7 @@ class MirvnukForm {
                             return;
                           }
 
-                          bool _dialogPopped = false;
+                          bool dialogPopped = false;
                           setState(() => isSubmitting = true);
 
                           final accessToken = await storage.read(
@@ -461,7 +461,7 @@ class MirvnukForm {
 
                             if (response.statusCode == 200 ||
                                 response.statusCode == 201) {
-                              _dialogPopped = true;
+                              dialogPopped = true;
                               Navigator.of(dialogContext).pop();
                               showDialog<void>(
                                 context: context,
@@ -545,7 +545,7 @@ class MirvnukForm {
                               ),
                             );
                           } finally {
-                            if (!_dialogPopped && dialogContext.mounted) {
+                            if (!dialogPopped && dialogContext.mounted) {
                               setState(() => isSubmitting = false);
                             }
                           }

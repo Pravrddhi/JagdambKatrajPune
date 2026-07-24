@@ -1452,13 +1452,13 @@ class _IDCardEditorScreenState extends State<IDCardEditorScreen> {
                             maxLines: 1,
                             style: const TextStyle(fontFamily: 'ShreeDev7_3690')
                                 .merge(
-                                  TextStyle(
+                                  const TextStyle(
                                     color: Colors.white,
                                     fontSize: 27.47,
                                     fontWeight: FontWeight.w700,
                                     letterSpacing: 0.2,
                                     height: 1.1,
-                                    shadows: const [
+                                    shadows: [
                                       Shadow(
                                         color: Color(0xCC000000),
                                         offset: Offset(1.5, 1.5),

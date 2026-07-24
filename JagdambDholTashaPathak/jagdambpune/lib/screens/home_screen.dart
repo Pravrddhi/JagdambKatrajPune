@@ -431,37 +431,19 @@ class _HomeScreenState extends State<HomeScreen>
     try {
       final requests = await MaintenanceService.fetchCompletionRequests();
 
-      final eventIds = _maintenanceDays.map((event) => event.id).toSet();
-      final participantMaintenances = _activeInstrumentMaintenances
-          .where(_isInstrumentMaintenanceParticipant)
-          .toList();
-      final participantMaintenanceIds = participantMaintenances
-          .map((item) => item.maintenanceId)
-          .toSet();
-
-      final grouped = <int, Set<String>>{};
-      for (final request in requests) {
-        if (!eventIds.contains(request.event)) continue;
-        final maintenanceId = request.maintenanceId;
-        final isExactParticipantMaintenance =
-            maintenanceId != null &&
-            participantMaintenanceIds.contains(maintenanceId);
-        final isParticipantScopedRequest = _isCompletionRequestForCurrentUser(
-          request,
-        );
-
-        if (!isExactParticipantMaintenance && !isParticipantScopedRequest) {
+      final resolved = <int, String>{};
+      for (final event in _maintenanceDays) {
+        final maintenance = _maintenanceForEvent(event);
+        final maintenanceId = maintenance?.maintenanceId;
+        if (maintenanceId == null || maintenanceId <= 0) {
           continue;
         }
 
-        final status = request.normalizedStatus.trim().toLowerCase();
-        if (status.isEmpty) continue;
-        grouped.putIfAbsent(request.event, () => <String>{}).add(status);
-      }
-
-      final resolved = <int, String>{};
-      for (final event in _maintenanceDays) {
-        final statuses = grouped[event.id] ?? <String>{};
+        final statuses = requests
+            .where((request) => request.maintenanceId == maintenanceId)
+            .map((request) => request.normalizedStatus.trim().toLowerCase())
+            .where((status) => status.isNotEmpty)
+            .toSet();
         if (statuses.contains('pending')) {
           resolved[event.id] = 'pending';
           continue;
@@ -977,11 +959,40 @@ class _HomeScreenState extends State<HomeScreen>
     }
 
     try {
+      final selectedMaintenance = _maintenanceForEventOrLatestParticipant(
+        event,
+      );
+      final selectedMaintenanceId = selectedMaintenance?.maintenanceId ?? 0;
+      if (selectedMaintenanceId <= 0) {
+        if (!mounted) return;
+        await showDialog<void>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Message'),
+            content: const Text(
+              'Start a maintenance cycle before submitting completion.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
       final dayScopedRequests =
           await MaintenanceService.fetchCompletionRequests(eventId: event.id);
-      final userScopedDayRequests = _filterCompletionRequestsForCurrentUser(
-        dayScopedRequests,
-      );
+      final userScopedDayRequests =
+          _filterCompletionRequestsForCurrentUser(dayScopedRequests).where((
+            request,
+          ) {
+            final requestMaintenanceId = request.maintenanceId;
+            return requestMaintenanceId != null &&
+                requestMaintenanceId == selectedMaintenanceId;
+          }).toList();
 
       final hasPendingOrApprovedCompletion = userScopedDayRequests.any((
         request,
@@ -1001,8 +1012,8 @@ class _HomeScreenState extends State<HomeScreen>
             title: const Text('Message'),
             content: Text(
               hasPending
-                  ? 'Completion already submitted and pending approval for this day.'
-                  : 'Completion already approved for this day.',
+                  ? 'Completion already submitted and pending approval for this maintenance.'
+                  : 'Completion already approved for this maintenance.',
             ),
             actions: [
               TextButton(
@@ -1015,28 +1026,11 @@ class _HomeScreenState extends State<HomeScreen>
         return;
       }
 
-      final selectedMaintenance = _maintenanceForEventOrLatestParticipant(
-        event,
-      );
-      final selectedMaintenanceId = selectedMaintenance?.maintenanceId ?? 0;
-
       final requests = await MaintenanceService.fetchInventoryRequests();
       final eventScopedRequests = requests.where((request) {
-        if (request.maintenanceId != null && selectedMaintenanceId > 0) {
-          return request.maintenanceId == selectedMaintenanceId;
-        }
-
-        if (request.maintenanceEventId != null) {
-          return request.maintenanceEventId == event.id;
-        }
-
-        final linkedEventDay = request.linkedEventDay;
-        final eventDay = event.parsedEventDate;
-        if (linkedEventDay != null && eventDay != null) {
-          return linkedEventDay == eventDay;
-        }
-
-        return false;
+        final requestMaintenanceId = request.maintenanceId;
+        return requestMaintenanceId != null &&
+            requestMaintenanceId == selectedMaintenanceId;
       }).toList();
 
       final maintenanceScopedStockRequests = eventScopedRequests;
@@ -1155,15 +1149,11 @@ class _HomeScreenState extends State<HomeScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
+          const Row(
             children: [
-              const Icon(
-                Icons.event_note,
-                color: AppColors.primaryMaroon,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              const Expanded(
+              Icon(Icons.event_note, color: AppColors.primaryMaroon, size: 20),
+              SizedBox(width: 8),
+              Expanded(
                 child: Text(
                   'Maintenance Days',
                   style: TextStyle(
@@ -1507,7 +1497,7 @@ class _HomeScreenState extends State<HomeScreen>
                           const SizedBox(height: 6),
                           Row(
                             children: [
-                              SizedBox(
+                              const SizedBox(
                                 width: 12,
                                 height: 12,
                                 child: CircularProgressIndicator(
@@ -1933,7 +1923,7 @@ class _HomeScreenState extends State<HomeScreen>
               const SizedBox(height: 8),
               Row(
                 children: [
-                  SizedBox(
+                  const SizedBox(
                     width: 12,
                     height: 12,
                     child: CircularProgressIndicator(
@@ -2964,8 +2954,7 @@ class _HomeScreenState extends State<HomeScreen>
   PathakInstrumentMaintenance? _maintenanceForEventOrLatestParticipant(
     MaintenanceEvent event,
   ) {
-    return _maintenanceForEvent(event) ??
-        _currentUserLatestMaintenanceStatusItem;
+    return _maintenanceForEvent(event);
   }
 
   String _effectiveMaintenanceStatusForEvent(MaintenanceEvent event) {
@@ -3665,33 +3654,15 @@ class _HomeScreenState extends State<HomeScreen>
         String? submitErrorMessage;
 
         List<InventoryRequestItem> eventScopedMaintenanceStockRequests() {
-          final approvedOrPendingScoped = List<InventoryRequestItem>.from(
-            allRequests,
-          );
           final explicitMaintenanceId = detail.maintenanceId;
-          final explicitEventId = detail.maintenanceEventId;
-          final explicitEventDay = detail.linkedEventDay;
-          if (explicitMaintenanceId == 0 &&
-              explicitEventId == null &&
-              explicitEventDay == null) {
-            return approvedOrPendingScoped;
+          if (explicitMaintenanceId <= 0) {
+            return <InventoryRequestItem>[];
           }
 
-          return approvedOrPendingScoped.where((request) {
-            if (explicitMaintenanceId > 0 && request.maintenanceId != null) {
-              return request.maintenanceId == explicitMaintenanceId;
-            }
-
-            if (explicitEventId != null && request.maintenanceEventId != null) {
-              return request.maintenanceEventId == explicitEventId;
-            }
-
-            final linkedEventDay = request.linkedEventDay;
-            if (linkedEventDay != null && explicitEventDay != null) {
-              return linkedEventDay == explicitEventDay;
-            }
-
-            return false;
+          return allRequests.where((request) {
+            final requestMaintenanceId = request.maintenanceId;
+            return requestMaintenanceId != null &&
+                requestMaintenanceId == explicitMaintenanceId;
           }).toList();
         }
 
@@ -4337,11 +4308,11 @@ class _HomeScreenState extends State<HomeScreen>
                     ),
                   )
                 : _homeScreenSlides.isEmpty
-                ? Center(
+                ? const Center(
                     child: Text(
                       'Welcome to ${AppConfig.appDisplayName}',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
+                      style: TextStyle(
                         color: AppColors.primaryMaroon,
                         fontWeight: FontWeight.w700,
                       ),

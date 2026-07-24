@@ -245,8 +245,9 @@ class _DatePickerFieldState extends State<_DatePickerField> {
       ),
       validator: (_) {
         if (_selectedDate == null) return 'Please select a date';
-        if (_selectedDate!.isBefore(DateTime.now()))
+        if (_selectedDate!.isBefore(DateTime.now())) {
           return 'Date cannot be in the past';
+        }
         return null;
       },
       onTap: () async {

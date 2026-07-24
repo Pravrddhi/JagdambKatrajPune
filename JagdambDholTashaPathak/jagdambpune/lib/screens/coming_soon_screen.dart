@@ -16,19 +16,19 @@ class ComingSoonScreen extends StatelessWidget {
         backgroundColor: AppColors.primaryMaroon,
         foregroundColor: AppColors.textLight,
       ),
-      body: Center(
+      body: const Center(
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
+              Icon(
                 Icons.construction_rounded,
                 size: 54,
                 color: AppColors.primaryMaroon,
               ),
-              const SizedBox(height: 14),
-              const Text(
+              SizedBox(height: 14),
+              Text(
                 'Coming Soon',
                 style: TextStyle(
                   color: AppColors.primaryMaroon,
@@ -36,8 +36,8 @@ class ComingSoonScreen extends StatelessWidget {
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              const SizedBox(height: 8),
-              const Text(
+              SizedBox(height: 8),
+              Text(
                 'This feature is under development.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: AppColors.primaryMaroon, fontSize: 14),
