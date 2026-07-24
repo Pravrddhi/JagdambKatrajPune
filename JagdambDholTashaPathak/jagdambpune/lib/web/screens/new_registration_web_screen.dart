@@ -199,10 +199,10 @@ class _NewRegistrationWebScreenState extends State<NewRegistrationWebScreen> {
       barrierDismissible: false,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Registration Successful / नोंदणी यशस्वी'),
-        content: Column(
+        content: const Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
+          children: [
             Text('Please join this group for next updates.'),
             SizedBox(height: 10),
             Text('पुढील अपडेटसाठी कृपया या ग्रुपमध्ये सामील व्हा.'),
@@ -687,7 +687,7 @@ class _NewRegistrationWebScreenState extends State<NewRegistrationWebScreen> {
         ),
         const SizedBox(height: 6),
         DropdownButtonFormField<String>(
-          value: value,
+          initialValue: value,
           decoration: _formInputDecoration(prefixIcon: icon),
           items: items
               .map(

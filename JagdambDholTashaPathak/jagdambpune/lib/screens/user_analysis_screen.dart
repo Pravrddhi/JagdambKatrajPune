@@ -255,7 +255,7 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
     const lightGrey = PdfColor.fromInt(0xFFF5F5F5);
     const white = PdfColors.white;
 
-    pw.Widget _sectionHeader(String title) => pw.Container(
+    pw.Widget sectionHeader(String title) => pw.Container(
       width: double.infinity,
       padding: const pw.EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       color: headerColor,
@@ -269,7 +269,7 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
       ),
     );
 
-    pw.Widget _infoRow(String label, String? value) => pw.Padding(
+    pw.Widget infoRow(String label, String? value) => pw.Padding(
       padding: const pw.EdgeInsets.symmetric(vertical: 3),
       child: pw.Row(
         crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -295,7 +295,7 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
       ),
     );
 
-    pw.Widget _statusBadge(String status) {
+    pw.Widget statusBadge(String status) {
       PdfColor bg;
       switch (status.toLowerCase()) {
         case 'approved':
@@ -414,28 +414,28 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
           pw.SizedBox(height: 16),
 
           // ── Profile ──
-          _sectionHeader('Profile'),
+          sectionHeader('Profile'),
           pw.SizedBox(height: 4),
           pw.Container(
             color: lightGrey,
             padding: const pw.EdgeInsets.all(10),
             child: pw.Column(
               children: [
-                _infoRow('Instrument', profile.instrument),
-                _infoRow('Joining Year', profile.joiningYear),
-                _infoRow('Gender', profile.sex),
-                _infoRow('Blood Group', profile.bloodGroup),
-                _infoRow('Emergency Contact', profile.emergencyContactName),
-                _infoRow('Emergency Phone', profile.emergencyContactPhone),
-                _infoRow('Groups', profile.groups.join(', ')),
-                _infoRow('Active', profile.isActive ? 'Yes' : 'No'),
+                infoRow('Instrument', profile.instrument),
+                infoRow('Joining Year', profile.joiningYear),
+                infoRow('Gender', profile.sex),
+                infoRow('Blood Group', profile.bloodGroup),
+                infoRow('Emergency Contact', profile.emergencyContactName),
+                infoRow('Emergency Phone', profile.emergencyContactPhone),
+                infoRow('Groups', profile.groups.join(', ')),
+                infoRow('Active', profile.isActive ? 'Yes' : 'No'),
               ],
             ),
           ),
           pw.SizedBox(height: 16),
 
           // ── GAT ──
-          _sectionHeader('GAT Details'),
+          sectionHeader('GAT Details'),
           pw.SizedBox(height: 4),
           if (gat != null)
             pw.Container(
@@ -443,12 +443,12 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
               padding: const pw.EdgeInsets.all(10),
               child: pw.Column(
                 children: [
-                  _infoRow('GAT Name', gat.gatName),
-                  _infoRow('Position', gat.position.toUpperCase()),
-                  _infoRow('GAT Pramukh', gat.gatPramukhName),
-                  _infoRow('Pramukh Phone', gat.gatPramukhPhone),
-                  _infoRow('Member Since', _formatDate(gat.memberSince)),
-                  _infoRow('Total Members', gat.totalGatMembers.toString()),
+                  infoRow('GAT Name', gat.gatName),
+                  infoRow('Position', gat.position.toUpperCase()),
+                  infoRow('GAT Pramukh', gat.gatPramukhName),
+                  infoRow('Pramukh Phone', gat.gatPramukhPhone),
+                  infoRow('Member Since', _formatDate(gat.memberSince)),
+                  infoRow('Total Members', gat.totalGatMembers.toString()),
                 ],
               ),
             )
@@ -463,7 +463,7 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
           pw.SizedBox(height: 16),
 
           // ── Attendance Summary ──
-          _sectionHeader('Attendance Summary'),
+          sectionHeader('Attendance Summary'),
           pw.SizedBox(height: 4),
           pw.Container(
             color: lightGrey,
@@ -557,7 +557,7 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
           pw.SizedBox(height: 16),
 
           // ── Maintenance ──
-          _sectionHeader('Maintenance'),
+          sectionHeader('Maintenance'),
           pw.SizedBox(height: 4),
           pw.Container(
             color: lightGrey,
@@ -648,7 +648,7 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
           pw.SizedBox(height: 16),
 
           // ── Stock Usage ──
-          _sectionHeader('Stock Usage'),
+          sectionHeader('Stock Usage'),
           pw.SizedBox(height: 4),
           pw.Container(
             color: lightGrey,
@@ -743,7 +743,7 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
           pw.SizedBox(height: 16),
 
           // ── Documents ──
-          _sectionHeader('Documents'),
+          sectionHeader('Documents'),
           pw.SizedBox(height: 4),
           pw.Container(
             color: lightGrey,
@@ -804,22 +804,22 @@ class _UserAnalysisScreenState extends State<UserAnalysisScreen>
                                         ),
                                       ),
                                       pw.SizedBox(width: 8),
-                                      _statusBadge(doc.status),
+                                      statusBadge(doc.status),
                                     ],
                                   ),
                                   pw.SizedBox(height: 2),
-                                  _infoRow(
+                                  infoRow(
                                     'Assigned',
                                     _formatDate(doc.assignedAt),
                                   ),
                                   if (doc.returnedAt != null)
-                                    _infoRow(
+                                    infoRow(
                                       'Returned',
                                       _formatDate(doc.returnedAt),
                                     ),
                                   if (doc.notes != null &&
                                       doc.notes!.isNotEmpty)
-                                    _infoRow('Notes', doc.notes),
+                                    infoRow('Notes', doc.notes),
                                 ],
                               ),
                             ),

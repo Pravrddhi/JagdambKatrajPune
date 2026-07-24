@@ -952,8 +952,14 @@ class CompletionUsedItem {
   });
 
   factory CompletionUsedItem.fromJson(Map<String, dynamic> json) {
+    final inventoryItemJson = json['inventory_item'] is Map
+        ? Map<String, dynamic>.from(json['inventory_item'] as Map)
+        : json['inventory'] is Map
+        ? Map<String, dynamic>.from(json['inventory'] as Map)
+        : <String, dynamic>{};
     final inventoryItemName =
         json['inventory_item_name']?.toString() ??
+        inventoryItemJson['name']?.toString() ??
         json['item_name']?.toString() ??
         json['name']?.toString() ??
         '';
@@ -963,15 +969,21 @@ class CompletionUsedItem {
       inventoryItem:
           _toInt(json['inventory_item']) ??
           _toInt(json['inventory_item_id']) ??
+          _toInt(inventoryItemJson['id']) ??
           _toInt(json['item_id']) ??
           _toInt(json['request_id']) ??
           0,
       inventoryItemName: inventoryItemName,
       quantityUsed:
-          _toInt(json['quantity_used']) ?? _toInt(json['quantity']) ?? 0,
+          _toInt(json['quantity_used']) ??
+          _toInt(json['requested_quantity']) ??
+          _toInt(json['approved_quantity']) ??
+          _toInt(json['quantity']) ??
+          0,
       requestedByName:
           json['requested_by_name']?.toString() ??
           json['requested_by']?.toString() ??
+          json['approved_by_name']?.toString() ??
           '',
       status: json['status']?.toString() ?? '',
       quantityBeforeUpdate: _toInt(json['quantity_before_update']),
@@ -1270,16 +1282,37 @@ List<InstrumentMaintenanceParticipant> _parseMaintenanceParticipants(
 }
 
 List<CompletionUsedItem> _parseCompletionUsedItems(dynamic value) {
-  if (value is! List) {
+  final resolvedValue = _resolveCompletionUsedItemsPayload(value);
+  if (resolvedValue is! List) {
     return <CompletionUsedItem>[];
   }
 
-  return value
+  return resolvedValue
       .whereType<Map>()
       .map(
         (item) => CompletionUsedItem.fromJson(Map<String, dynamic>.from(item)),
       )
       .toList();
+}
+
+dynamic _resolveCompletionUsedItemsPayload(dynamic value) {
+  if (value is List) {
+    return value;
+  }
+
+  if (value is! Map) {
+    return null;
+  }
+
+  final map = Map<String, dynamic>.from(value);
+  return _resolveCompletionUsedItemsPayload(
+    map['approved_stock_used'] ??
+        map['approved_stock_items'] ??
+        map['used_items'] ??
+        map['items'] ??
+        map['results'] ??
+        map['data'],
+  );
 }
 
 void _debugApprovedStockUsed(

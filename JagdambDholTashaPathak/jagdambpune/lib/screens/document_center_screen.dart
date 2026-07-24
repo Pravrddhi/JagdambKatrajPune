@@ -1256,7 +1256,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   DropdownButtonFormField<String>(
-                    value: _selectedCategory,
+                    initialValue: _selectedCategory,
                     decoration: const InputDecoration(
                       labelText: 'Document Category',
                       border: OutlineInputBorder(),
@@ -1286,7 +1286,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
                   const SizedBox(height: 12),
                   if (_selectedCategory == 'pii')
                     DropdownButtonFormField<String>(
-                      value: _selectedDocumentType,
+                      initialValue: _selectedDocumentType,
                       decoration: const InputDecoration(
                         labelText: 'PII Document Type',
                         border: OutlineInputBorder(),
@@ -1316,7 +1316,7 @@ class _DocumentCenterScreenState extends State<DocumentCenterScreen>
                     )
                   else
                     DropdownButtonFormField<String>(
-                      value: _selectedDocumentType,
+                      initialValue: _selectedDocumentType,
                       decoration: const InputDecoration(
                         labelText: 'Agreement Type',
                         border: OutlineInputBorder(),

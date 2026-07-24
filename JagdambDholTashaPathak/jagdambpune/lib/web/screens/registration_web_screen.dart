@@ -950,7 +950,7 @@ class _RegistrationWebScreenState extends State<RegistrationWebScreen> {
                               fontSize: 16,
                             ),
                           ),
-                          Icon(
+                          const Icon(
                             Icons.calendar_today,
                             color: AppColors.accentYellow,
                           ),
