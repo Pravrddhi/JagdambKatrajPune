@@ -264,6 +264,11 @@ class AppDrawer extends StatelessWidget {
               : false,
           canViewByUserAttendance: _canViewAttendanceByUser,
           isPathakAdmin: _isPathakAdmin,
+          userInstrument:
+              userDetails?['instrument']?.toString() ??
+              (userDetails?['data'] is Map
+                  ? (userDetails?['data']['instrument']?.toString())
+                  : null),
         ),
       ),
     );
@@ -275,7 +280,7 @@ class AppDrawer extends StatelessWidget {
   }) {
     Navigator.pop(context);
     final nested = userDetails?['data'];
-    final showStatusFilters = _isPathakAdmin || !_isGatPramukh;
+    final showStatusFilters = _isAdminLike;
     Navigator.push(
       context,
       MaterialPageRoute(

@@ -211,23 +211,15 @@ class EmergencyContactDialog {
                               });
 
                               if (success) {
-                                Navigator.pop(context);
-                                showDialog<void>(
-                                  context: context,
-                                  builder: (dialogContext) => AlertDialog(
-                                    title: const Text('Success'),
-                                    content: const Text(
-                                      'Emergency contact updated successfully',
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(dialogContext).pop(),
-                                        child: const Text('OK'),
-                                      ),
-                                    ],
-                                  ),
-                                );
+                                Navigator.pop(context, <String, dynamic>{
+                                  'success': true,
+                                  'emergency_contact_name': nameController.text
+                                      .trim(),
+                                  'emergency_contact_phone': phoneController
+                                      .text
+                                      .trim(),
+                                  'blood_group': selectedGroup,
+                                });
                               } else {
                                 showDialog<void>(
                                   context: context,
@@ -329,6 +321,8 @@ class EmergencyContactDialog {
       if (response == null) {
         return false;
       }
+
+      debugPrint('API emergency-contact-update RESPONSE ${response.body}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);

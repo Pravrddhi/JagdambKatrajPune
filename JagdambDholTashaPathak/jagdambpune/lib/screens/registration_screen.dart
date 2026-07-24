@@ -10,10 +10,13 @@ import '../theme/app_colors.dart';
 import '../widgets/input_box.dart';
 import '../widgets/common_button.dart';
 import '../widgets/dropdown.dart';
+import '../components/emergency_contact_dialog.dart';
 import 'home_screen.dart';
 import '../config/api_endpoints.dart';
+import '../widgets/set_pin_dialog.dart';
 import 'package:flutter/services.dart';
 import '../services/bug_report_service.dart';
+import '../services/web_api_service.dart';
 
 const FlutterSecureStorage _storage = FlutterSecureStorage();
 
@@ -126,6 +129,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     final url = Uri.parse("${ApiEndpoints.getInstruments}/$pathakId/");
     try {
       final response = await http.get(url);
+      debugPrint('API get-instruments RESPONSE ${response.body}');
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
@@ -303,6 +307,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           'pathak_id': ApiEndpoints.pathakIdInt,
         }),
       );
+      debugPrint('API check-phone-number RESPONSE ${response.body}');
 
       setState(() {
         _isCheckingPhone = false;
@@ -360,6 +365,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           'pathak_id': ApiEndpoints.pathakIdInt,
         }),
       );
+      debugPrint('API check-adhaar-number RESPONSE ${response.body}');
 
       bool isDuplicate = false;
       if (response.statusCode == 200) {
@@ -479,6 +485,23 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     });
   }
 
+  String _extractToken(Map<String, dynamic> payload, String key) {
+    final direct = payload[key]?.toString().trim();
+    if (direct != null && direct.isNotEmpty) {
+      return direct;
+    }
+
+    final nestedData = payload['data'];
+    if (nestedData is Map<String, dynamic>) {
+      final nested = nestedData[key]?.toString().trim();
+      if (nested != null && nested.isNotEmpty) {
+        return nested;
+      }
+    }
+
+    return '';
+  }
+
   /// Submits registration data to backend API
   Future<void> _register() async {
     // Manual field validations, setting error messages
@@ -534,6 +557,18 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     });
 
     try {
+      final deviceId = await _getDeviceId();
+      if (deviceId.trim().isEmpty ||
+          deviceId == 'unknown' ||
+          deviceId == 'unsupported_platform') {
+        setState(() {
+          isLoading = false;
+          _errorMessage =
+              'Device ID is unavailable. Please retry from your registered device.';
+        });
+        return;
+      }
+
       final response = await http.post(
         Uri.parse(ApiEndpoints.register),
         headers: {"Content-Type": "application/json"},
@@ -550,22 +585,115 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               : null,
           "joining_year": selectedJoiningYear,
           "has_accepted_terms": _hasAcceptedTerms,
-          "device_id": await _getDeviceId(),
+          "client_type": "device",
+          "device_id": deviceId,
         }),
       );
+      debugPrint('API register RESPONSE ${response.body}');
 
       setState(() => isLoading = false);
 
       if (response.statusCode == 201) {
-        final data = jsonDecode(response.body);
-        final accessToken = data['access_token'];
-        Navigator.pushReplacement(
+        final decoded = jsonDecode(response.body);
+        if (decoded is! Map<String, dynamic>) {
+          await BugReportService.reportApiFailure(
+            title: 'Registration API returned unexpected payload',
+            errorMessage: response.body,
+            pageUrl: '/registration',
+            statusCode: response.statusCode,
+            endpoint: ApiEndpoints.register,
+          );
+          setState(() {
+            _errorMessage = ApiEndpoints.genericApiFailureMessage;
+          });
+          return;
+        }
+
+        final accessToken = _extractToken(decoded, 'access_token');
+        final refreshToken = _extractToken(decoded, 'refresh_token');
+
+        if (accessToken.isEmpty) {
+          await BugReportService.reportApiFailure(
+            title: 'Registration API missing access token',
+            errorMessage: response.body,
+            pageUrl: '/registration',
+            statusCode: response.statusCode,
+            endpoint: ApiEndpoints.register,
+          );
+          setState(() {
+            _errorMessage =
+                'Registration completed but the session token was missing. Please try again.';
+          });
+          return;
+        }
+
+        await _storage.write(
+          key: ApiEndpoints.accessTokenKey,
+          value: accessToken,
+        );
+        if (refreshToken.isNotEmpty) {
+          await _storage.write(
+            key: ApiEndpoints.refreshTokenKey,
+            value: refreshToken,
+          );
+        }
+
+        if (!mounted) return;
+
+        final navigator = Navigator.of(context);
+
+        await EmergencyContactDialog.show(
           context,
+          accessToken,
+          userFirstName: _firstNameController.text,
+          userLastName: _lastNameController.text,
+          userPhone: _phoneController.text,
+        );
+
+        if (!mounted) return;
+
+        final pinToken = await showSetPinDialog(
+          context,
+          _phoneController.text,
+          isResetFlow: false,
+        );
+
+        if (!mounted) return;
+
+        final effectiveToken = pinToken.trim().isNotEmpty
+            ? pinToken.trim()
+            : accessToken;
+
+        if (effectiveToken.isEmpty) {
+          navigator.pushNamedAndRemoveUntil('/login', (route) => false);
+          return;
+        }
+
+        await _storage.write(
+          key: ApiEndpoints.accessTokenKey,
+          value: effectiveToken,
+        );
+
+        try {
+          await WebApiService.updateClientTypeToDevice(
+            accessToken: effectiveToken,
+            deviceId: deviceId,
+          );
+        } catch (e) {
+          await BugReportService.reportApiFailure(
+            title: 'Registration client_type update failed (device)',
+            errorMessage: e.toString(),
+            pageUrl: '/registration',
+            endpoint: ApiEndpoints.updateClientType,
+          );
+        }
+
+        navigator.pushReplacement(
           MaterialPageRoute(
             builder: (_) => HomeScreen(
-              authToken: accessToken,
+              authToken: effectiveToken,
               phoneNumber: _phoneController.text,
-              isRegistration: true,
+              isRegistration: false,
             ),
           ),
         );
@@ -637,6 +765,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         '${ApiEndpoints.termsAndConditions}?pathak_id=${ApiEndpoints.pathakIdInt}',
       );
       final response = await http.get(uri, headers: ApiEndpoints.jsonHeaders());
+      debugPrint('API terms-and-conditions RESPONSE ${response.body}');
 
       if (response.statusCode != 200) {
         await BugReportService.reportApiFailure(

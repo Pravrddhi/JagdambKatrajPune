@@ -12,8 +12,8 @@ class LoginWebScreen extends StatelessWidget {
   final bool showRegistration;
   final bool isFeatureFlagsLoading;
   final VoidCallback onLogin;
-  final VoidCallback onRegistrationTap;
   final VoidCallback onResetPinTap;
+  final VoidCallback onRegistrationTap;
   final ValueChanged<String>? onPhoneChanged;
   final ValueChanged<String>? onPasswordChanged;
 
@@ -26,8 +26,8 @@ class LoginWebScreen extends StatelessWidget {
     required this.showRegistration,
     required this.isFeatureFlagsLoading,
     required this.onLogin,
-    required this.onRegistrationTap,
     required this.onResetPinTap,
+    required this.onRegistrationTap,
     this.onPhoneChanged,
     this.onPasswordChanged,
   });
@@ -103,6 +103,20 @@ class LoginWebScreen extends StatelessWidget {
                   isLoading: isLoggingIn,
                   isEnabled: !isLoggingIn,
                 ),
+                const SizedBox(height: 12),
+                Center(
+                  child: GestureDetector(
+                    onTap: onResetPinTap,
+                    child: const Text(
+                      'Reset PIN',
+                      style: TextStyle(
+                        color: AppColors.accentYellow,
+                        decoration: TextDecoration.underline,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 16),
                 if (isFeatureFlagsLoading)
                   const SizedBox(
@@ -117,19 +131,8 @@ class LoginWebScreen extends StatelessWidget {
                   Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      GestureDetector(
-                        onTap: onResetPinTap,
-                        child: const Text(
-                          'Reset PIN',
-                          style: TextStyle(
-                            color: AppColors.accentYellow,
-                            decoration: TextDecoration.underline,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
                       if (showRegistration) ...[
-                        const SizedBox(height: 10),
+                        const SizedBox(height: 2),
                         Wrap(
                           alignment: WrapAlignment.center,
                           crossAxisAlignment: WrapCrossAlignment.center,

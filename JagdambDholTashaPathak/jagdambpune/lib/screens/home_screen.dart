@@ -2104,6 +2104,26 @@ class _HomeScreenState extends State<HomeScreen>
         _canApproveMaintenanceCompletions;
   }
 
+  /// True when the user has admin-level access:
+  /// pathak_admin, maintenance admin, or gat-pramukh access.
+  bool get _isAdminLike {
+    final userDetails = _userDetails;
+    if (userDetails == null) return false;
+    final hasPermissionsAdmin =
+        _permissionBool('attendance_settings') ||
+        _permissionBool('user_approval') ||
+        _permissionBool('update_maintance_stock') ||
+        _permissionBool('maintance_stock_approval') ||
+        _permissionBool('maintance_create_event') ||
+        _permissionBool('maintance_analysis') ||
+        _permissionBool('maintance_analysis_by_user') ||
+        _canApproveMaintenanceEntries ||
+        _canApproveMaintenanceCompletions ||
+        _permissionBool('document_approval') ||
+        _permissionBool('manage_terms');
+    return hasPermissionsAdmin || _isGatPramukh;
+  }
+
   bool get _isGatPramukh {
     final userDetails = _userDetails;
     if (userDetails == null) {
@@ -4014,7 +4034,7 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _openAdminOperationsFromFab({required int initialTabIndex}) {
-    final showStatusFilters = _isPathakAdmin || !_isGatPramukh;
+    final showStatusFilters = _isAdminLike;
 
     return Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -4676,6 +4696,8 @@ class _HomeScreenState extends State<HomeScreen>
                             canDownloadAttendanceQr: _canDownloadAttendanceQr,
                             canSetAttendanceLocation: _canSetAttendanceLocation,
                             canViewByUserAttendance: _canViewAttendanceByUser,
+                            userInstrument: _userDetails?['instrument']
+                                ?.toString(),
                           ),
                         ),
                       );
@@ -4744,6 +4766,9 @@ class _HomeScreenState extends State<HomeScreen>
                                             _canSetAttendanceLocation,
                                         canViewByUserAttendance:
                                             _canViewAttendanceByUser,
+                                        userInstrument:
+                                            _userDetails?['instrument']
+                                                ?.toString(),
                                       ),
                                     ),
                                   );

@@ -226,9 +226,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     if (_showAdminCompletionTab) {
       count += 1;
     }
-    if (_showLegacyEntriesTab) {
-      count += 1;
-    }
     count += 1;
     return count;
   }
@@ -499,31 +496,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     });
 
     oldController.dispose();
-  }
-
-  void _toggleLegacyEntriesTab() {
-    if (!widget.canManageInventory) return;
-
-    final currentIndex = _tabController.index;
-    final entriesIndexBefore = _entriesTabIndex();
-    final analysisIndexBefore = _analysisTabIndex();
-
-    setState(() {
-      _showLegacyEntriesTab = !_showLegacyEntriesTab;
-    });
-    unawaited(_persistUiState());
-
-    var nextIndex = currentIndex;
-    if (!_showLegacyEntriesTab) {
-      if (currentIndex == entriesIndexBefore ||
-          currentIndex == analysisIndexBefore) {
-        nextIndex = _analysisTabIndex();
-      }
-    } else if (currentIndex == _analysisTabIndex()) {
-      nextIndex = _analysisTabIndex();
-    }
-
-    _rebuildTabController(preferredIndex: nextIndex);
   }
 
   List<String> _getVisibleCategories() {
@@ -1473,6 +1445,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           otherCategoryName: otherCategoryController.text.trim(),
           name: nameController.text.trim(),
           quantity: int.parse(quantityController.text.trim()),
+          adjustmentType: 'increase',
         ),
       );
 
@@ -1488,65 +1461,126 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
   Future<void> _openUpdateStockForm(InventoryItem item) async {
     final formKey = GlobalKey<FormState>();
     final quantityController = TextEditingController();
+    var isIncrease = true;
 
     final shouldSubmit = await showDialog<bool>(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('Update Stock'),
-          content: Form(
-            key: formKey,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Item: ${item.name}',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            return AlertDialog(
+              title: const Text('Update Stock'),
+              content: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Item: ${item.name}',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Current Quantity: ${item.quantityAvailable}',
+                      style: const TextStyle(color: Colors.black54),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        const Text(
+                          'Action:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: ToggleButtons(
+                              isSelected: <bool>[isIncrease, !isIncrease],
+                              borderRadius: BorderRadius.circular(10),
+                              borderWidth: 1.6,
+                              borderColor: AppColors.primaryMaroon,
+                              selectedBorderColor: AppColors.primaryMaroon,
+                              color: AppColors.primaryMaroon,
+                              selectedColor: Colors.white,
+                              fillColor: AppColors.primaryMaroon,
+                              textStyle: const TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                              ),
+                              constraints: const BoxConstraints(
+                                minHeight: 40,
+                                minWidth: 48,
+                              ),
+                              onPressed: (index) {
+                                setLocalState(() {
+                                  isIncrease = index == 0;
+                                });
+                              },
+                              children: const [
+                                Tooltip(
+                                  message: 'Increase stock',
+                                  child: Text('+'),
+                                ),
+                                Tooltip(
+                                  message: 'Decrease stock',
+                                  child: Text('-'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: quantityController,
+                      keyboardType: TextInputType.number,
+                      decoration: InputDecoration(
+                        labelText: isIncrease
+                            ? 'Quantity to Add'
+                            : 'Quantity to Remove',
+                      ),
+                      validator: (value) {
+                        final qty = int.tryParse(value ?? '');
+                        if (qty == null || qty <= 0) {
+                          return 'Enter a valid quantity';
+                        }
+                        if (!isIncrease && qty > item.quantityAvailable) {
+                          return 'Cannot remove more than available stock';
+                        }
+                        return null;
+                      },
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  'Current Quantity: ${item.quantityAvailable}',
-                  style: const TextStyle(color: Colors.black54),
-                ),
-                const SizedBox(height: 12),
-                TextFormField(
-                  controller: quantityController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Quantity to Add',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
                   ),
-                  validator: (value) {
-                    final qty = int.tryParse(value ?? '');
-                    if (qty == null || qty <= 0) {
-                      return 'Enter a valid quantity';
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    if (formKey.currentState?.validate() ?? false) {
+                      Navigator.of(context).pop(true);
                     }
-                    return null;
                   },
+                  style: ElevatedButton.styleFrom(
+                    foregroundColor: AppColors.primaryMaroon,
+                  ),
+                  child: const Text('Update'),
                 ),
               ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.primaryMaroon,
-              ),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (formKey.currentState?.validate() ?? false) {
-                  Navigator.of(context).pop(true);
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                foregroundColor: AppColors.primaryMaroon,
-              ),
-              child: const Text('Update'),
-            ),
-          ],
+            );
+          },
         );
       },
     );
@@ -1557,14 +1591,21 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
 
     try {
+      final absoluteQty = int.parse(quantityController.text.trim());
+      final adjustmentType = isIncrease ? 'increase' : 'decrease';
+      debugPrint(
+        'API update-stock REQUEST item=${item.id} qty=$absoluteQty adjustment_type=$adjustmentType',
+      );
       final response = await _withApiLoader(
         () => MaintenanceService.createOrUpdateInventory(
           category: item.category,
           otherCategoryName: item.otherCategoryName,
           name: item.name,
-          quantity: int.parse(quantityController.text.trim()),
+          quantity: absoluteQty,
+          adjustmentType: adjustmentType,
         ),
       );
+      debugPrint('API update-stock RESPONSE ${response.toString()}');
       _showSnack(response['message']?.toString() ?? 'Stock updated.');
       await _loadInventory();
     } catch (e) {
@@ -1791,6 +1832,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           inventoryItemId: item.id,
           requestedQuantity: int.parse(quantityController.text.trim()),
           note: noteController.text.trim(),
+          adjustmentType: 'increase',
           eventId: selectedEventId,
         ),
       );
@@ -1939,6 +1981,7 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           inventoryItemId: item.id,
           requestedQuantity: 1,
           note: noteController.text.trim(),
+          adjustmentType: 'decrease',
           maintenanceId: selectedMaintenance?.maintenanceId,
           eventId: selectedEventId,
         ),
@@ -2768,69 +2811,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     }
   }
 
-  Future<void> _actOnEntry(DholMaintenanceEntry item, String action) async {
-    if (!widget.canManageInventory) {
-      _showSnack('You are not allowed to approve or reject stock requests.');
-      return;
-    }
-
-    final noteController = TextEditingController();
-    final shouldSubmit = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text(
-            '${action == 'approve' ? 'Approve' : 'Reject'} Maintenance Entry',
-          ),
-          content: TextField(
-            controller: noteController,
-            decoration: const InputDecoration(
-              labelText: 'Approver Note (optional)',
-            ),
-            maxLines: 2,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.primaryMaroon,
-              ),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              style: ElevatedButton.styleFrom(
-                foregroundColor: AppColors.primaryMaroon,
-              ),
-              child: Text(action == 'approve' ? 'Approve' : 'Reject'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (shouldSubmit != true) {
-      noteController.dispose();
-      return;
-    }
-
-    try {
-      final response = await _withApiLoader(
-        () => MaintenanceService.actOnEntry(
-          entryId: item.id,
-          action: action,
-          approverNote: noteController.text.trim(),
-        ),
-      );
-      _showSnack(response['message']?.toString() ?? 'Entry updated.');
-      await _loadEntries();
-    } catch (e) {
-      _showSnack(e.toString());
-    } finally {
-      noteController.dispose();
-    }
-  }
-
   Future<void> _showSnack(String message) async {
     if (!mounted) return;
 
@@ -3206,6 +3186,16 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
 
   Widget _buildDholStatusManagementTab() {
     final searchQuery = _dholSearchController.text.trim().toLowerCase();
+    final statusCounts = <String, int>{
+      for (final status in _dholStatusValues) status: 0,
+    };
+    for (final item in _pathakDhols) {
+      final normalizedStatus = item.normalizedStatus;
+      if (statusCounts.containsKey(normalizedStatus)) {
+        statusCounts[normalizedStatus] = statusCounts[normalizedStatus]! + 1;
+      }
+    }
+
     final filtered =
         _pathakDhols.where((item) {
           final matchesSearch = searchQuery.isEmpty
@@ -3274,6 +3264,30 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                         _dholStatusFilter = value;
                       });
                     },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  Chip(
+                    label: Text('All (${_pathakDhols.length})'),
+                    labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  ..._dholStatusValues.map(
+                    (status) => Chip(
+                      label: Text(
+                        '${_dholStatusLabel(status)} (${statusCounts[status] ?? 0})',
+                      ),
+                      labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
                   ),
                 ],
               ),
@@ -5688,125 +5702,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     );
   }
 
-  Widget _buildEntriesTab() {
-    return RefreshIndicator(
-      onRefresh: _loadEntries,
-      child: ListView(
-        padding: const EdgeInsets.all(12),
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Row(
-              children: [
-                Text('Filter: ', style: Theme.of(context).textTheme.bodyMedium),
-                Expanded(
-                  child: _buildFilterRow(
-                    selected: _entryStatusFilter,
-                    onChanged: (status) {
-                      setState(() {
-                        _entryStatusFilter = status;
-                      });
-                      unawaited(_persistUiState());
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (_entries.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 40),
-              child: Center(child: Text('No maintenance entries.')),
-            )
-          else
-            ..._entries
-                .where(
-                  (e) => e.status.toLowerCase().startsWith(_entryStatusFilter),
-                )
-                .map(
-                  (item) => Card(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  'Dhol #${item.dholNumber}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 15,
-                                  ),
-                                ),
-                              ),
-                              Chip(
-                                label: Text(item.status.toUpperCase()),
-                                labelStyle: TextStyle(
-                                  color: _statusColor(item.status),
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Maintained by: ${item.maintainedByName}',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: Colors.black54,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Work: ${item.workNotes}',
-                            style: const TextStyle(fontWeight: FontWeight.w500),
-                          ),
-                          if (item.approverNote.trim().isNotEmpty) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              'Approver Note: ${item.approverNote}',
-                              style: const TextStyle(
-                                color: Colors.black54,
-                                fontStyle: FontStyle.italic,
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 8),
-                          if (widget.canApproveEntries &&
-                              item.status.toLowerCase() == 'pending')
-                            Wrap(
-                              alignment: WrapAlignment.end,
-                              spacing: 8,
-                              children: [
-                                TextButton(
-                                  onPressed: () => _actOnEntry(item, 'reject'),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: AppColors.primaryMaroon,
-                                  ),
-                                  child: const Text('Reject'),
-                                ),
-                                ElevatedButton(
-                                  onPressed: () => _actOnEntry(item, 'approve'),
-                                  style: ElevatedButton.styleFrom(
-                                    foregroundColor: AppColors.primaryMaroon,
-                                  ),
-                                  child: const Text('Approve'),
-                                ),
-                              ],
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildAnalysisTab() {
     final analysis = _analysis;
     final categorySummaries = {
@@ -6264,9 +6159,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
     final pendingCompletionCount = _completionRequests
         .where((item) => item.status.toLowerCase() == 'pending')
         .length;
-    final pendingEntriesCount = _entries
-        .where((item) => item.status.toLowerCase() == 'pending')
-        .length;
     final adminTabLabels = <String>[
       ..._allCategoryTabs.map((c) => c[0].toUpperCase() + c.substring(1)),
       'Approvals${pendingApprovalsCount > 0 ? ' ($pendingApprovalsCount)' : ''}',
@@ -6276,8 +6168,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
       'Dhol Status Management',
       if (_showAdminCompletionTab)
         'Completion${pendingCompletionCount > 0 ? ' ($pendingCompletionCount)' : ''}',
-      if (_showLegacyEntriesTab)
-        'Entries${pendingEntriesCount > 0 ? ' ($pendingEntriesCount)' : ''}',
       'Analysis',
     ];
 
@@ -6305,12 +6195,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
                     ? 'Completion ($pendingCompletionCount)'
                     : 'Completion',
               ),
-            if (_showLegacyEntriesTab)
-              Tab(
-                text: pendingEntriesCount > 0
-                    ? 'Entries ($pendingEntriesCount)'
-                    : 'Entries',
-              ),
             const Tab(text: 'Analysis'),
           ]
         : [
@@ -6334,7 +6218,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
             _buildDholRangeManagementTab(),
             _buildDholStatusManagementTab(),
             if (_showAdminCompletionTab) _buildCompletionRequestsTab(),
-            if (_showLegacyEntriesTab) _buildEntriesTab(),
             _buildAnalysisTab(),
           ]
         : [
@@ -6367,12 +6250,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
           ),
         const Tab(text: 'Dhol Range Management'),
         const Tab(text: 'Dhol Status Management'),
-        if (_showLegacyEntriesTab)
-          Tab(
-            text: pendingEntriesCount > 0
-                ? 'Entries ($pendingEntriesCount)'
-                : 'Entries',
-          ),
       ];
 
       final approvalViews = <Widget>[
@@ -6382,7 +6259,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
         if (_showAdminCompletionTab) _buildCompletionRequestsTab(),
         _buildDholRangeManagementTab(),
         _buildDholStatusManagementTab(),
-        if (_showLegacyEntriesTab) _buildEntriesTab(),
       ];
 
       if (approvalTabs.isEmpty || approvalViews.isEmpty) {
@@ -6469,17 +6345,6 @@ class _DholMaintenanceScreenState extends State<DholMaintenanceScreen>
             icon: const Icon(Icons.refresh),
           ),
           if (isAdmin) ...[
-            IconButton(
-              tooltip: _showLegacyEntriesTab
-                  ? 'Hide legacy entries tab'
-                  : 'Show legacy entries tab',
-              onPressed: _toggleLegacyEntriesTab,
-              icon: Icon(
-                _showLegacyEntriesTab
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined,
-              ),
-            ),
             PopupMenuButton<int>(
               tooltip: 'Jump to tab',
               icon: const Icon(Icons.view_week_outlined),
